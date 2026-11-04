@@ -1,0 +1,43 @@
+name: Issue 809 - Git executable cold startup investigation
+on:
+  push:
+    branches: [investigation-809-git-startup]
+    paths:
+      - experiments/issue-809/**
+      - .github/workflows/issue-809-git-startup.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  executable:
+    name: Native executable probe (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-26-arm64]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install Windows PE import inspector (read-only)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: python -m pip install pefile==2024.8.26
+      - name: Syntax check
+        shell: bash
+        run: python -m py_compile experiments/issue-809/git_executable_startup.py
+      - name: Benchmark Git executable, minimal native executable, PE dependencies
+        shell: bash
+        run: python experiments/issue-809/git_executable_startup.py
+      - name: Upload raw sample distributions
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-${{ matrix.os }}
+          path: git809-results/*.json
+          if-no-files-found: warn
