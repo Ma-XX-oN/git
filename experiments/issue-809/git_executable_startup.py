@@ -68,6 +68,38 @@ def build_noop(temp):
                         capture_output=True, text=True)
   return (output, "compiled with Visual Studio cl") if proc.returncode == 0 and output.exists() else (None, "compiler failed: " + proc.stderr[:500])
 
+def build_windows_dll_probes(temp):
+  if os.name != "nt":
+    return {}, "not Windows"
+  source = Path(__file__).with_name("load_git_dlls.c")
+  if not source.is_file():
+    return {}, "source missing"
+  where = Path(os.environ.get("ProgramFiles(x86)", "C:/Program Files (x86)")) / "Microsoft Visual Studio/Installer/vswhere.exe"
+  if not where.is_file():
+    return {}, "vswhere missing"
+  lookup = subprocess.run([str(where), "-latest", "-products", "*", "-property",
+                           "installationPath"], text=True, capture_output=True)
+  if lookup.returncode or not lookup.stdout.strip():
+    return {}, "Visual Studio unavailable"
+  dev = Path(lookup.stdout.strip()) / "Common7/Tools/VsDevCmd.bat"
+  outputs = {"git_dlls_load": temp / "loadlibs.exe",
+             "git_set_dll_directory": temp / "setdll.exe"}
+  cmds = ['@echo off', 'call "' + str(dev) + '" -arch=x64 >nul',
+          'if errorlevel 1 exit /b 11']
+  for label, binary in outputs.items():
+    define = "/DONLY_SETDIR " if label == "git_set_dll_directory" else ""
+    cmds.extend(['cl /nologo /O2 ' + define + '/Fe:"' + str(binary)
+                 + '" "' + str(source) + '" >nul',
+                 'if errorlevel 1 exit /b 12'])
+  script = temp / "compile-loaders.cmd"
+  script.write_text(chr(10).join(cmds) + chr(10), encoding="utf-8")
+  result = subprocess.run(["cmd.exe", "/d", "/c", str(script)],
+                          capture_output=True, text=True)
+  if result.returncode or any(not p.is_file() for p in outputs.values()):
+    return {}, "DLL probe compiler failed: " + result.stderr[:500]
+  return outputs, "compiled Windows DLL loader controls"
+
+
 def dll_imports(exe):
   if os.name != "nt":
     return None
@@ -105,6 +137,10 @@ def main():
       candidates["minimal_c_executable"] = [str(noop)]
       data["controls"]["noop_imports"] = dll_imports(noop)
     if os.name == "nt":
+      loaders, loader_info = build_windows_dll_probes(temp)
+      data["controls"]["dll_probe_compile"] = loader_info
+      for label, binary in loaders.items():
+        candidates[label] = [str(binary), str(Path(git).parent)]
       root = Path(git).parents[2] if "ucrt64" in git.lower() or "mingw64" in git.lower() else Path(git).parent.parent
       for label, relative in (("cmd_wrapper", "cmd/git.exe"), ("bin_wrapper", "bin/git.exe")):
         other = root / relative
