@@ -58,10 +58,10 @@ def build_noop(temp):
     return None, "VsDevCmd unavailable"
   compile_script = temp / "compile-noop.cmd"
   compile_script.write_text(
-    '@echo off\\r\\n'
-    + 'call "' + str(dev) + '" -arch=x64 >nul\\r\\n'
-    + 'if errorlevel 1 exit /b 1\\r\\n'
-    + 'cl /nologo /O2 /Fe:"' + str(output) + '" "' + str(source) + '" >nul\\r\\n',
+    '@echo off\r\n'
+    + 'call "' + str(dev) + '" -arch=x64 >nul\r\n'
+    + 'if errorlevel 1 exit /b 1\r\n'
+    + 'cl /nologo /O2 /Fe:"' + str(output) + '" "' + str(source) + '" >nul\r\n',
     encoding="utf-8"
   )
   proc = subprocess.run(["cmd.exe", "/d", "/c", str(compile_script)],
