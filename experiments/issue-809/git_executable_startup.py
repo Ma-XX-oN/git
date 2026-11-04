@@ -56,8 +56,16 @@ def build_noop(temp):
   dev = Path(proc.stdout.strip()) / "Common7/Tools/VsDevCmd.bat"
   if not dev.is_file():
     return None, "VsDevCmd unavailable"
-  cmd = 'call "' + str(dev) + '" -arch=x64 >nul && cl /nologo /O2 /Fe:"' + str(output) + '" "' + str(source) + '" >nul'
-  proc = subprocess.run(["cmd.exe", "/d", "/c", cmd], capture_output=True, text=True)
+  compile_script = temp / "compile-noop.cmd"
+  compile_script.write_text(
+    '@echo off\\r\\n'
+    + 'call "' + str(dev) + '" -arch=x64 >nul\\r\\n'
+    + 'if errorlevel 1 exit /b 1\\r\\n'
+    + 'cl /nologo /O2 /Fe:"' + str(output) + '" "' + str(source) + '" >nul\\r\\n',
+    encoding="utf-8"
+  )
+  proc = subprocess.run(["cmd.exe", "/d", "/c", str(compile_script)],
+                        capture_output=True, text=True)
   return (output, "compiled with Visual Studio cl") if proc.returncode == 0 and output.exists() else (None, "compiler failed: " + proc.stderr[:500])
 
 def dll_imports(exe):
