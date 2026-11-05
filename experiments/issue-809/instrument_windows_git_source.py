@@ -80,30 +80,52 @@ def main():
     print("build stdout tail:",build.stdout.decode("utf-8","replace")[-4500:])
     print("build stderr tail:",build.stderr.decode("utf-8","replace")[-4500:])
     raise RuntimeError("Git source instrumentation build failed with rc="+str(build.returncode))
+  # Same SDK compiler/runtime baseline: a minimal Unicode entry point,
+  # unlike the MSVC benchmark compiled outside the Git for Windows SDK.
+  mingw_control=root/"experiments"/"issue-809"/"minimal_wmain.exe"
+  mingw_source=root/"experiments"/"issue-809"/"minimal_wmain.c"
+  gcc=run(["gcc","-O2","-municode","-o",str(mingw_control),str(mingw_source)],
+          timeout=120,check=False)
+  if gcc.returncode or not mingw_control.is_file():
+    raise RuntimeError("MinGW/UCRT wmain control build failed: "+gcc.stderr.decode("utf-8","replace")[-500:])
   # Validate every instrumented early-exit and the actual Git version output.
   base=str(target.resolve())
   cases={
+    "mingw_ucrt_minimal_wmain":([str(mingw_control)],b""),
     "loader_and_crt_to_wmain":([base,"--git809-early-wmain"],b""),
     "through_windows_wmain_setup":([base,"--git809-after-wmain"],b""),
     "through_call_to_main":([base,"--git809-before-init"],b""),
     "through_common_git_init":([base,"--git809-after-init"],b""),
     "through_common_init_with_git_exit":([base,"--git809-after-init-exit"],b""),
   }
-  output={}
-  for name,(argv,expected) in cases.items():
-    output[name]=benchmark(name,argv,expected)
   version_args=[base,"--version"]
   version=run(version_args,timeout=30)
   if not version.stdout.startswith(b"git version "):
     raise RuntimeError("git version failed in source built binary")
-  output["full_git_version"]=benchmark("full_git_version",version_args,version.stdout)
+  cases["full_git_version"]=(version_args,version.stdout)
+  # Interleave cases in both directions to reduce fixed-order runner bias.
+  samples={name:[] for name in cases}
+  for iteration in range(124):
+    labels=list(cases)
+    if iteration % 2:
+      labels.reverse()
+    for name in labels:
+      argv,expected=cases[name]
+      t=time.perf_counter_ns()
+      result=run(argv,timeout=20)
+      measured=(time.perf_counter_ns()-t)/1e6
+      if result.stdout != expected:
+        raise RuntimeError("unexpected stdout from "+name)
+      if iteration>=4:
+        samples[name].append(measured)
+  output={name:stats(samples[name]) for name in cases}
   dest=Path("git809-source-results")
   dest.mkdir(exist_ok=True)
   record={
     "experiment":"Git-809-ephemeral-compiled-source-stage-bypass",
     "source_sha":os.environ.get("GITHUB_SHA",""),
     "compiler_command":command,
-    "note":"Each early exit bypasses more Git source; measurements include launcher, Windows loader, CRT, and relevant return-path teardown. Diagnostic binary is NOT equivalent to installed Git for Windows binary. Timings are non-additive and instrumented return paths differ from normal Git exit.",
+    "note":"Each early exit bypasses more Git source; a same-GCC/UCRT minimal-wmain binary controls for compiler/runtime. Cases are interleaved in alternating directions. Diagnostic Git binary is NOT equivalent to installed Git for Windows binary. Timings are non-additive; return/exit paths differ from normal Git.",
     "stages":output}
   (dest/"windows-source-phases.json").write_text(json.dumps(record,indent=2)+"\n",encoding="utf-8")
   print(json.dumps({k:{"median_ms":v["median_ms"],"p95_ms":v["p95_ms"]}
