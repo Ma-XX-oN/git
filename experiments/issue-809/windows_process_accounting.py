@@ -36,7 +36,10 @@ def usage(handle):
   io = IO_COUNTERS()
   if not k32.GetProcessIoCounters(handle, ctypes.byref(io)):
     raise ctypes.WinError(ctypes.get_last_error())
-  return filetime_ms(kernel) + filetime_ms(user), io
+  process_lifetime_ms = filetime_ms(b) - filetime_ms(a)
+  if process_lifetime_ms < 0:
+    raise RuntimeError("negative process lifetime from GetProcessTimes")
+  return filetime_ms(kernel) + filetime_ms(user), process_lifetime_ms, io
 
 def measure(args, capture):
   started = time.perf_counter_ns()
@@ -50,12 +53,13 @@ def measure(args, capture):
       raise RuntimeError("child failed: " + str(p.returncode))
     if capture and not output.startswith(b"git version "):
       raise RuntimeError("Git version output mismatch")
-    cpu, io = usage(int(p._handle))
+    cpu, process_lifetime, io = usage(int(p._handle))
   return {
     "popen_constructor_ms": (launched - started) / 1e6,
     "wait_and_output_ms": (finished - launched) / 1e6,
     "total_wall_ms": (finished - started) / 1e6,
     "child_cpu_ms": cpu,
+    "child_creation_to_exit_ms": process_lifetime,
     "child_read_operations": io.read_operations,
     "child_read_bytes": io.read_bytes,
   }
@@ -101,7 +105,7 @@ def main():
     "n": 120,
     "medians": {k: summarize(v) for k, v in samples.items()},
     "raw_samples": samples,
-    "limitations": "Popen constructor includes Python preparation + CreateProcessW; child wait includes exe/DLL initialization + teardown, CPU is process GetProcessTimes. Not direct ETW loader timings."
+    "limitations": "Popen constructor includes Python preparation + CreateProcessW; child wait includes exe/DLL initialization + teardown. GetProcessTimes creation-to-exit includes whole child process lifetime; CPU is coarse user+kernel. Not direct ETW loader timings."
   }
   target = Path("git809-results")
   target.mkdir(exist_ok=True)
