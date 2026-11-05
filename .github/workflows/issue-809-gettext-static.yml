@@ -1,0 +1,42 @@
+name: Git 809 preserve gettext static libintl comparison
+on:
+  push:
+    branches: [investigation-809-git-startup]
+    paths:
+      - experiments/issue-809/windows_gettext_static.py
+      - .github/workflows/issue-809-gettext-static.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  gettext-static:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: stable-x86_64-pc-windows-gnu
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Compile gettext-preserving dynamic and real static variants
+        shell: bash
+        run: |
+          . /etc/profile
+          PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
+          test -f "$PYTHON_EXE"
+          export PATH="$(cygpath -u "$USERPROFILE")/.cargo/bin:$PATH"
+          "$PYTHON_EXE" -m pip install pefile==2024.8.26
+          "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_gettext_static.py
+          "$PYTHON_EXE" experiments/issue-809/windows_gettext_static.py
+      - name: Publish exact import and full-lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-gettext-static
+          path: git809-build-matrix-results/windows-gettext-static.json
+          if-no-files-found: warn
