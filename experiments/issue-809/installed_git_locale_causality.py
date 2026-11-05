@@ -35,9 +35,14 @@ def summary(a):
 def main():
   if os.name!="nt":
     raise RuntimeError("native Windows required")
-  git=Path(shutil.which("git") or "").resolve()
-  if not git.is_file():
-    raise RuntimeError("installed Git absent")
+  program_files_candidates=[
+    Path(r"C:\Program Files\Git\ucrt64\bin\git.exe"),
+    Path(r"C:\Program Files\Git\mingw64\bin\git.exe"),
+  ]
+  git=next((path.resolve() for path in program_files_candidates if path.is_file()),None)
+  if git is None:
+    raise RuntimeError("cannot find native Git for Windows in Program Files: "+
+                       repr([str(x) for x in program_files_candidates]))
   data=git.read_bytes()
   with tempfile.TemporaryDirectory(prefix="git809-locale-default-") as td:
     root=Path(td)
