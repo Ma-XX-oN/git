@@ -66,11 +66,18 @@ def main():
   if os.name!="nt":
     raise RuntimeError("native Windows experiment only")
   compiled=(Path.cwd()/"git.exe").resolve()
-  installed=Path(shutil.which("git") or "").resolve()
-  if not installed.is_file() or not compiled.is_file():
-    raise RuntimeError("installed and full-source Git both required")
-  if installed==compiled:
-    raise RuntimeError("control aliases compiled Git")
+  candidates=[
+    Path(r"C:\Program Files\Git\ucrt64\bin\git.exe"),
+    Path(r"C:\Program Files\Git\mingw64\bin\git.exe"),
+    Path(r"D:\git-sdk-64-minimal\ucrt64\bin\git.exe"),
+    Path(r"D:\git-sdk-64-minimal\mingw64\bin\git.exe"),
+  ]
+  installed=next((p.resolve() for p in candidates if p.is_file()),None)
+  if installed is None or not compiled.is_file():
+    raise RuntimeError("independent native Git binary missing; inspected "+
+                       repr([str(x) for x in candidates]))
+  if installed.samefile(compiled):
+    raise RuntimeError("installed Git is same file as source Git")
   directory=Path("git809-major-cost")
   directory.mkdir(exist_ok=True)
   with tempfile.TemporaryDirectory(prefix="git809-source-vs-installed-") as temp:
