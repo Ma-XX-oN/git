@@ -1,0 +1,28 @@
+name: Git 809 read-only Windows Defender process scan attribution
+on:
+  push:
+    branches: [investigation-809-git-startup]
+    paths:
+      - experiments/issue-809/defender_scan_diagnostic.ps1
+      - .github/workflows/issue-809-defender-diagnostic.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-defender:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Collect read-only Defender scan events while executing Git
+        shell: pwsh
+        run: ./experiments/issue-809/defender_scan_diagnostic.ps1
+      - name: Publish non-sensitive scan summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-defender-scan-diagnostic
+          path: git809-defender-results/windows-defender-diagnostic.json
+          if-no-files-found: warn
