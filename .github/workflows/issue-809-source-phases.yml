@@ -1,0 +1,32 @@
+name: Git 809 source-built Windows phase isolation
+on:
+  push:
+    branches: [investigation-809-git-startup]
+    paths:
+      - experiments/issue-809/instrument_windows_git_source.py
+      - .github/workflows/issue-809-source-phases.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-phases:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+      - name: Build temporary stage-instrumented Git binary and benchmark phases
+        shell: bash
+        run: |
+          . /etc/profile
+          python -m py_compile experiments/issue-809/instrument_windows_git_source.py
+          python experiments/issue-809/instrument_windows_git_source.py
+      - name: Upload native source-stage evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-windows-source-phases
+          path: git809-source-results/*.json
+          if-no-files-found: warn
