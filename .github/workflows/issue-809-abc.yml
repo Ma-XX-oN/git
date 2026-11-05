@@ -26,6 +26,7 @@ jobs:
           . /etc/profile
           PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
           test -f "$PYTHON_EXE"
+          "$PYTHON_EXE" -m pip install pefile==2024.8.26
           "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_git_abc.py
           "$PYTHON_EXE" experiments/issue-809/windows_git_abc.py
       - name: Publish full timing samples and imported-DLL evidence
