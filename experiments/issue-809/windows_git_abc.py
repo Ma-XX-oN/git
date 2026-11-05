@@ -121,11 +121,14 @@ def build_C(source):
   before = "\tinit_git(argv);\n\tresult = cmd_main(argc, argv);"
   after = (
     '\tif (argc == 2 && !strcmp(argv[1], "--version")) {\n'
+    '\t\tgit_resolve_executable_dir(argv[0]);\n'
     '\t\tresult = cmd_main(argc, argv);\n'
     '\t\texit(result);\n'
     '\t}\n' + before
   )
   try:
+    patch_unique(source, '#include "common-init.h"\n',
+                 '#include "common-init.h"\n#include "exec-cmd.h"\n')
     patch_unique(source, before, after)
     return build_variant("C_version_early_dispatch")
   finally:
