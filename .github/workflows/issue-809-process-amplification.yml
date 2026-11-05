@@ -1,0 +1,37 @@
+name: Git 809 cross-OS major process multiplier isolation
+on:
+  push:
+    branches: [investigation-809-git-startup]
+    paths:
+      - experiments/issue-809/git_process_amplification.py
+      - .github/workflows/issue-809-process-amplification.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  process-cost:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-latest]
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Benchmark identical Git object requests in separate versus batch processes
+        shell: bash
+        run: |
+          python -m py_compile experiments/issue-809/git_process_amplification.py
+          python experiments/issue-809/git_process_amplification.py
+      - name: Upload raw cross-OS process multiplier evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-batch-${{ matrix.os }}
+          path: git809-batch-results/*.json
+          if-no-files-found: warn
