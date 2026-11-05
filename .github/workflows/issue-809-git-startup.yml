@@ -34,6 +34,10 @@ jobs:
       - name: Benchmark Git executable, minimal native executable, PE dependencies
         shell: bash
         run: python experiments/issue-809/git_executable_startup.py
+      - name: Split Git process startup from child execution and CPU
+        if: runner.os == 'Windows'
+        shell: bash
+        run: python experiments/issue-809/windows_process_accounting.py
       - name: Upload raw sample distributions
         if: always()
         uses: actions/upload-artifact@v4
