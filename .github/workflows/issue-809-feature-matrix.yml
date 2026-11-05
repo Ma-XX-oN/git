@@ -1,0 +1,38 @@
+name: Git 809 Windows feature-isolation and genuine static link
+on:
+  push:
+    branches: [investigation-809-git-startup]
+    paths:
+      - experiments/issue-809/windows_feature_matrix.py
+      - .github/workflows/issue-809-feature-matrix.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Build one-variable-at-a-time variants and measure full Git processes
+        shell: bash
+        run: |
+          . /etc/profile
+          PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
+          test -f "$PYTHON_EXE"
+          "$PYTHON_EXE" -m pip install pefile==2024.8.26
+          "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_feature_matrix.py
+          "$PYTHON_EXE" experiments/issue-809/windows_feature_matrix.py
+      - name: Upload feature matrix data including failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-windows-feature-matrix
+          path: git809-build-matrix-results/windows-feature-matrix.json
+          if-no-files-found: warn
