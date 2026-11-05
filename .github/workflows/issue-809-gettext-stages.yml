@@ -1,0 +1,40 @@
+name: Git 809 isolate gettext internal runtime stages
+on:
+  push:
+    branches: [investigation-809-git-startup]
+    paths:
+      - experiments/issue-809/instrument_gettext_runtime.py
+      - .github/workflows/issue-809-gettext-stages.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: stable-x86_64-pc-windows-gnu
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Compare gettext initialization stages with matched native Git
+        shell: bash
+        run: |
+          . /etc/profile
+          export PATH="$(cygpath -u "$USERPROFILE")/.cargo/bin:$PATH"
+          PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
+          "$PYTHON_EXE" -m py_compile experiments/issue-809/instrument_gettext_runtime.py
+          "$PYTHON_EXE" experiments/issue-809/instrument_gettext_runtime.py
+      - name: Publish stage samples
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-gettext-runtime-stages
+          path: git809-gettext-stage-results/windows-gettext-stages.json
+          if-no-files-found: warn
