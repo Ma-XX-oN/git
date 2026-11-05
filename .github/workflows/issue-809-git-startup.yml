@@ -41,6 +41,10 @@ jobs:
       - name: Git lifecycle Trace2 initialization command and shutdown phases
         shell: bash
         run: python experiments/issue-809/git_lifecycle_trace2.py
+      - name: Windows full process lifetime from OS creation through termination
+        if: runner.os == 'Windows'
+        shell: bash
+        run: python experiments/issue-809/windows_full_lifecycle.py
       - name: Upload raw sample distributions
         if: always()
         uses: actions/upload-artifact@v4
