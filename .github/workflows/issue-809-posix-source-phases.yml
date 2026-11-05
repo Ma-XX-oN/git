@@ -1,0 +1,35 @@
+name: Git 809 source-built POSIX phase comparison
+on:
+  push:
+    branches: [investigation-809-git-startup]
+    paths:
+      - experiments/issue-809/instrument_posix_git_source.py
+      - experiments/issue-809/minimal_posix_main.c
+      - .github/workflows/issue-809-posix-source-phases.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-phases:
+    name: Source-built Git phases (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify bench syntax
+        run: python3 -m py_compile experiments/issue-809/instrument_posix_git_source.py
+      - name: Build source-instrumented Git and benchmark identical common entry points
+        run: python3 experiments/issue-809/instrument_posix_git_source.py
+      - name: Upload source-stage evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-posix-phases-${{ matrix.os }}
+          path: git809-source-results/*.json
+          if-no-files-found: warn
