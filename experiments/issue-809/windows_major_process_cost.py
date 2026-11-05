@@ -100,6 +100,9 @@ def main():
       "source_git_relocated_copy":copies["source_git"],
       "minimal_gcc_ucrt_process":minimum
     }
+    wrapper=Path(r"C:\Program Files\Git\bin\git.exe")
+    if wrapper.is_file() and not wrapper.samefile(installed):
+      binaries["installed_git_bin_wrapper"]=wrapper.resolve()
     run_args={name:([str(path),"--version"] if "git" in name else [str(path)])
               for name,path in binaries.items()}
     expected={}
