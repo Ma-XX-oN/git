@@ -63,6 +63,7 @@ def main():
 
   # Match Windows probe's build feature selection while allowing native CC.
   make = ["make", "-j4", "NO_RUST=YesPlease",
+          "NO_CURL=YesPlease", "NO_GETTEXT=YesPlease",
           "CFLAGS_APPEND=-DGIT809_PROBE", "git"]
   build = execute(make, timeout=1800, check=False)
   binary = root / "git"
