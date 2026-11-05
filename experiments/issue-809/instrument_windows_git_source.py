@@ -74,7 +74,7 @@ def main():
            '\tresult = cmd_main(argc, argv);')
   patch_once(common, before, after)
   target=root/"git.exe"
-  command=["make","-j4","NO_RUST=YesPlease","CFLAGS_APPEND=-DGIT809_PROBE","git.exe"]
+  command=["make","-j4","NO_RUST=YesPlease","NO_CURL=YesPlease","NO_GETTEXT=YesPlease","CFLAGS_APPEND=-DGIT809_PROBE","git.exe"]
   build=run(command,timeout=1800,check=False)
   if build.returncode or not target.is_file():
     print("build stdout tail:",build.stdout.decode("utf-8","replace")[-4500:])
