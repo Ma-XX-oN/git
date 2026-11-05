@@ -1,0 +1,36 @@
+name: Git 809 installed Git locale startup root cause
+on:
+  push:
+    branches: [investigation-809-git-startup]
+    paths:
+      - experiments/issue-809/installed_git_locale_causality.py
+      - .github/workflows/issue-809-installed-locale.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-native:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Test default installed Git locale path without any binary changes
+        shell: bash
+        run: |
+          . /etc/profile
+          PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
+          "$PYTHON_EXE" -m py_compile experiments/issue-809/installed_git_locale_causality.py
+          "$PYTHON_EXE" experiments/issue-809/installed_git_locale_causality.py
+      - name: Upload raw installed Git locale-path evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-installed-locale-causality
+          path: git809-installed-locale-results/windows-installed-locale.json
+          if-no-files-found: warn
