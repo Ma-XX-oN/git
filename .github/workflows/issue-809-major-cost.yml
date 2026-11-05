@@ -1,0 +1,45 @@
+name: Git 809 major Windows process startup root cause
+on:
+  push:
+    branches: [investigation-809-git-startup]
+    paths:
+      - experiments/issue-809/windows_major_process_cost.py
+      - .github/workflows/issue-809-major-cost.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-root-cause:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: stable-x86_64-pc-windows-gnu
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Build same-source fully featured Git executable
+        shell: bash
+        run: |
+          . /etc/profile
+          export PATH="$(cygpath -u "$USERPROFILE")/.cargo/bin:$PATH"
+          make -j4 git.exe
+      - name: Compare installed Git, built Git, relocated exact-byte copies and native no-op
+        shell: bash
+        run: |
+          . /etc/profile
+          PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
+          "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_major_process_cost.py
+          "$PYTHON_EXE" experiments/issue-809/windows_major_process_cost.py
+      - name: Publish raw process lifetime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-major-windows-process-cost
+          path: git809-major-cost/windows-major-cost.json
+          if-no-files-found: warn
