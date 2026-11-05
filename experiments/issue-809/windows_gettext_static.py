@@ -65,9 +65,9 @@ def validate_library_contract(binaries, report):
                              "stdout_sha": __import__("hashlib").sha256(p.stdout).hexdigest(),
                              "stderr_sha": __import__("hashlib").sha256(p.stderr).hexdigest()})
     report["builds"][label]["locale_smoke"] = checks
-  baseline = report["builds"]["A_gettext_dynamic"]["locale_smoke"]
+  baseline = report["builds"]["A_default"]["locale_smoke"]
   for label in binaries:
-    if label == "A_gettext_dynamic":
+    if label == "A_default":
       continue
     for locale in baseline:
       for index, (a, b) in enumerate(zip(baseline[locale], report["builds"][label]["locale_smoke"][locale])):
@@ -89,7 +89,7 @@ def main():
     report["archive_evidence"] = archives
     default = []
     configurations = [
-      ("A_gettext_dynamic", default, []),
+      ("A_default", default, []),
       ("B_gettext_static_intl", default, replacement(archives["libintl.a"], "-lintl")),
       ("C_gettext_static_iconv_zlib", default, replacement(archives["libiconv.a"], "-liconv")+
        replacement(archives["libz.a"], "-lz")),
@@ -112,7 +112,7 @@ def main():
       raise RuntimeError("missing variants: "+repr(sorted(needed-set(binaries))))
     for label in binaries:
       report["variants"][label] = report["builds"][label]["dll_imports"]
-    imports_a = set(imports(binaries["A_gettext_dynamic"]))
+    imports_a = set(imports(binaries["A_default"]))
     if "libintl-8.dll" not in imports_a:
       raise RuntimeError("dynamic baseline unexpectedly has no libintl DLL")
     for label in ("B_gettext_static_intl", "D_gettext_static_all_three"):
