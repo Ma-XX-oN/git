@@ -1,0 +1,37 @@
+name: Git 809 Windows A B C linking and lifecycle comparison
+on:
+  push:
+    branches: [investigation-809-git-startup]
+    paths:
+      - experiments/issue-809/windows_git_abc.py
+      - .github/workflows/issue-809-abc.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  benchmark:
+    runs-on: windows-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Build and compare A dynamic B static C version-optimized Git binaries
+        shell: bash
+        run: |
+          . /etc/profile
+          PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
+          test -f "$PYTHON_EXE"
+          "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_git_abc.py
+          "$PYTHON_EXE" experiments/issue-809/windows_git_abc.py
+      - name: Publish full timing samples and imported-DLL evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-windows-abc
+          path: git809-abc-results/windows-abc.json
+          if-no-files-found: warn
