@@ -17,6 +17,11 @@ jobs:
         with:
           persist-credentials: false
       - uses: git-for-windows/setup-git-for-windows-sdk@v2
+      - name: Install matched Windows GNU Rust toolchain
+        continue-on-error: true
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: stable-x86_64-pc-windows-gnu
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -26,6 +31,8 @@ jobs:
           . /etc/profile
           PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
           test -f "$PYTHON_EXE"
+          export PATH="$(cygpath -u "$USERPROFILE")/.cargo/bin:$PATH"
+          command -v cargo || echo "Git SDK cargo remains unavailable: Rust-enabled cases will fail with recorded evidence"
           "$PYTHON_EXE" -m pip install pefile==2024.8.26
           "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_feature_matrix.py
           "$PYTHON_EXE" experiments/issue-809/windows_feature_matrix.py
