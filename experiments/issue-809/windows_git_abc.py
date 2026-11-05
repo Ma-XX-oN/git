@@ -62,12 +62,18 @@ def build_variant(name):
 
 
 def check_imports(path):
-  result = execute(["objdump", "-p", str(path)])
-  dlls = re.findall(r"^\s*DLL Name:\s*(\S+)", result.stdout.decode("utf-8", "replace"),
-                    flags=re.MULTILINE)
+  import pefile
+  image = pefile.PE(str(path), fast_load=True)
+  try:
+    image.parse_data_directories(
+      directories=[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_IMPORT"]])
+    dlls = [ent.dll.decode("ascii", "replace").lower()
+            for ent in getattr(image, "DIRECTORY_ENTRY_IMPORT", [])]
+  finally:
+    image.close()
   if not dlls:
     raise AssertionError("PE import listing unexpectedly empty")
-  return sorted(set(x.lower() for x in dlls))
+  return sorted(set(dlls))
 
 
 def static_lib(name):
@@ -76,9 +82,8 @@ def static_lib(name):
   candidate = Path(value)
   if not candidate.is_file() or not candidate.name.endswith(".a"):
     return None
-  # Import archives must not be reported as full static linkage.
-  inspection = execute(["nm", "-g", str(candidate)], check=False, timeout=90)
-  return str(candidate.resolve()) if inspection.returncode == 0 else None
+  # Actual static linkage is judged only by resulting PE import-table changes.
+  return str(candidate.resolve())
 
 
 def patch_unique(path, before, after):
