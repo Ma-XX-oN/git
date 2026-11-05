@@ -1,0 +1,69 @@
+name: Git 809 gettext-preserving full Windows acceptance
+on:
+  push:
+    branches: [investigation-809-git-startup]
+    paths:
+      - experiments/issue-809/verify_gettext_static_acceptance.py
+      - .github/workflows/issue-809-gettext-acceptance.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    name: Git native acceptance (${{ matrix.link }})
+    runs-on: windows-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        link: [dynamic, static]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: stable-x86_64-pc-windows-gnu
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Prepare gettext-preserving linker and native tests
+        shell: bash
+        run: |
+          . /etc/profile
+          PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
+          test -f "$PYTHON_EXE"
+          export PATH="$(cygpath -u "$USERPROFILE")/.cargo/bin:$PATH"
+          "$PYTHON_EXE" -m pip install pefile==2024.8.26
+          "$PYTHON_EXE" -m py_compile experiments/issue-809/verify_gettext_static_acceptance.py
+          if test "${{ matrix.link }}" = "static"; then
+            "$PYTHON_EXE" experiments/issue-809/verify_gettext_static_acceptance.py prepare
+          fi
+      - name: Build complete Git native toolset
+        shell: bash
+        run: |
+          . /etc/profile
+          export PATH="$(cygpath -u "$USERPROFILE")/.cargo/bin:$PATH"
+          make -j4
+      - name: Verify real DLL imports and gettext-enabled build
+        shell: bash
+        run: |
+          . /etc/profile
+          PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
+          "$PYTHON_EXE" experiments/issue-809/verify_gettext_static_acceptance.py verify --mode "${{ matrix.link }}"
+      - name: Registered native full Git test suite
+        shell: bash
+        run: |
+          . /etc/profile
+          export PATH="$(cygpath -u "$USERPROFILE")/.cargo/bin:$PATH"
+          make -j4 test 2>&1 | tee git809-acceptance-tests.log
+      - name: Upload test and PE import acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-acceptance-${{ matrix.link }}
+          path: |
+            git809-acceptance-*.json
+            git809-acceptance-tests.log
+          if-no-files-found: warn
