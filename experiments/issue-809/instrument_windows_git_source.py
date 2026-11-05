@@ -68,7 +68,9 @@ def main():
            '\tinit_git(argv);\n'
            '#ifdef GIT809_PROBE\n'
            '\tif (argc == 2 && !strcmp(argv[1], "--git809-after-init"))\n'
-           '\t\treturn 0;\n#endif\n'
+           '\t\treturn 0;\n'
+           '\tif (argc == 2 && !strcmp(argv[1], "--git809-after-init-exit"))\n'
+           '\t\texit(0);\n#endif\n'
            '\tresult = cmd_main(argc, argv);')
   patch_once(common, before, after)
   target=root/"git.exe"
@@ -85,6 +87,7 @@ def main():
     "through_windows_wmain_setup":([base,"--git809-after-wmain"],b""),
     "through_call_to_main":([base,"--git809-before-init"],b""),
     "through_common_git_init":([base,"--git809-after-init"],b""),
+    "through_common_init_with_git_exit":([base,"--git809-after-init-exit"],b""),
   }
   output={}
   for name,(argv,expected) in cases.items():
