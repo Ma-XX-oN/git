@@ -25,6 +25,8 @@ OPTIONS = {
   "D_no_curl": ["NO_CURL=YesPlease"],
   "E_all_three_off": ["NO_RUST=YesPlease", "NO_GETTEXT=YesPlease",
                       "NO_CURL=YesPlease"],
+  "G_no_rust_no_gettext": ["NO_RUST=YesPlease", "NO_GETTEXT=YesPlease"],
+  "H_no_rust_no_curl": ["NO_RUST=YesPlease", "NO_CURL=YesPlease"],
 }
 N = 120
 
@@ -167,15 +169,17 @@ def cases(git, repo):
 
 
 def measure(binaries, report):
-  baseline = binaries.get("A_default")
+  reference_label = "A_default" if "A_default" in binaries else "B_no_rust"
+  report["measurement_reference"] = reference_label
+  baseline = binaries.get(reference_label)
   if baseline is None:
-    report["measurement_status"] = "no-default-baseline"
+    report["measurement_status"] = "no-usable-reference"
     return
   with tempfile.TemporaryDirectory(prefix="git809-matrix-") as td:
     repo = make_fixture(baseline, Path(td))
     all_cases = {label: cases(exe, repo) for label, exe in binaries.items()}
     expected = {k: command(argv, timeout=30).stdout
-                for k, argv in all_cases["A_default"].items()}
+                for k, argv in all_cases[reference_label].items()}
     compatible = {}
     for label, commands in all_cases.items():
       ok = True
