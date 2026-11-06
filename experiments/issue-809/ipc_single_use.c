@@ -67,7 +67,7 @@ static void stop_worker(int i) {
   CloseHandle(w->process.hThread);
   CloseHandle(w->process.hProcess);
 }
-static uint32_t dispatch(uint32_t request,int *next,const char *token) {
+static uint32_t dispatch(uint32_t request,int *next) {
   int i=(*next)++%POOL_SIZE;
   uint32_t reply=0;
   transfer(workers[i].pipe,&request,sizeof(request),1);
@@ -101,7 +101,7 @@ static void run_manager_pipe(const char *token) {
     DWORD got=0;
     BOOL ok=ReadFile(h,&req,sizeof(req),&got,NULL);
     if(ok && got==sizeof(req)) {
-      uint32_t reply=dispatch(req,&next,token);
+      uint32_t reply=dispatch(req,&next);
       transfer(h,&reply,sizeof(reply),1);
       FlushFileBuffers(h);
       start_worker((next-1)%POOL_SIZE,token);
@@ -133,7 +133,7 @@ static void run_manager_shm(const char *token) {
   for(;;) {
     if(WaitForSingleObject(req,INFINITE)!=WAIT_OBJECT_0) fail("req wait");
     uint32_t v=(uint32_t)s->value;
-    uint32_t answer=dispatch(v,&next,token);
+    uint32_t answer=dispatch(v,&next);
     s->answer=(LONG)answer;
     MemoryBarrier();
     if(!SetEvent(res)) fail("set response event");
