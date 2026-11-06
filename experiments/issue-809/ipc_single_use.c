@@ -283,7 +283,7 @@ static int verify_decoder(void) {
   puts("argv decoder PASS");
   return 0;
 }
-int main(int argc,char **argv) {
+static int run_entry(int argc,char **argv) {
   if(argc==2 && strcmp(argv[1],"selftest")==0) return verify_decoder();
   if(argc==2 && strcmp(argv[1],"base")==0) {puts("ok");return 0;}
   if(argc<3) {fputs("usage: client base | worker endpoint | manager MODE TOKEN | client MODE TOKEN\n",stderr);return 2;}
@@ -299,4 +299,24 @@ int main(int argc,char **argv) {
   }
   if(strcmp(argv[1],"client")==0) return run_client(argv[2],argv[3],argc-4,(const char *const *)(argv+4));
   return 2;
+}
+
+/* Receive the real Windows command-line array as UTF-16, never via the ANSI
+ * codepage. The wire protocol carries the resulting UTF-8 argv elements. */
+int wmain(int argc,wchar_t **wargv) {
+  char **argv=(char**)calloc((size_t)argc+1,sizeof(*argv));
+  if(!argv) return 99;
+  for(int i=0;i<argc;i++) {
+    int n=WideCharToMultiByte(CP_UTF8,WC_ERR_INVALID_CHARS,wargv[i],-1,
+                              NULL,0,NULL,NULL);
+    if(n<=0) return 98;
+    argv[i]=(char*)malloc((size_t)n);
+    if(!argv[i]) return 99;
+    if(!WideCharToMultiByte(CP_UTF8,WC_ERR_INVALID_CHARS,wargv[i],-1,
+                            argv[i],n,NULL,NULL)) return 98;
+  }
+  int code=run_entry(argc,argv);
+  for(int i=0;i<argc;i++) free(argv[i]);
+  free(argv);
+  return code;
 }
