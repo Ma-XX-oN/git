@@ -55,6 +55,52 @@ def main():
           "stderr":err.decode("utf-8","replace")})
       result["cases"].append(rec)
       print("FLAGS",json.dumps(rec,ensure_ascii=False),flush=True)
+  # Confirm one Bash process can transmit and receive via separate native
+  # named-pipe endpoints. This is a transport test, not a causal reply protocol.
+  pair={"variant":"two_distinct_pipes", "request_received":False,
+        "response_received":False}
+  pair_servers=[]
+  try:
+    request_token=uuid.uuid4().hex[:12]
+    response_token=uuid.uuid4().hex[:12]
+    request_path=r"\\.\pipe\git809-bash-"+request_token
+    response_path=r"\\.\pipe\git809-bash-"+response_token
+    pair["request_path"]=request_path
+    pair["response_path"]=response_path
+    for mode,token in (("in",request_token),("out",response_token)):
+      for i in range(4):
+        p=subprocess.Popen([str(exe),token,mode],stdin=subprocess.DEVNULL,
+          stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        pair_servers.append((mode,i,p))
+        if p.stdout.readline().strip()!=b"READY":
+          raise RuntimeError("pair server startup failed")
+    script=('exec 3>>"$1" || exit 21; printf "PING\n" >&3 || exit 22; '
+            'exec 3>&-; exec 4<"$2" || exit 23; '
+            'IFS= read -r -t 2 reply <&4 || exit 24; '
+            '[[ "$reply" == PONG ]] || exit 25; '
+            'exec 4<&-; echo TWO_PIPE_OK')
+    proc=subprocess.run([bash,"--noprofile","--norc","-c",script,
+       "two-pipes",request_path,response_path],capture_output=True,
+       timeout=7,check=False)
+    pair.update(client_rc=proc.returncode,
+       client_stdout=proc.stdout.decode("utf-8","replace"),
+       client_stderr=proc.stderr.decode("utf-8","replace"),
+       response_received=(proc.returncode==0 and proc.stdout==b"TWO_PIPE_OK\n"))
+  except Exception as exc:
+    pair["error"]=str(exc)
+  finally:
+    pair["servers"]=[]
+    for mode,i,p in pair_servers:
+      if p.poll() is None: p.kill()
+      out,err=p.communicate(timeout=3)
+      item={"mode":mode,"index":i,"rc":p.returncode,
+        "stdout":out.decode("utf-8","replace"),
+        "stderr":err.decode("utf-8","replace")}
+      pair["servers"].append(item)
+      if mode=="in" and p.returncode==0 and b"COMPLETE" in out:
+        pair["request_received"]=True
+    result["cases"].append(pair)
+    print("FLAGS",json.dumps(pair,ensure_ascii=False),flush=True)
   path=OUT/"bash-open-flags.json"
   path.write_text(json.dumps(result,indent=2,ensure_ascii=False)+"\n",encoding="utf-8")
   print("REPORT",path,flush=True)
