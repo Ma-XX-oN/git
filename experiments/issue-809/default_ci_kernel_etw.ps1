@@ -121,7 +121,7 @@ print("40 default Git invocations: passed", flush=True)
                 $data.event_summary['decoded_column_names'] = @($csvRows[0].PSObject.Properties.Name)
                 $data.event_summary['git_event_schema_samples'] = @(
                   $csvRows | Where-Object {
-                    $_.PSObject.Properties.Value -match '(?i)git\.exe'
+                    ([string]$_.'User Data') -match '(?i)git\.exe'
                   } | Select-Object -First 12 | ForEach-Object {
                     $clean = [ordered]@{}
                     foreach ($field in $_.PSObject.Properties) {
