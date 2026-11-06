@@ -51,7 +51,7 @@ def main():
   OUT.mkdir(parents=True, exist_ok=True)
   exe = (OUT / "git809-ipc.exe").resolve()
   command = ["gcc", "-std=c11", "-O2", "-Wall", "-Wextra",
-             "-Werror", "-o", str(exe),
+             "-Werror", "-municode", "-o", str(exe),
              str(ROOT / "experiments/issue-809/ipc_single_use.c")]
   build = subprocess.run(command, check=False, stdout=subprocess.PIPE,
                          stderr=subprocess.PIPE, timeout=120)
@@ -115,7 +115,7 @@ def main():
       "baseline": ([str(exe), "base"], b"ok\r\n"),
       "pipe": ([str(exe), "client", "pipe", token + "pipe"], b"ok\r\n"),
       "pipe_argv": ([str(exe), "client", "pipe", token + "pipe",
-                     "git", "--version", "", 'literal "quote" and \\slash'], b"ok\r\n"),
+                     "git", "--version", "", 'literal "quote" and \\slash', "UTF-8: →"], b"ok\r\n"),
       "shm": ([str(exe), "client", "shm", token + "shm"], b"ok\r\n"),
       "shm_argv": ([str(exe), "client", "shm", token + "shm",
                     "git", "--version", "", 'literal "quote" and \\slash'], b"ok\r\n"),
