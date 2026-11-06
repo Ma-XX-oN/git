@@ -121,6 +121,50 @@ git-ipc() {
   done
   exec 7>&-
 
+  # Experimental second timing mode: stdout is undelimited, with a
+  # 100 ms bounded read; stderr readiness is checked with read -t 0,
+  # followed by newline-delimited consumption. No child shells.
+  if [[ ${GIT809_DRAIN_MODE:-} == chunk100 ]]; then
+    local out_open=1 err_open=1 chunk read_rc stderr_line
+    while (( out_open || err_open )); do
+      if (( out_open )); then
+        chunk=
+        IFS= read -r -N 4096 -t 0.100 -u 4 chunk
+        read_rc=$?
+        [[ -z $chunk ]] || printf '%s' "$chunk"
+        if (( read_rc == 1 )); then
+          out_open=0
+          exec 4<&-
+        elif (( read_rc != 0 && read_rc <= 128 )); then
+          exec 4<&- 5<&- 6<&-
+          return 81
+        fi
+      fi
+      if (( err_open )) && IFS= read -r -t 0 -u 5; then
+        stderr_line=
+        IFS= read -r -t 0.001 -u 5 stderr_line
+        read_rc=$?
+        if [[ -n $stderr_line ]]; then
+          printf '%s' "$stderr_line" >&2
+          if (( read_rc == 0 )); then printf '\n' >&2; fi
+        fi
+        if (( read_rc == 1 )); then
+          err_open=0
+          exec 5<&-
+        elif (( read_rc != 0 && read_rc <= 128 )); then
+          exec 4<&- 5<&- 6<&-
+          return 81
+        fi
+      fi
+    done
+    IFS= read -r status <&6 || { exec 6<&-; return 80; }
+    exec 6<&-
+    if [[ $status =~ ^EXIT[[:space:]]([0-9]+)$ ]]; then
+      return "${BASH_REMATCH[1]}"
+    fi
+    printf 'Invalid Git exit-code response: %s\n' "$status" >&2
+    return 82
+  fi
   # Poll stdout and stderr in one Bash process; read exit status after both close.
   # -t 0 checks readiness only. -N reads chunks without waiting for newline;
   # a fractional timeout bounds a partial read when less than 4096 bytes arrive.
