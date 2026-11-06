@@ -32,11 +32,11 @@ WIN_SCRIPT=r'''
       "$gitbin" --version >/dev/null 2>/dev/null || exit 41
       direct_end=$EPOCHREALTIME
       ipc_begin=$EPOCHREALTIME
-      git_ipc --version >/dev/null 2>/dev/null || { cat "$_GIT809_MANAGER_LOG" >&2; exit 42; }
+      git-ipc --version >/dev/null 2>/dev/null || { cat "$_GIT809_MANAGER_LOG" >&2; exit 42; }
       ipc_end=$EPOCHREALTIME
     else
       ipc_begin=$EPOCHREALTIME
-      git_ipc --version >/dev/null 2>/dev/null || { cat "$_GIT809_MANAGER_LOG" >&2; exit 43; }
+      git-ipc --version >/dev/null 2>/dev/null || { cat "$_GIT809_MANAGER_LOG" >&2; exit 43; }
       ipc_end=$EPOCHREALTIME
       direct_begin=$EPOCHREALTIME
       "$gitbin" --version >/dev/null 2>/dev/null || exit 44
