@@ -30,13 +30,19 @@ _git809_source_manager() {
     printf 'set GIT809_WORKER_GIT and GIT809_MANAGER_PYTHON before sourcing\n' >&2
     return 2
   fi
+  local owner_winpid
+  IFS= read -r owner_winpid < "/proc/$/winpid" || return 1
+  if [[ ! $owner_winpid =~ ^[1-9][0-9]*$ ]]; then
+    printf 'cannot resolve owning shell native Windows PID\n' >&2
+    return 1
+  fi
   local script_path script_dir temp native_ready
   script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) || return 1
   script_path=$(cygpath -w "$script_dir/windows_shell_owned_pool.py") || return 1
   temp=$(mktemp -d) || return 1
   native_ready=$(cygpath -w "$temp/ready.json") || return 1
   "$GIT809_MANAGER_PYTHON" "$script_path" --git "$GIT809_WORKER_GIT" \
-    --workers "$requested" --ready-file "$native_ready" \
+    --workers "$requested" --owner-winpid "$owner_winpid" --ready-file "$native_ready" \
     >"$temp/manager.log" 2>&1 </dev/null &
   local launched=$!
   local i
