@@ -4,6 +4,7 @@ on:
     branches: [investigation-809-git-startup]
     paths:
       - experiments/issue-809/windows_git_ipc_pool.py
+      - experiments/issue-809/windows_real_git_worker_build.py
       - experiments/issue-809/git-manager.sh
       - experiments/issue-809/three_os_pool_benchmark.py
       - .github/workflows/issue-809-three-os-pool.yml
@@ -36,7 +37,7 @@ jobs:
           PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
           export GIT809_MANAGER_PYTHON="$(cygpath -w "$PYTHON_EXE")"
           bash -n experiments/issue-809/git-manager.sh
-          "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_git_ipc_pool.py experiments/issue-809/three_os_pool_benchmark.py
+          "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_real_git_worker_build.py experiments/issue-809/windows_git_ipc_pool.py experiments/issue-809/three_os_pool_benchmark.py
           "$PYTHON_EXE" experiments/issue-809/three_os_pool_benchmark.py
       - name: Ensure Bash with EPOCHREALTIME on macOS
         if: runner.os == 'macOS'
