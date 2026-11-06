@@ -81,6 +81,10 @@ def main():
   windows=os.name=="nt"
   bash=shutil.which("bash")
   if not bash:raise RuntimeError("Bash not installed")
+  timer_test=subprocess.run([bash,"--noprofile","--norc","-c",
+    '[[ $EPOCHREALTIME =~ ^[0-9]+\\.[0-9]+$ ]]'],capture_output=True)
+  if timer_test.returncode:
+    raise RuntimeError("selected Bash has no EPOCHREALTIME timer: "+bash)
   if windows and "git-sdk" not in bash.lower():
     raise RuntimeError("Git SDK Bash not selected: "+repr(bash))
   git,build_cmd=build_git(root)
