@@ -61,10 +61,9 @@ static uint32_t digest_argv(const unsigned char *data, size_t len) {
   for(size_t i=0;i<len;i++) {h^=data[i];h*=16777619u;}
   return h^MAGIC;
 }
-static DWORD build_request(unsigned char data[MAX_WIRE]) {
-  static const char *args[]={"git", "--version", "", "quoted \"path\" \\",
-                              "UTF-8: \xE2\x86\x92"};
-  const uint32_t count=(uint32_t)(sizeof(args)/sizeof(args[0]));
+static DWORD build_from_args(unsigned char data[MAX_WIRE],
+                             uint32_t count,const char *const *args) {
+  if(count>MAX_ARGS) ExitProcess(94);
   put_u32(data,count);
   DWORD p=4;
   for(uint32_t i=0;i<count;i++) {
@@ -75,6 +74,11 @@ static DWORD build_request(unsigned char data[MAX_WIRE]) {
   ParsedArgs parsed;
   if(!decode_argv(data,p,&parsed) || parsed.argc!=count) ExitProcess(94);
   return p;
+}
+static DWORD build_request(unsigned char data[MAX_WIRE]) {
+  static const char *args[]={"git", "--version", "", "quoted \"path\" \\",
+                              "UTF-8: \xE2\x86\x92"};
+  return build_from_args(data,(uint32_t)(sizeof(args)/sizeof(args[0])),args);
 }
 typedef struct { HANDLE pipe; PROCESS_INFORMATION process; char endpoint[128]; } Worker;
 static char executable[MAX_PATH];
@@ -211,9 +215,11 @@ static void run_manager_shm(const char *token) {
     start_worker((next-1)%POOL_SIZE,token);
   }
 }
-static int run_client(const char *mode,const char *token) {
+static int run_client(const char *mode,const char *token,
+                      int argc,const char *const *argv) {
   unsigned char req[MAX_WIRE];
-  DWORD size=build_request(req);
+  DWORD size=argc ? build_from_args(req,(uint32_t)argc,argv)
+                  : build_request(req);
   uint32_t answer=0;
   if(strcmp(mode,"pipe")==0) {
     char endpoint[128];make_name(endpoint,sizeof(endpoint),"mgr",token);
@@ -282,14 +288,15 @@ int main(int argc,char **argv) {
   if(argc==2 && strcmp(argv[1],"base")==0) {puts("ok");return 0;}
   if(argc<3) {fputs("usage: client base | worker endpoint | manager MODE TOKEN | client MODE TOKEN\n",stderr);return 2;}
   if(strcmp(argv[1],"worker")==0) {run_worker(argv[2]);return 0;}
-  if(argc!=4) return 2;
+  if(argc<4) return 2;
   if(!GetModuleFileNameA(NULL,executable,MAX_PATH)) fail("GetModuleFileName");
   if(strcmp(argv[1],"manager")==0) {
+    if(argc!=4) return 2;
     if(strcmp(argv[2],"pipe")==0) run_manager_pipe(argv[3]);
     else if(strcmp(argv[2],"shm")==0) run_manager_shm(argv[3]);
     else return 2;
     return 0;
   }
-  if(strcmp(argv[1],"client")==0) return run_client(argv[2],argv[3]);
+  if(strcmp(argv[1],"client")==0) return run_client(argv[2],argv[3],argc-4,(const char *const *)(argv+4));
   return 2;
 }
