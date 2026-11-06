@@ -38,6 +38,12 @@ jobs:
           bash -n experiments/issue-809/git-manager.sh
           "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_git_ipc_pool.py experiments/issue-809/three_os_pool_benchmark.py
           "$PYTHON_EXE" experiments/issue-809/three_os_pool_benchmark.py
+      - name: Ensure Bash with EPOCHREALTIME on macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          brew install bash
+          echo "$(brew --prefix bash)/bin" >> "$GITHUB_PATH"
       - name: Native Unix source-built Git benchmark
         if: runner.os != 'Windows'
         shell: bash
