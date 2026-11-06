@@ -23,6 +23,14 @@ SCRIPT=r'''
   fi
   exec 3>&-
   exec 4<"$stdout_pipe" || exit 23
+  # Check Git Bash's zero-timeout readiness on the Win32 named-pipe handle.
+  wait_ready() {
+    local fd=$1 deadline=$((SECONDS+5))
+    until IFS= read -r -t 0 -u "$fd"; do
+      (( SECONDS < deadline )) || return 1
+    done
+  }
+  wait_ready 4 || exit 67
   if [[ $mode == success ]]; then
     IFS= read -r -d '' prefix <&4 || exit 24
     IFS= read -r suffix <&4 || exit 25
@@ -31,9 +39,12 @@ SCRIPT=r'''
     IFS= read -r stdout_line <&4 || exit 27
     [[ $stdout_line == FAIL ]] || exit 28
   fi
+  wait_ready 4 || exit 68
   exec 4<&-
   exec 5<"$stderr_pipe" || exit 29
+  wait_ready 5 || exit 69
   IFS= read -r stderr_line <&5 || exit 30
+  wait_ready 5 || exit 70
   exec 5<&-
   if [[ $mode == success ]]; then
     [[ $stderr_line == ERR ]] || exit 31
