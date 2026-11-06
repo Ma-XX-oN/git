@@ -6,6 +6,7 @@ on:
       - experiments/issue-809/windows_real_git_worker_build.py
       - experiments/issue-809/windows_real_git_manager.py
       - experiments/issue-809/windows_real_git_acceptance.py
+      - experiments/issue-809/windows_real_git_perf.py
       - .github/workflows/issue-809-real-git-worker.yml
   workflow_dispatch:
 permissions:
@@ -30,11 +31,14 @@ jobs:
           "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_real_git_worker_build.py
           "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_real_git_manager.py
           "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_real_git_acceptance.py
+          "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_real_git_perf.py
           "$PYTHON_EXE" experiments/issue-809/windows_real_git_acceptance.py
       - name: Upload real Git worker output and exact source evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: git809-real-git-four-channel
-          path: git809-bash-pipe-results/real-git-worker-four-channel.json
+          path: |
+            git809-bash-pipe-results/real-git-worker-four-channel.json
+            git809-bash-pipe-results/real-git-persistent-bash-benchmark.json
           if-no-files-found: warn
