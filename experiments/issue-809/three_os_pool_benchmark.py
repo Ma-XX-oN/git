@@ -99,6 +99,9 @@ def main():
   if windows and "git-sdk" not in bash.lower():
     raise RuntimeError("Git SDK Bash not selected: "+repr(bash))
   git,build_cmd=build_git(root)
+  if windows:
+    from windows_direct_pipe_probe import run as verify_worker_named_pipe
+    verify_worker_named_pipe(git)
   git_native=str(git)
   git_shell=(subprocess.run(["cygpath","-u",git_native],capture_output=True,
      check=True,text=True,encoding="utf-8").stdout.strip() if windows else git_native)
