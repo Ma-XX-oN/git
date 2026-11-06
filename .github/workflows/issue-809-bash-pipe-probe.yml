@@ -5,6 +5,7 @@ on:
     paths:
       - experiments/issue-809/windows_bash_pipe_probe.c
       - experiments/issue-809/windows_bash_pipe_probe.py
+      - experiments/issue-809/windows_bash_pipe_trace.py
       - .github/workflows/issue-809-bash-pipe-probe.yml
   workflow_dispatch:
 permissions:
@@ -28,6 +29,8 @@ jobs:
           PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
           "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_bash_pipe_probe.py
           "$PYTHON_EXE" experiments/issue-809/windows_bash_pipe_probe.py
+          "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_bash_pipe_trace.py
+          "$PYTHON_EXE" experiments/issue-809/windows_bash_pipe_trace.py
       - name: Upload exact Bash IPC feasibility evidence
         if: always()
         uses: actions/upload-artifact@v4
