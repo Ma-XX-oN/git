@@ -51,16 +51,8 @@ _git809_source_manager() {
       _GIT809_MANAGER_BASH_PID=$launched
       _GIT809_MANAGER_READY=$temp/ready.json
       _GIT809_MANAGER_WORKERS=$requested
+      _GIT809_OWNER_WINPID=$owner_winpid
       _GIT809_MANAGER_LOG=$temp/manager.log
-      local data
-      IFS= read -r data < "$temp/ready.json" || return 1
-      if [[ $data =~ \"pipe_token\"[[:space:]]*:[[:space:]]*\"([a-f0-9]+)\" ]]; then
-        _GIT809_MANAGER_TOKEN=${BASH_REMATCH[1]}
-      else
-        printf 'manager READY missing pipe token\n' >&2
-        return 1
-      fi
-      _GIT809_NEXT_SEQUENCE=0
       return 0
     fi
     if ! kill -0 "$launched" 2>/dev/null; then
@@ -79,54 +71,86 @@ if (( _git809_source_rc != 0 )); then
   return "$_git809_source_rc"
 fi
 
-# Bash builtins in each Git IPC command (no per-command native executable).
-git_ipc() {
-  if [[ -z ${_GIT809_MANAGER_TOKEN:-} || $# -gt 31 ]]; then
-    printf 'git_ipc requires at most 31 Git arguments\n' >&2
+# Request a worker PID, then talk directly to its four pipe endpoints.
+# The Python manager only allocates IDs; it never forwards Git output.
+git-ipc() {
+  if [[ -z ${_GIT809_OWNER_WINPID:-} || $# -gt 31 ]]; then
+    printf 'git-ipc requires a running manager and at most 31 arguments\n' >&2
     return 2
   fi
-  local index=$_GIT809_NEXT_SEQUENCE
-  local base="\\\\.\\pipe\\git809-real"
-  local request="${base}-request-${_GIT809_MANAGER_TOKEN}-${index}"
-  local pout="${base}-stdout-${_GIT809_MANAGER_TOKEN}-${index}"
-  local perr="${base}-stderr-${_GIT809_MANAGER_TOKEN}-${index}"
-  local pstatus="${base}-status-${_GIT809_MANAGER_TOKEN}-${index}"
-  local i line status
-  _GIT809_NEXT_SEQUENCE=$((index+1))
+  local allocator="\\.\pipe\git809-allocate-${_GIT809_OWNER_WINPID}"
+  local pid i count header arg status line
   for ((i=0;i<200;i++)); do
-    if { exec 3>>"$request"; } 2>/dev/null; then break; fi
+    if { exec 3<>"$allocator"; } 2>/dev/null; then break; fi
     sleep .005
   done
   if (( i == 200 )); then
-    printf 'Git IPC request endpoint unavailable\n' >&2
+    printf 'Git manager allocation pipe unavailable\n' >&2
     return 70
   fi
-  local count=$(( $# + 1 )) header arg
-  printf -v header '\\x%02x\\x00\\x00\\x00' "$count"
-  printf '%b' "$header" >&3 || return 71
-  printf 'git\x00' >&3 || return 71
-  for arg in "$@"; do
-    printf '%s\x00' "$arg" >&3 || return 71
-  done
+  printf 'GET\n' >&3 || { exec 3>&-; return 71; }
+  IFS= read -r pid <&3 || { exec 3>&-; return 72; }
   exec 3>&-
-  exec 4<"$pout" || return 72
-  while IFS= read -r line <&4 || [[ -n $line ]]; do
-    printf '%s\n' "$line"
+  if [[ $pid == WAIT ]]; then
+    printf 'Git worker pool temporarily depleted\n' >&2
+    return 73
+  fi
+  if [[ ! $pid =~ ^[1-9][0-9]*$ ]]; then
+    printf 'Invalid Git worker PID response: %s\n' "$pid" >&2
+    return 74
+  fi
+
+  local stem="\\.\pipe\${pid}"
+  local pstdin="${stem}-stdin"
+  local pout="${stem}-stdout"
+  local perr="${stem}-stderr"
+  local pexit="${stem}-exit-code"
+
+  # Open in the same order that the native worker accepts connections.
+  exec 4<"$pout" || return 75
+  exec 5<"$perr" || { exec 4<&-; return 76; }
+  exec 6<"$pexit" || { exec 4<&- 5<&-; return 77; }
+  exec 7>"$pstdin" || { exec 4<&- 5<&- 6<&-; return 78; }
+
+  count=$(( $# + 1 ))
+  printf -v header '\\x%02x\\x00\\x00\\x00' "$count"
+  printf '%b' "$header" >&7 || return 79
+  printf 'git\x00' >&7 || return 79
+  for arg in "$@"; do
+    printf '%s\x00' "$arg" >&7 || return 79
   done
+  exec 7>&-
+
+  # Drain stdout and stderr concurrently so neither backpressures Git.
+  (
+    while IFS= read -r line <&4 || [[ -n $line ]]; do
+      printf '%s\n' "$line"
+    done
+  ) &
+  local out_reader=$!
+  (
+    while IFS= read -r line <&5 || [[ -n $line ]]; do
+      printf '%s\n' "$line" >&2
+    done
+  ) &
+  local err_reader=$!
   exec 4<&-
-  exec 5<"$perr" || return 73
-  while IFS= read -r line <&5 || [[ -n $line ]]; do
-    printf '%s\n' "$line" >&2
-  done
   exec 5<&-
-  exec 6<"$pstatus" || return 74
-  IFS= read -r status <&6 || return 75
+  wait "$out_reader"
+  local out_rc=$?
+  wait "$err_reader"
+  local err_rc=$?
+  IFS= read -r status <&6 || { exec 6<&-; return 80; }
   exec 6<&-
+  if (( out_rc != 0 || err_rc != 0 )); then
+    printf 'Git output drainage failed\n' >&2
+    return 81
+  fi
   if [[ $status =~ ^EXIT[[:space:]]([0-9]+)$ ]]; then
     return "${BASH_REMATCH[1]}"
   fi
-  printf 'invalid Git IPC status: %s\n' "$status" >&2
-  return 76
+  printf 'Invalid Git exit-code response: %s\n' "$status" >&2
+  return 82
 }
-alias git='git_ipc'
+alias git='git-ipc'
 return 0
