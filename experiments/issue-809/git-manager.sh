@@ -78,7 +78,7 @@ git-ipc() {
     printf 'git-ipc requires a running manager and at most 31 arguments\n' >&2
     return 2
   fi
-  local allocator="\\.\pipe\git809-allocate-${_GIT809_OWNER_WINPID}"
+  local allocator; printf -v allocator '%s%s' '\\.\pipe\git809-allocate-' "$_GIT809_OWNER_WINPID"
   local pid i count header arg status line
   for ((i=0;i<200;i++)); do
     if { exec 3<>"$allocator"; } 2>/dev/null; then break; fi
