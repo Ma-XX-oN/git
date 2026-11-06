@@ -27,9 +27,10 @@ WIN_SCRIPT=r'''
   source "$1" 3 || exit 32
   [[ "$_GIT809_MANAGER_WORKERS" == 3 ]] || exit 33
   expected=$("$gitbin" --version) || exit 34
+  export GIT809_DRAIN_MODE=chunk100
   actual=$(git-ipc --version) || { rc=$?; printf "IPC_INITIAL_FAIL rc=%s\\n" "$rc" >&2; exit 35; }
   [[ $actual == "$expected" ]] || exit 36
-  for mode in poll1ms chunk100; do
+  for mode in chunk100 poll1ms; do
     if [[ $mode == chunk100 ]]; then
       export GIT809_DRAIN_MODE=chunk100
     else
