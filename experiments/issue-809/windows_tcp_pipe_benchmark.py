@@ -60,6 +60,8 @@ K.WriteFile.argtypes=[W.HANDLE,W.LPCVOID,W.DWORD,C.POINTER(W.DWORD),W.LPVOID]
 K.WriteFile.restype=W.BOOL
 K.CloseHandle.argtypes=[W.HANDLE]
 K.CloseHandle.restype=W.BOOL
+K.CancelIoEx.argtypes=[W.HANDLE,W.LPVOID]
+K.CancelIoEx.restype=W.BOOL
 INVALID=C.c_void_p(-1).value
 ERROR_PIPE_CONNECTED=535
 ERROR_BROKEN_PIPE=109
@@ -180,10 +182,20 @@ def case(bash:str,mode:str):
     stop.set()
     if listener is not None:
       listener.close()
+    # A blocking ConnectNamedPipe/ReadFile can outlive a failed client.
+    # Cancel first; closing an active synchronous handle is not a
+    # reliable way to stop its servicing thread.
     for h in handles:
-      K.CloseHandle(h)
+      K.CancelIoEx(h,None)
     for t in threads:
       t.join(timeout=.5)
+    for h,t in zip(handles,threads):
+      if not t.is_alive():
+        K.CloseHandle(h)
+      else:
+        print("PIPE_TEARDOWN_PENDING "+mode,flush=True)
+        # The isolated test process releases these on exit; do not block
+        # the transport comparison waiting on a failed pipe connection.
 
 def main():
   bash=os.environ.get("GIT809_BASH","bash")
