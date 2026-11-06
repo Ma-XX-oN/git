@@ -65,3 +65,24 @@ The current experimental branch has a newer direct-worker prototype than the his
 [Git issue #1](https://github.com/Ma-XX-oN/git/issues/1) separately tracks the requested public `git --preinit` switch and production worker contract.
 
 The latest three-OS experimental benchmark collects 120 samples per configuration, verifies direct-versus-IPC version output and Git help output, and checks distinct worker allocations. All outputs must be verified against an exact source SHA and native CI run before reporting a new performance result. The old 12-sample Windows Python-relay timings remain **historical and superseded** for the direct implementation.
+
+
+## Windows named pipe versus loopback TCP — targeted transport measurements (2026-11-06)
+
+**Verified experiment SHA:** `09f9699225d007444652ff6c6bface58a53a2e65`.
+**Native Windows CI:** [run 42287848349](https://github.com/Ma-XX-oN/git/actions/runs/42287848349), original attempt and independent same-SHA job rerun (both SUCCESS). Windows-only, no Git recompilation, no Linux/macOS work. Source: `windows_tcp_pipe_benchmark.py`, CI: `issue-809-tcp-pipe.yml`. Both use **exact Git for Windows SDK Bash**; the earlier test's native Python PATH had accidentally resolved `bash` to the WSL launcher, which is not a Git Bash test.
+
+The server is native Windows Python, with a synchronous Win32 **duplex named pipe** or a `127.0.0.1` TCP listener. Each client is a single persistent Git Bash process. There are 150 sequential short ASCII echo requests/replies on one established connection; Bash `EPOCHREALTIME` brackets only the request/reply, excluding client startup and connection setup. Native server connection/message counters verify acceptance, with actual per-sample microseconds logged and recorded in `git809-bash-pipe-results/windows-tcp-versus-pipe.json` workflow artifacts.
+
+| Native Windows run | Two actual pipe instances (median / P95 µs) | TCP loopback (median / P95 µs) | One actual pipe instance |
+| --- | --- | --- | --- |
+| Original | 63 / 106 | 196 / 229 | `Device or resource busy`, 0 requests |
+| Same-SHA rerun | 47 / 71 | 144 / 201 | `Device or resource busy`, 0 requests |
+
+**Verified:** For both attempts, the single-instance Win32 duplex pipe accepted one server-side connection that carried zero requests; Bash failed to open it for data. With **two actual instances**, server counters reported **two connections, 150 successful requests**. TCP reported **one connection, 150 successful requests**. Neither the read/write direction nor buffer capacity requires separate named-pipe instances. The single-instance Bash behavior needs a source-level MSYS2 investigation before adopting duplicated pipe instances as a production workaround.
+
+**Measured result:** Named-pipe roundtrips were approximately 3.1x faster than TCP in both native Windows attempts, but neither transport was tested as a complete native Git command. No claim of end-to-end worker speedup or full binary stdout/stderr parity follows from these echo timings.
+
+**TCP integration costs:** A single TCP stream is duplex but would require framing/multiplexing stdin, stdout, stderr and exit status, or separate connections and listener/port coordination. Worker PID alone is not an address: the manager would need to return actual port(s), and an application-level session token is required to prevent unauthorized same-host client connections. Windows named pipes can instead use filesystem-like names and Win32 access control. TCP `send` only proves kernel buffering, not application consumption; explicit client acknowledgment is required to meet the worker's "do not exit until fully read" criterion. Loopback listener must bind `127.0.0.1` and handle cleanup, port lifetime, cancellation and Nagle/delayed-ACK behavior. This prototype did not test authentication, four-channel multiplexing, large/binary data or disconnection handling.
+
+**Decision:** Keep named pipes as the performance baseline; do not switch #809's worker implementation to TCP based on this test. Investigate and repair the MSYS2/Bash single-instance connection path while preserving exactly four logical communication channels.
