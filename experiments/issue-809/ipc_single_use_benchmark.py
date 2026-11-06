@@ -85,7 +85,7 @@ def main():
       "git": "direct native installed git --version",
       "argv_wire_format": "little-endian u32 argc, then exactly argc NUL-terminated UTF-8 strings (including an empty argument); maximum 32 arguments and 4096 bytes",
       "limitations": [
-        "No Git command execution in IPC prototype; client sends a fixed representative argument fixture",
+        "No Git command execution in IPC prototype; both a fixed UTF-8/empty-string fixture and dynamic argv are tested",
         "One client at a time; not a concurrency or contention acceptance test",
         "Manager replenishment runs after reply, potentially delaying the next request",
         "Shared memory only replaces client-manager channel; manager-worker remains named pipe",
@@ -114,7 +114,11 @@ def main():
     cases = {
       "baseline": ([str(exe), "base"], b"ok\r\n"),
       "pipe": ([str(exe), "client", "pipe", token + "pipe"], b"ok\r\n"),
+      "pipe_argv": ([str(exe), "client", "pipe", token + "pipe",
+                     "git", "--version", "", 'literal "quote" and \\slash'], b"ok\r\n"),
       "shm": ([str(exe), "client", "shm", token + "shm"], b"ok\r\n"),
+      "shm_argv": ([str(exe), "client", "shm", token + "shm",
+                    "git", "--version", "", 'literal "quote" and \\slash'], b"ok\r\n"),
       "git": ([str(installed), "--version"], version),
     }
     values = {case: [] for case in cases}
