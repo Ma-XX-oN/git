@@ -1,0 +1,28 @@
+name: Git 809 default CI kernel startup trace capability
+on:
+  push:
+    branches: [investigation-809-git-startup]
+    paths:
+      - experiments/issue-809/native_ci_os_trace_capabilities.ps1
+      - .github/workflows/issue-809-native-os-trace.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-default:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Inspect normal GitHub Windows CI process-tracing capabilities
+        shell: pwsh
+        run: ./experiments/issue-809/native_ci_os_trace_capabilities.ps1
+      - name: Upload native CI trace capabilities
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-default-ci-kernel-trace-capabilities
+          path: git809-native-os-trace/*.json
+          if-no-files-found: warn
