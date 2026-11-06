@@ -107,17 +107,17 @@ git-ipc() {
   local pexit="${stem}-exit-code"
 
   # Open in the same order that the native worker accepts connections.
-  exec 4<"$pout" || printf 'GIT-IPC ERROR: stdout pipe open failed\n' >&2; return 255
+  exec 4<"$pout" || { printf 'GIT-IPC ERROR: stdout pipe open failed\n' >&2; return 255; }
   exec 5<"$perr" || { exec 4<&-; printf 'GIT-IPC ERROR: stderr pipe open failed\n' >&2; return 255; }
   exec 6<"$pexit" || { exec 4<&- 5<&-; printf 'GIT-IPC ERROR: exit-status pipe open failed\n' >&2; return 255; }
   exec 7>>"$pstdin" || { exec 4<&- 5<&- 6<&-; printf 'GIT-IPC ERROR: stdin pipe open failed\n' >&2; return 255; }
 
   count=$(( $# + 1 ))
   printf -v header '\\x%02x\\x00\\x00\\x00' "$count"
-  printf '%b' "$header" >&7 || printf 'GIT-IPC ERROR: worker request write failed\n' >&2; return 255
-  printf 'git\x00' >&7 || printf 'GIT-IPC ERROR: worker request write failed\n' >&2; return 255
+  printf '%b' "$header" >&7 || { printf 'GIT-IPC ERROR: worker request write failed\n' >&2; return 255; }
+  printf 'git\x00' >&7 || { printf 'GIT-IPC ERROR: worker request write failed\n' >&2; return 255; }
   for arg in "$@"; do
-    printf '%s\x00' "$arg" >&7 || printf 'GIT-IPC ERROR: worker request write failed\n' >&2; return 255
+    printf '%s\x00' "$arg" >&7 || { printf 'GIT-IPC ERROR: worker request write failed\n' >&2; return 255; }
   done
   exec 7>&-
 
