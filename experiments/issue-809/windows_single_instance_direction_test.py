@@ -22,13 +22,13 @@ k.WriteFile.restype = W.BOOL
 k.CloseHandle.argtypes = [W.HANDLE]
 k.CloseHandle.restype = W.BOOL
 INVALID = C.c_void_p(-1).value
-PAYLOAD = b"ONE_INSTANCE_OK\\n"
+PAYLOAD = b"ONE_INSTANCE_OK\n"
 
 def run_case(bash, mode):
   assert mode in ("read", "append")
   # Bash reads from server OUTBOUND; Bash appends to server INBOUND.
   access = 2 if mode == "read" else 1
-  path = r"\\\\.\\pipe\\git809-one-instance-" + uuid.uuid4().hex
+  path = r"\\.\pipe\git809-one-instance-" + uuid.uuid4().hex
   handle = k.CreateNamedPipeW(path, access, 0, 1, 65536, 65536, 5000, None)
   if handle == INVALID:
     raise OSError(C.get_last_error(), "CreateNamedPipeW")
@@ -59,7 +59,7 @@ def run_case(bash, mode):
   worker.start()
   script = ('exec 3<"$1"; IFS= read -r result <&3; [[ $result == ONE_INSTANCE_OK ]]'
     if mode == "read" else
-    'exec 3>>"$1"; printf "ONE_INSTANCE_OK\\n" >&3')
+    'exec 3>>"$1"; printf "ONE_INSTANCE_OK\n" >&3')
   try:
     p = subprocess.run([bash, "--noprofile", "--norc", "-c", script, "bench", path],
                        capture_output=True, timeout=8, check=False)
