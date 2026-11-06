@@ -150,9 +150,16 @@ def case(bash:str,mode:str):
       t.start()
       threads.append(t)
   try:
-    result=subprocess.run([bash,"--noprofile","--norc","-c",
-      BASH,"bench",address,"tcp" if mode=="tcp" else "pipe",str(COUNT),PAYLOAD],
-      capture_output=True,timeout=40,check=False)
+    try:
+      result=subprocess.run([bash,"--noprofile","--norc","-c",
+        BASH,"bench",address,"tcp" if mode=="tcp" else "pipe",str(COUNT),PAYLOAD],
+        capture_output=True,timeout=15,check=False)
+    except subprocess.TimeoutExpired as exc:
+      print("TRANSPORT_TIMEOUT "+json.dumps({"mode":mode,
+        "stdout":(exc.stdout or b"").decode("utf-8","replace")[-500:],
+        "stderr":(exc.stderr or b"").decode("utf-8","replace")[-500:]}),
+        flush=True)
+      return {"mode":mode,"exit":"TIMEOUT","samples":0,"server":metrics}
     samples=[]
     for line in result.stdout.decode("utf-8","replace").splitlines():
       if line.startswith("SAMPLE "):
@@ -180,7 +187,7 @@ def case(bash:str,mode:str):
 
 def main():
   bash=os.environ.get("GIT809_BASH","bash")
-  results=[case(bash,mode) for mode in ("pipe1","pipe2","tcp")]
+  results=[case(bash,mode) for mode in ("tcp","pipe2","pipe1")]
   output=Path("git809-bash-pipe-results")
   output.mkdir(exist_ok=True)
   (output/"windows-tcp-versus-pipe.json").write_text(
@@ -188,7 +195,7 @@ def main():
       "configuration":{"count":COUNT,"payload_bytes":len(PAYLOAD)+8,
         "timing":"Bash EPOCHREALTIME from preconnected request to reply"},
       "results":results},indent=2)+"\n",encoding="utf-8")
-  tcp=results[2]
+  tcp=results[0]
   if tcp["exit"] or tcp["samples"]!=COUNT or tcp["server"]["messages"]!=COUNT:
     raise AssertionError("localhost TCP did not complete exact echo acceptance")
   # Pipe modes are diagnostic; preserve their failures rather than masking them.
