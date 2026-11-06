@@ -2,13 +2,80 @@
 #include <windows.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
 #define TIMEOUT_MS 20000
 #define POOL_SIZE 3
 #define MAGIC 0x809CAFE1u
-typedef struct { volatile LONG value; volatile LONG answer; } Shared;
+#define MAX_ARGS 32u
+#define MAX_WIRE 4096u
+typedef struct {
+  volatile LONG size;
+  volatile LONG answer;
+  unsigned char data[MAX_WIRE];
+} Shared;
+typedef struct {
+  uint32_t argc;
+  const char *argv[MAX_ARGS + 1];
+} ParsedArgs;
+
+/* Count is a little-endian u32; exactly argc NUL-terminated UTF-8 strings follow. */
+static uint32_t get_u32(const unsigned char *p) {
+  return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+         ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+static void put_u32(unsigned char *p, uint32_t n) {
+  for(int i=0;i<4;i++) p[i]=(unsigned char)(n >> (8*i));
+}
+static int decode_argv(const unsigned char *data, size_t len, ParsedArgs *out) {
+  if(len < 4) return 0;
+  uint32_t count=get_u32(data);
+  if(count > MAX_ARGS) return 0;
+  size_t p=4;
+  out->argc=count;
+  for(uint32_t i=0;i<count;i++) {
+    if(p >= len) return 0;
+    size_t start=p;
+    while(p < len && data[p]) p++;
+    if(p == len) return 0;
+    size_t n=p-start;
+    if(n > 0 && (n > (size_t)INT_MAX ||
+       !MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+                            (const char*)data+start, (int)n, NULL, 0)))
+      return 0;
+    out->argv[i]=(const char*)data+start;
+    p++;
+  }
+  out->argv[count]=NULL;
+  return p==len;
+}
+static uint32_t digest_argv(const unsigned char *data, size_t len) {
+  ParsedArgs args;
+  if(!decode_argv(data,len,&args)) {
+    fputs("invalid counted argv payload\n",stderr);
+    ExitProcess(94);
+  }
+  uint32_t h=2166136261u;
+  for(size_t i=0;i<len;i++) {h^=data[i];h*=16777619u;}
+  return h^MAGIC;
+}
+static DWORD build_request(unsigned char data[MAX_WIRE]) {
+  static const char *args[]={"git", "--version", "", "quoted \"path\" \\",
+                              "UTF-8: \xE2\x86\x92"};
+  const uint32_t count=(uint32_t)(sizeof(args)/sizeof(args[0]));
+  put_u32(data,count);
+  DWORD p=4;
+  for(uint32_t i=0;i<count;i++) {
+    size_t n=strlen(args[i])+1;
+    if(n>MAX_WIRE-p) ExitProcess(94);
+    memcpy(data+p,args[i],n);p+=(DWORD)n;
+  }
+  ParsedArgs parsed;
+  if(!decode_argv(data,p,&parsed) || parsed.argc!=count) ExitProcess(94);
+  return p;
+}
 typedef struct { HANDLE pipe; PROCESS_INFORMATION process; char endpoint[128]; } Worker;
 static char executable[MAX_PATH];
 static Worker workers[POOL_SIZE];
@@ -45,7 +112,7 @@ static void start_worker(int i,const char *token) {
     "\\\\.\\pipe\\git809-worker-%s-%d",token,i);
   if(n<0 || (size_t)n>=sizeof(w->endpoint)) ExitProcess(97);
   w->pipe=CreateNamedPipeA(w->endpoint,PIPE_ACCESS_DUPLEX,
-    PIPE_TYPE_BYTE|PIPE_READMODE_BYTE|PIPE_WAIT,1,4096,4096,TIMEOUT_MS,NULL);
+    PIPE_TYPE_MESSAGE|PIPE_READMODE_MESSAGE|PIPE_WAIT,1,4096,4096,TIMEOUT_MS,NULL);
   if(w->pipe==INVALID_HANDLE_VALUE) fail("worker pipe create");
   char line[2*MAX_PATH];
   n=snprintf(line,sizeof(line),"\"%s\" worker \"%s\"",executable,w->endpoint);
@@ -67,20 +134,23 @@ static void stop_worker(int i) {
   CloseHandle(w->process.hThread);
   CloseHandle(w->process.hProcess);
 }
-static uint32_t dispatch(uint32_t request,int *next) {
+static uint32_t dispatch(const unsigned char *request,DWORD size,int *next) {
   int i=(*next)++%POOL_SIZE;
   uint32_t reply=0;
-  transfer(workers[i].pipe,&request,sizeof(request),1);
+  ParsedArgs parsed;
+  if(!decode_argv(request,size,&parsed)) ExitProcess(94);
+  transfer(workers[i].pipe,(void*)request,size,1);
   transfer(workers[i].pipe,&reply,sizeof(reply),0);
-  if(reply!=(request^MAGIC)) { fputs("worker mismatch\n",stderr);ExitProcess(96); }
+  if(reply!=digest_argv(request,size)) { fputs("worker mismatch\n",stderr);ExitProcess(96); }
   stop_worker(i);
   return reply;
 }
 static void run_worker(const char *endpoint) {
   HANDLE h=open_pipe(endpoint);
-  uint32_t req=0,answer=0;
-  transfer(h,&req,sizeof(req),0);
-  answer=req^MAGIC;
+  unsigned char req[MAX_WIRE];
+  DWORD size=0;
+  if(!ReadFile(h,req,sizeof(req),&size,NULL) || !size) fail("worker argv read");
+  uint32_t answer=digest_argv(req,size);
   transfer(h,&answer,sizeof(answer),1);
   FlushFileBuffers(h);
   CloseHandle(h);
@@ -97,11 +167,11 @@ static void run_manager_pipe(const char *token) {
     if(h==INVALID_HANDLE_VALUE) fail("manager pipe");
     BOOL connected=ConnectNamedPipe(h,NULL);
     if(!connected && GetLastError()!=ERROR_PIPE_CONNECTED) fail("manager connect");
-    uint32_t req=0;
+    unsigned char req[MAX_WIRE];
     DWORD got=0;
-    BOOL ok=ReadFile(h,&req,sizeof(req),&got,NULL);
-    if(ok && got==sizeof(req)) {
-      uint32_t reply=dispatch(req,&next);
+    BOOL ok=ReadFile(h,req,sizeof(req),&got,NULL);
+    if(ok && got>0) {
+      uint32_t reply=dispatch(req,got,&next);
       transfer(h,&reply,sizeof(reply),1);
       FlushFileBuffers(h);
       start_worker((next-1)%POOL_SIZE,token);
@@ -126,14 +196,15 @@ static void run_manager_shm(const char *token) {
   HANDLE req=CreateEventA(NULL,FALSE,FALSE,reqname);
   HANDLE res=CreateEventA(NULL,FALSE,FALSE,resname);
   if(!req||!res) fail("manager event");
-  s->value=0;s->answer=0;
+  s->size=0;s->answer=0;
   for(int i=0;i<POOL_SIZE;i++) start_worker(i,token);
   puts("READY");fflush(stdout);
   int next=0;
   for(;;) {
     if(WaitForSingleObject(req,INFINITE)!=WAIT_OBJECT_0) fail("req wait");
-    uint32_t v=(uint32_t)s->value;
-    uint32_t answer=dispatch(v,&next);
+    LONG n=s->size;
+    if(n<4 || n>(LONG)MAX_WIRE) ExitProcess(94);
+    uint32_t answer=dispatch(s->data,(DWORD)n,&next);
     s->answer=(LONG)answer;
     MemoryBarrier();
     if(!SetEvent(res)) fail("set response event");
@@ -141,11 +212,13 @@ static void run_manager_shm(const char *token) {
   }
 }
 static int run_client(const char *mode,const char *token) {
-  uint32_t req=0x1A2B3C4Du,answer=0;
+  unsigned char req[MAX_WIRE];
+  DWORD size=build_request(req);
+  uint32_t answer=0;
   if(strcmp(mode,"pipe")==0) {
     char endpoint[128];make_name(endpoint,sizeof(endpoint),"mgr",token);
     HANDLE h=open_pipe(endpoint);
-    transfer(h,&req,sizeof(req),1);
+    transfer(h,req,size,1);
     transfer(h,&answer,sizeof(answer),0);
     CloseHandle(h);
   } else {
@@ -159,7 +232,8 @@ static int run_client(const char *mode,const char *token) {
     if(!mapping||!request||!response) fail("client open mapping/events");
     Shared *s=(Shared*)MapViewOfFile(mapping,FILE_MAP_ALL_ACCESS,0,0,sizeof(Shared));
     if(!s) fail("client map view");
-    s->value=(LONG)req;
+    memcpy(s->data,req,size);
+    s->size=(LONG)size;
     MemoryBarrier();
     if(!SetEvent(request)) fail("client set");
     if(WaitForSingleObject(response,TIMEOUT_MS)!=WAIT_OBJECT_0) fail("client wait");
@@ -168,7 +242,7 @@ static int run_client(const char *mode,const char *token) {
     UnmapViewOfFile(s);CloseHandle(mapping);
     CloseHandle(request);CloseHandle(response);
   }
-  if(answer!=(req^MAGIC)) return 95;
+  if(answer!=digest_argv(req,size)) return 95;
   puts("ok");
   return 0;
 }
