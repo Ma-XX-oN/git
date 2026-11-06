@@ -16,7 +16,7 @@ import time
 import uuid
 
 OUT = Path("git809-bash-pipe-results")
-SCRIPT = r'''
+SCRIPT_DUPLEX = r'''
   exec 3<>"$1" || exit 21
   printf 'PING\n' >&3 || exit 22
   IFS= read -r -t 3 reply <&3 || exit 23
@@ -24,6 +24,19 @@ SCRIPT = r'''
   printf 'PONG_OK\n'
   exec 3>&-
   exec 3<&-
+'''
+SCRIPT_IN = r'''
+  exec 3>"$1" || exit 21
+  printf 'PING\n' >&3 || exit 22
+  exec 3>&-
+  printf 'WRITE_OK\n'
+'''
+SCRIPT_OUT = r'''
+  exec 3<"$1" || exit 21
+  IFS= read -r -t 3 reply <&3 || exit 23
+  [[ $reply == PONG ]] || exit 24
+  exec 3<&-
+  printf 'READ_OK\n'
 '''
 TIMEOUT = 9
 
@@ -53,51 +66,56 @@ def main():
             "goal": "Native Git Bash builtins connect/write/read a Win32 named pipe"}
   try:
     for label, pathfunc in cases:
-      token=uuid.uuid4().hex[:12]
-      name="git809-bash-" + token
-      path=pathfunc(name)
-      server=subprocess.Popen([str(exe), token], stdin=subprocess.DEVNULL,
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-      client=None
-      start=time.perf_counter_ns()
-      record={"case": label, "bash_path": path}
-      try:
-        line=server.stdout.readline()
-        if line.strip()!=b"READY":
-          raise RuntimeError("server was not READY: "+repr(line))
-        client=subprocess.run([bash, "--noprofile", "--norc", "-c",
-                               SCRIPT, "bash-probe", path],
-                              stdin=subprocess.DEVNULL,
-                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                              timeout=TIMEOUT, check=False)
-        record.update(client_rc=client.returncode,
-                      client_stdout=client.stdout.decode("utf-8", "replace"),
-                      client_stderr=client.stderr.decode("utf-8", "replace"),
-                      bash_success=(client.returncode == 0 and
-                                    client.stdout == b"PONG_OK\n"))
-        if record["bash_success"]:
-          out,err=server.communicate(timeout=3)
-          record.update(server_rc=server.returncode,
-                        server_stdout=out.decode("utf-8", "replace"),
-                        server_stderr=err.decode("utf-8", "replace"))
-          if server.returncode!=0:
-            record["bash_success"]=False
-      except Exception as exc:
-        record["failure"]=str(exc)
-        record["bash_success"]=False
-      finally:
-        record["elapsed_ms"]=(time.perf_counter_ns()-start)/1e6
-        if server.poll() is None:
-          server.kill()
+      for mode in ("in", "out", "duplex"):
+        token=uuid.uuid4().hex[:12]
+        name="git809-bash-" + token
+        path=pathfunc(name)
+        server=subprocess.Popen([str(exe), token, mode],
+                                 stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        start=time.perf_counter_ns()
+        record={"case": label, "mode": mode, "bash_path": path}
         try:
-          out,err=server.communicate(timeout=2)
-          record.setdefault("server_rc",server.returncode)
-          record.setdefault("server_stdout",out.decode("utf-8","replace"))
-          record.setdefault("server_stderr",err.decode("utf-8","replace"))
-        except subprocess.TimeoutExpired:
-          server.kill()
-        report["cases"].append(record)
-        print("CASE", json.dumps(record, ensure_ascii=False), flush=True)
+          line=server.stdout.readline()
+          if line.strip()!=b"READY":
+            raise RuntimeError("server was not READY: "+repr(line))
+          script={"in": SCRIPT_IN, "out": SCRIPT_OUT,
+                  "duplex": SCRIPT_DUPLEX}[mode]
+          expected={"in": b"WRITE_OK\n", "out": b"READ_OK\n",
+                    "duplex": b"PONG_OK\n"}[mode]
+          client=subprocess.run([bash, "--noprofile", "--norc", "-c",
+                                 script, "bash-probe", path],
+                                stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                timeout=TIMEOUT, check=False)
+          record.update(client_rc=client.returncode,
+                        client_stdout=client.stdout.decode("utf-8", "replace"),
+                        client_stderr=client.stderr.decode("utf-8", "replace"),
+                        bash_success=(client.returncode == 0 and
+                                      client.stdout == expected))
+          if record["bash_success"]:
+            out,err=server.communicate(timeout=3)
+            record.update(server_rc=server.returncode,
+                          server_stdout=out.decode("utf-8", "replace"),
+                          server_stderr=err.decode("utf-8", "replace"))
+            if server.returncode!=0:
+              record["bash_success"]=False
+        except Exception as exc:
+          record["failure"]=str(exc)
+          record["bash_success"]=False
+        finally:
+          record["elapsed_ms"]=(time.perf_counter_ns()-start)/1e6
+          if server.poll() is None:
+            server.kill()
+          try:
+            out,err=server.communicate(timeout=2)
+            record.setdefault("server_rc",server.returncode)
+            record.setdefault("server_stdout",out.decode("utf-8","replace"))
+            record.setdefault("server_stderr",err.decode("utf-8","replace"))
+          except subprocess.TimeoutExpired:
+            server.kill()
+          report["cases"].append(record)
+          print("CASE", json.dumps(record, ensure_ascii=False), flush=True)
   finally:
     path=OUT / "git-bash-named-pipe-probe.json"
     path.write_text(json.dumps(report, indent=2, ensure_ascii=False)+"\n",
