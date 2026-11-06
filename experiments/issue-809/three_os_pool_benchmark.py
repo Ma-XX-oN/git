@@ -27,7 +27,7 @@ WIN_SCRIPT=r'''
   source "$1" 3 || exit 32
   [[ "$_GIT809_MANAGER_WORKERS" == 3 ]] || exit 33
   expected=$("$gitbin" --version) || exit 34
-  actual=$(git-ipc --version) || exit 35
+  actual=$(git-ipc --version) || { rc=$?; printf "IPC_INITIAL_FAIL rc=%s\\n" "$rc" >&2; exit 35; }
   [[ $actual == "$expected" ]] || exit 36
   for ((i=0;i<120;i++)); do
     if (( i % 2 == 0 )); then
@@ -35,11 +35,11 @@ WIN_SCRIPT=r'''
       "$gitbin" --version >/dev/null 2>/dev/null || exit 41
       direct_end=$EPOCHREALTIME
       ipc_begin=$EPOCHREALTIME
-      git-ipc --version >/dev/null 2>/dev/null || { cat "$_GIT809_MANAGER_LOG" >&2; exit 42; }
+      git-ipc --version >/dev/null 2>/dev/null || { rc=$?; printf "IPC_FAIL iteration=%s rc=%s\\n" "$i" "$rc" >&2; cat "$_GIT809_MANAGER_LOG" >&2; exit 42; }
       ipc_end=$EPOCHREALTIME
     else
       ipc_begin=$EPOCHREALTIME
-      git-ipc --version >/dev/null 2>/dev/null || { cat "$_GIT809_MANAGER_LOG" >&2; exit 43; }
+      git-ipc --version >/dev/null 2>/dev/null || { rc=$?; printf "IPC_FAIL iteration=%s rc=%s\\n" "$i" "$rc" >&2; cat "$_GIT809_MANAGER_LOG" >&2; exit 43; }
       ipc_end=$EPOCHREALTIME
       direct_begin=$EPOCHREALTIME
       "$gitbin" --version >/dev/null 2>/dev/null || exit 44
