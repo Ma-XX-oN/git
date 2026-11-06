@@ -25,6 +25,7 @@ jobs:
         run: |
           . /etc/profile
           PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
+          export GIT809_BASH="$(cygpath -w "$(command -v bash)")"
           bash -n experiments/issue-809/git-manager.sh
           "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_tcp_pipe_benchmark.py
           "$PYTHON_EXE" experiments/issue-809/windows_tcp_pipe_benchmark.py
