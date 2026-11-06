@@ -11,6 +11,7 @@ import time
 import uuid
 
 from windows_real_git_worker_build import build
+from windows_real_git_perf import measure
 
 OUT=Path("git809-bash-pipe-results")
 SCRIPT=r'''
@@ -115,6 +116,7 @@ def main():
         print("REAL_CASE",json.dumps(c,ensure_ascii=False),flush=True)
     if not all(c["passed"] for c in report["cases"]):
       raise AssertionError("real Git worker four-channel acceptance failed")
+    report["performance"]=measure(root,git,bash)
   finally:
     path=OUT/"real-git-worker-four-channel.json"
     path.write_text(json.dumps(report,indent=2,ensure_ascii=False)+"\n",
