@@ -4,6 +4,7 @@ on:
     branches: [investigation-809-git-startup]
     paths:
       - experiments/issue-809/windows_tcp_pipe_benchmark.py
+      - experiments/issue-809/windows_single_instance_direction_test.py
       - .github/workflows/issue-809-tcp-pipe.yml
   workflow_dispatch:
 permissions:
@@ -29,6 +30,14 @@ jobs:
           bash -n experiments/issue-809/git-manager.sh
           "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_tcp_pipe_benchmark.py
           "$PYTHON_EXE" experiments/issue-809/windows_tcp_pipe_benchmark.py
+      - name: Verify single instance with Bash input and append output
+        shell: bash
+        run: |
+          . /etc/profile
+          PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
+          export GIT809_BASH="$(cygpath -w "$(command -v bash)")"
+          "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_single_instance_direction_test.py
+          "$PYTHON_EXE" experiments/issue-809/windows_single_instance_direction_test.py
       - name: Preserve full per-sample evidence
         if: always()
         uses: actions/upload-artifact@v4
