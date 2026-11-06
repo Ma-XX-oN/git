@@ -125,9 +125,9 @@ git-ipc() {
   # text up to a 100 ms deadline without requiring a newline or byte count.
   # Bash read -d '' uses NUL as terminator; the currently supported
   # text-output contract excludes NUL bytes.
-  # stderr uses a zero-timeout readiness check and line-delimited reads.
+  # stdout and stderr both collect undelimited chunks; stderr readiness is checked first.
   if [[ ${GIT809_DRAIN_MODE:-} == chunk100 ]]; then
-    local out_open=1 err_open=1 chunk read_rc stderr_line
+    local out_open=1 err_open=1 chunk read_rc stderr_chunk
     while (( out_open || err_open )); do
       if (( out_open )); then
         chunk=
@@ -143,13 +143,10 @@ git-ipc() {
         fi
       fi
       if (( err_open )) && IFS= read -r -t 0 -u 5; then
-        stderr_line=
-        IFS= read -r -t 0.100 -u 5 stderr_line
+        stderr_chunk=
+        IFS= read -r -d '' -t 0.100 -u 5 stderr_chunk
         read_rc=$?
-        if [[ -n $stderr_line ]]; then
-          printf '%s' "$stderr_line" >&2
-          if (( read_rc == 0 )); then printf '\n' >&2; fi
-        fi
+        [[ -z $stderr_chunk ]] || printf '%s' "$stderr_chunk" >&2
         if (( read_rc == 1 )); then
           err_open=0
           exec 5<&-
