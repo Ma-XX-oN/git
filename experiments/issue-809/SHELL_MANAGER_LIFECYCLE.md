@@ -51,3 +51,17 @@ Mac OS runners' system Bash 3.2 lacks `EPOCHREALTIME`. The workflow installs Hom
 ## Evidence
 
 Previous actual Git worker command-equivalence acceptance: native Windows Actions run 42167287146 at SHA `178952bb1ed57fe46cd6ec521ecaea6920f5e198`. Ready-worker performance, independent two-attempt Windows confirmation: Actions run 42167964759 at SHA `c04c427b605e1762f8885d1d9b818a067eae875b`. Those runs do **not** validate shell-owned lifecycle. The lifecycle verification is registered in `.github/workflows/issue-809-shell-manager.yml`; consult its exact SHA and results before claiming acceptance.
+
+## Direct PID-addressed IPC prototype — pending native acceptance
+
+The current experimental branch has a newer direct-worker prototype than the historical relay design above. **Do not treat the previous relay benchmark as performance acceptance for this code.** The experimental Git worker is built with a transient patch of `compat/mingw.c` and `git.c` using `windows_real_git_worker_build.py`; the ordinary Git executable and the Linux/macOS build are not changed.
+
+- **Bash entrypoint:** `git-ipc` (hyphen), with `alias git='git-ipc'`. `\\git` bypasses the alias. It requests a worker PID using the single allocation channel `\\\\.\\pipe\\git809-allocate-<owner-winpid>` and directly opens `\\\\.\\pipe\\<worker-pid>-stdin`, `-stdout`, `-stderr`, and `-exit-code`.
+- **Manager:** `windows_git_ipc_pool.py` only maintains the pool and grants PIDs. A replacement process is spawned in an independent thread at allocation time, before replying with the allocated PID. The manager does **not** read Git output or forward the Git frame. If all ready workers are consumed it waits for ready replacement for a bounded 5 seconds rather than waiting on an allocated worker.
+- **Worker:** `--git809-direct-worker` is a CI-only temporary hook; it creates four PID-named pipes, signals READY, accepts a counted UTF-8 command frame and executes the actual Git command. A scoped, transient `git.c` exit-hook bridges Git builtin-dispatch `exit(ret)` so the worker can flush stdout/stderr and deliver the status. This is **not** the future public `--preinit` implementation.
+- **Drainage:** stdout and stderr are consumed in two independent Bash background reader loops. The worker calls Win32 `FlushFileBuffers()` on output and exit-code pipes before disconnecting and exiting. The requirement is that it remain alive until the client has consumed all buffered bytes. Native slow-reader and failure-case acceptance remains necessary.
+- **Limitations:** Bash `read` and `printf` reconstruct text lines, not exact arbitrary binary streams. Per-command cwd/env/stdin forwarding, cancellation, signal parity, end-user security and true general Git CLI equivalence are **not accepted**. The one-shot worker does not yet catch every process exit path outside the central Git builtin dispatcher.
+
+[Git issue #1](https://github.com/Ma-XX-oN/git/issues/1) separately tracks the requested public `git --preinit` switch and production worker contract.
+
+The latest three-OS experimental benchmark collects 120 samples per configuration, verifies direct-versus-IPC version output and Git help output, and checks distinct worker allocations. All outputs must be verified against an exact source SHA and native CI run before reporting a new performance result. The old 12-sample Windows Python-relay timings remain **historical and superseded** for the direct implementation.
