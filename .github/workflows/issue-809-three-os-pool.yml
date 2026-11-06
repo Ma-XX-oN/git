@@ -12,25 +12,18 @@ on:
 permissions:
   contents: read
 jobs:
-  benchmark:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+  windows-acceptance:
+    runs-on: windows-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - if: runner.os == 'Windows'
         uses: git-for-windows/setup-git-for-windows-sdk@v2
-      - if: runner.os == 'Windows'
         uses: actions/setup-python@v5
         with:
           python-version: '3.13'
       - name: Windows source-built Git pool benchmark
-        if: runner.os == 'Windows'
         shell: bash
         run: |
           . /etc/profile
@@ -39,6 +32,25 @@ jobs:
           bash -n experiments/issue-809/git-manager.sh
           "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_real_git_worker_build.py experiments/issue-809/windows_git_ipc_pool.py experiments/issue-809/three_os_pool_benchmark.py
           "$PYTHON_EXE" experiments/issue-809/three_os_pool_benchmark.py
+      - name: Save exact benchmark data
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-three-os-windows-latest
+          path: git809-bash-pipe-results/three-os-*.json
+          if-no-files-found: warn
+  unix-benchmark:
+    needs: windows-acceptance
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Ensure Bash with EPOCHREALTIME on macOS
         if: runner.os == 'macOS'
         shell: bash
@@ -46,7 +58,6 @@ jobs:
           brew install bash
           echo "$(brew --prefix bash)/bin" >> "$GITHUB_PATH"
       - name: Native Unix source-built Git benchmark
-        if: runner.os != 'Windows'
         shell: bash
         run: |
           python3 -m py_compile experiments/issue-809/three_os_pool_benchmark.py
