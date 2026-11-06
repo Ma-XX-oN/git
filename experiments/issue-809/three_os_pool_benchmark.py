@@ -42,11 +42,11 @@ WIN_SCRIPT=r'''
         "$gitbin" --version >/dev/null 2>/dev/null || exit 41
         direct_end=$EPOCHREALTIME
         ipc_begin=$EPOCHREALTIME
-        git-ipc --version >/dev/null 2>/dev/null || { rc=$?; printf 'IPC_FAIL mode=%s iteration=%s rc=%s\n' "$mode" "$i" "$rc" >&2; cat "$_GIT809_MANAGER_LOG" >&2; exit 42; }
+        git-ipc --version >/dev/null || { rc=$?; printf 'IPC_FAIL mode=%s iteration=%s rc=%s\n' "$mode" "$i" "$rc" >&2; cat "$_GIT809_MANAGER_LOG" >&2; exit 42; }
         ipc_end=$EPOCHREALTIME
       else
         ipc_begin=$EPOCHREALTIME
-        git-ipc --version >/dev/null 2>/dev/null || { rc=$?; printf 'IPC_FAIL mode=%s iteration=%s rc=%s\n' "$mode" "$i" "$rc" >&2; cat "$_GIT809_MANAGER_LOG" >&2; exit 43; }
+        git-ipc --version >/dev/null || { rc=$?; printf 'IPC_FAIL mode=%s iteration=%s rc=%s\n' "$mode" "$i" "$rc" >&2; cat "$_GIT809_MANAGER_LOG" >&2; exit 43; }
         ipc_end=$EPOCHREALTIME
         direct_begin=$EPOCHREALTIME
         "$gitbin" --version >/dev/null 2>/dev/null || exit 44
@@ -117,7 +117,7 @@ def main():
   report={"sha":os.getenv("GITHUB_SHA"),"runner_os":os.getenv("RUNNER_OS"),
     "windows_optimized":windows,"git_binary":git_native,
     "build_command":build_cmd,"n":N,
-    "reader_modes":["poll1ms","chunk100"] if windows else ["direct"],
+    "reader_modes":["chunk100","poll1ms"] if windows else ["direct"],
     "method":"one persistent Bash process; source-built Git --version; EPOCHREALTIME; alternating paired order on Windows",
     "startup_included":False,"worker_replenishment_included":windows}
   try:
