@@ -75,7 +75,9 @@ _git809_source_manager() {
 _git809_source_manager "$@"
 _git809_source_rc=$?
 unset -f _git809_source_manager
-return "$_git809_source_rc"
+if (( _git809_source_rc != 0 )); then
+  return "$_git809_source_rc"
+fi
 
 # Bash builtins in each Git IPC command (no per-command native executable).
 git_ipc() {
@@ -127,3 +129,4 @@ git_ipc() {
   return 76
 }
 alias git='git_ipc'
+return 0
