@@ -85,7 +85,7 @@ print("40 default Git invocations: passed", flush=True)
             $xperfTool = Get-Command xperf.exe -ErrorAction SilentlyContinue
             if ($xperfTool) {
               $processReport = Join-Path $env:RUNNER_TEMP 'git809-process-event-report.txt'
-              & $xperfTool.Source -i $trace -o $processReport -a process | Out-Null
+              & $xperfTool.Source -i $trace -o $processReport -a process -image -thread | Out-Null
               $data.event_summary['xperf_process_rc'] = $LASTEXITCODE
               if (Test-Path $processReport) {
                 $lines = @(Get-Content $processReport | Where-Object { $_ -match '(?i)git\.exe' } | Select-Object -First 25)
