@@ -1,6 +1,5 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#include <shellapi.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <limits.h>
@@ -304,10 +303,7 @@ static int run_entry(int argc,char **argv) {
 
 /* Receive the real Windows command-line array as UTF-16, never via the ANSI
  * codepage. The wire protocol carries the resulting UTF-8 argv elements. */
-int main(void) {
-  int argc=0;
-  LPWSTR *wargv=CommandLineToArgvW(GetCommandLineW(),&argc);
-  if(!wargv || argc<=0) return 98;
+int wmain(int argc,wchar_t **wargv) {
   char **argv=(char**)calloc((size_t)argc+1,sizeof(*argv));
   if(!argv) return 99;
   for(int i=0;i<argc;i++) {
@@ -322,6 +318,5 @@ int main(void) {
   int code=run_entry(argc,argv);
   for(int i=0;i<argc;i++) free(argv[i]);
   free(argv);
-  LocalFree(wargv);
   return code;
 }
