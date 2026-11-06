@@ -38,7 +38,7 @@ _git809_source_manager() {
   fi
   local script_path script_dir temp native_ready
   script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) || return 1
-  script_path=$(cygpath -w "$script_dir/windows_shell_owned_pool.py") || return 1
+  script_path=$(cygpath -w "$script_dir/windows_git_ipc_pool.py") || return 1
   temp=$(mktemp -d) || return 1
   native_ready=$(cygpath -w "$temp/ready.json") || return 1
   "$GIT809_MANAGER_PYTHON" "$script_path" --git "$GIT809_WORKER_GIT" \
@@ -52,6 +52,15 @@ _git809_source_manager() {
       _GIT809_MANAGER_READY=$temp/ready.json
       _GIT809_MANAGER_WORKERS=$requested
       _GIT809_MANAGER_LOG=$temp/manager.log
+      local data
+      IFS= read -r data < "$temp/ready.json" || return 1
+      if [[ $data =~ \"pipe_token\"[[:space:]]*:[[:space:]]*\"([a-f0-9]+)\" ]]; then
+        _GIT809_MANAGER_TOKEN=${BASH_REMATCH[1]}
+      else
+        printf 'manager READY missing pipe token\n' >&2
+        return 1
+      fi
+      _GIT809_NEXT_SEQUENCE=0
       return 0
     fi
     if ! kill -0 "$launched" 2>/dev/null; then
@@ -67,3 +76,48 @@ _git809_source_manager "$@"
 _git809_source_rc=$?
 unset -f _git809_source_manager
 return "$_git809_source_rc"
+
+# Bash builtins in each Git IPC command (no per-command native executable).
+git_ipc() {
+  if [[ -z ${_GIT809_MANAGER_TOKEN:-} || $# -ne 1 ]]; then
+    printf 'git_ipc benchmark currently supports exactly one argument\n' >&2
+    return 2
+  fi
+  local index=$_GIT809_NEXT_SEQUENCE
+  local base="\\\\.\\pipe\\git809-real"
+  local request="${base}-request-${_GIT809_MANAGER_TOKEN}-${index}"
+  local pout="${base}-stdout-${_GIT809_MANAGER_TOKEN}-${index}"
+  local perr="${base}-stderr-${_GIT809_MANAGER_TOKEN}-${index}"
+  local pstatus="${base}-status-${_GIT809_MANAGER_TOKEN}-${index}"
+  local i line status
+  _GIT809_NEXT_SEQUENCE=$((index+1))
+  for ((i=0;i<200;i++)); do
+    if { exec 3>>"$request"; } 2>/dev/null; then break; fi
+    sleep .005
+  done
+  if (( i == 200 )); then
+    printf 'Git IPC request endpoint unavailable\n' >&2
+    return 70
+  fi
+  printf '\x02\x00\x00\x00git\x00%s\x00' "$1" >&3 || return 71
+  exec 3>&-
+  exec 4<"$pout" || return 72
+  while IFS= read -r line <&4 || [[ -n $line ]]; do
+    printf '%s\n' "$line"
+  done
+  exec 4<&-
+  exec 5<"$perr" || return 73
+  while IFS= read -r line <&5 || [[ -n $line ]]; do
+    printf '%s\n' "$line" >&2
+  done
+  exec 5<&-
+  exec 6<"$pstatus" || return 74
+  IFS= read -r status <&6 || return 75
+  exec 6<&-
+  if [[ $status =~ ^EXIT[[:space:]]([0-9]+)$ ]]; then
+    return "${BASH_REMATCH[1]}"
+  fi
+  printf 'invalid Git IPC status: %s\n' "$status" >&2
+  return 76
+}
+alias git='git_ipc'
