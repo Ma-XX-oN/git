@@ -121,15 +121,17 @@ git-ipc() {
   done
   exec 7>&-
 
-  # Experimental second timing mode: stdout is undelimited, with a
-  # 100 ms bounded read; stderr readiness is checked with read -t 0,
-  # followed by newline-delimited consumption. No child shells.
+  # Experimental second timing mode: stdout accumulates all available
+  # text up to a 100 ms deadline without requiring a newline or byte count.
+  # Bash read -d '' uses NUL as terminator; the currently supported
+  # text-output contract excludes NUL bytes.
+  # stderr uses a zero-timeout readiness check and line-delimited reads.
   if [[ ${GIT809_DRAIN_MODE:-} == chunk100 ]]; then
     local out_open=1 err_open=1 chunk read_rc stderr_line
     while (( out_open || err_open )); do
       if (( out_open )); then
         chunk=
-        IFS= read -r -N 4096 -t 0.100 -u 4 chunk
+        IFS= read -r -d '' -t 0.100 -u 4 chunk
         read_rc=$?
         [[ -z $chunk ]] || printf '%s' "$chunk"
         if (( read_rc == 1 )); then
