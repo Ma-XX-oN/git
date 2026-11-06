@@ -31,7 +31,7 @@ _git809_source_manager() {
     return 2
   fi
   local owner_winpid
-  IFS= read -r owner_winpid < "/proc/$/winpid" || return 1
+  IFS= read -r owner_winpid < "/proc/$BASHPID/winpid" || return 1
   if [[ ! $owner_winpid =~ ^[1-9][0-9]*$ ]]; then
     printf 'cannot resolve owning shell native Windows PID\n' >&2
     return 1
