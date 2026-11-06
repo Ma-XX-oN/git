@@ -125,7 +125,7 @@ git-ipc() {
   # text up to a 100 ms deadline without requiring a newline or byte count.
   # Bash read -d '' uses NUL as terminator; the currently supported
   # text-output contract excludes NUL bytes.
-  # stdout and stderr both collect undelimited chunks; stderr readiness is checked first.
+  # Both channels are timed-read directly so EOF is observable even when empty.
   if [[ ${GIT809_DRAIN_MODE:-} == chunk100 ]]; then
     local out_open=1 err_open=1 chunk read_rc stderr_chunk
     while (( out_open || err_open )); do
@@ -142,7 +142,7 @@ git-ipc() {
           printf 'GIT-IPC ERROR: output pipe read failed\n' >&2; return 255
         fi
       fi
-      if (( err_open )) && IFS= read -r -t 0 -u 5; then
+      if (( err_open )); then
         stderr_chunk=
         IFS= read -r -d '' -t 0.100 -u 5 stderr_chunk
         read_rc=$?
@@ -164,15 +164,14 @@ git-ipc() {
     printf 'Invalid Git exit-code response: %s\n' "$status" >&2
     printf 'GIT-IPC ERROR: malformed exit status\n' >&2; return 255
   fi
-  # Poll stdout and stderr in one Bash process; read exit status after both close.
-  # -t 0 checks readiness only. -N reads chunks without waiting for newline;
-  # a fractional timeout bounds a partial read when less than 4096 bytes arrive.
-  # Bash returns >128 on timeout and still assigns any partial data to chunk.
+  # Alternating timed reads (1 ms each), without readiness probes or subshells.
+  # -d '' avoids waiting for newline; EOF marks the channel complete.
+  # Timeouts >128 can still provide partial data, and do not close channels.
   local out_open=1 err_open=1 chunk read_rc
   while (( out_open || err_open )); do
-    if (( out_open )) && IFS= read -r -t 0 -u 4; then
+    if (( out_open )); then
       chunk=
-      IFS= read -r -N 4096 -t 0.001 -u 4 chunk
+      IFS= read -r -d '' -t 0.001 -u 4 chunk
       read_rc=$?
       [[ -z $chunk ]] || printf '%s' "$chunk"
       if (( read_rc == 1 )); then
@@ -183,9 +182,9 @@ git-ipc() {
         printf 'GIT-IPC ERROR: output pipe read failed\n' >&2; return 255
       fi
     fi
-    if (( err_open )) && IFS= read -r -t 0 -u 5; then
+    if (( err_open )); then
       chunk=
-      IFS= read -r -N 4096 -t 0.001 -u 5 chunk
+      IFS= read -r -d '' -t 0.001 -u 5 chunk
       read_rc=$?
       [[ -z $chunk ]] || printf '%s' "$chunk" >&2
       if (( read_rc == 1 )); then
