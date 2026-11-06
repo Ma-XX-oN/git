@@ -58,6 +58,7 @@ def main():
   if build.returncode:
     raise RuntimeError("native build failed: " +
                        build.stderr.decode("utf-8", "replace")[-3500:])
+  run([str(exe), "selftest"], b"argv decoder PASS\r\n")
   installed = Path(os.environ.get("ProgramFiles", "C:\\Program Files")) / "Git" / "ucrt64" / "bin" / "git.exe"
   if not installed.is_file():
     raise RuntimeError("direct native installed Git unavailable: " + str(installed))
