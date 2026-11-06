@@ -85,6 +85,30 @@ print("40 default Git invocations: passed", flush=True)
               }
               $data.event_summary['csv_total_rows'] = $count
               $data.event_summary['git_named_rows'] = $mentions
+              # Identify the precise decoded ETW event schema without exposing
+              # raw kernel-trace data or machine-specific paths.
+              $csvRows = @(Import-Csv -Path $dump)
+              if ($csvRows.Count -gt 0) {
+                $data.event_summary['decoded_column_names'] = @($csvRows[0].PSObject.Properties.Name)
+                $data.event_summary['git_event_schema_samples'] = @(
+                  $csvRows | Where-Object {
+                    $_.PSObject.Properties.Value -match '(?i)git\.exe'
+                  } | Select-Object -First 12 | ForEach-Object {
+                    $clean = [ordered]@{}
+                    foreach ($field in $_.PSObject.Properties) {
+                      $key = $field.Name
+                      if ($key -match '(?i)time|stamp|provider|event|process|thread|pid|tid|opcod|keyword') {
+                        $value = [string]$field.Value
+                        # Keep only bounded numeric values or event labels.
+                        if ($value.Length -lt 90 -and $value -notmatch '[\\/]') {
+                          $clean[$key] = $value
+                        }
+                      }
+                    }
+                    $clean
+                  }
+                )
+              }
             }
           }
         }
