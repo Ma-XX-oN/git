@@ -1,0 +1,37 @@
+name: Git 809 Windows local transport comparison
+on:
+  push:
+    branches: [investigation-809-git-startup]
+    paths:
+      - experiments/issue-809/windows_tcp_pipe_benchmark.py
+      - .github/workflows/issue-809-tcp-pipe.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-local-ipc:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Compare Bash IPC over named pipe and localhost TCP
+        shell: bash
+        run: |
+          . /etc/profile
+          PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
+          bash -n experiments/issue-809/git-manager.sh
+          "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_tcp_pipe_benchmark.py
+          "$PYTHON_EXE" experiments/issue-809/windows_tcp_pipe_benchmark.py
+      - name: Preserve full per-sample evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-localhost-tcp-vs-named-pipe
+          path: git809-bash-pipe-results/windows-tcp-versus-pipe.json
+          if-no-files-found: warn
