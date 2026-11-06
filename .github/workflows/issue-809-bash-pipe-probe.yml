@@ -8,6 +8,8 @@ on:
       - experiments/issue-809/windows_bash_pipe_trace.py
       - experiments/issue-809/windows_bash_pipe_multi.py
       - experiments/issue-809/windows_bash_pipe_flags.py
+      - experiments/issue-809/windows_bash_four_channels.c
+      - experiments/issue-809/windows_bash_four_channels.py
       - .github/workflows/issue-809-bash-pipe-probe.yml
   workflow_dispatch:
 permissions:
@@ -37,6 +39,8 @@ jobs:
           "$PYTHON_EXE" experiments/issue-809/windows_bash_pipe_multi.py
           "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_bash_pipe_flags.py
           "$PYTHON_EXE" experiments/issue-809/windows_bash_pipe_flags.py
+          "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_bash_four_channels.py
+          "$PYTHON_EXE" experiments/issue-809/windows_bash_four_channels.py
       - name: Upload exact Bash IPC feasibility evidence
         if: always()
         uses: actions/upload-artifact@v4
