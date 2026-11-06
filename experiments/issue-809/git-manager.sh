@@ -121,13 +121,12 @@ git-ipc() {
   done
   exec 7>&-
 
-  # Poll stdout, stderr, and exit status within this single Bash process.
+  # Poll stdout and stderr in one Bash process; read exit status after both close.
   # -t 0 checks readiness only. -N reads chunks without waiting for newline;
   # a fractional timeout bounds a partial read when less than 4096 bytes arrive.
   # Bash returns >128 on timeout and still assigns any partial data to chunk.
-  local out_open=1 err_open=1 code_open=1 chunk read_rc code_chunk
-  status=
-  while (( out_open || err_open || code_open )); do
+  local out_open=1 err_open=1 chunk read_rc
+  while (( out_open || err_open )); do
     if (( out_open )) && IFS= read -r -t 0 -u 4; then
       chunk=
       IFS= read -r -N 4096 -t 0.001 -u 4 chunk
@@ -154,21 +153,9 @@ git-ipc() {
         return 81
       fi
     fi
-    if (( code_open )) && IFS= read -r -t 0 -u 6; then
-      code_chunk=
-      IFS= read -r -N 64 -t 0.001 -u 6 code_chunk
-      read_rc=$?
-      status+="$code_chunk"
-      if (( read_rc == 1 )); then
-        code_open=0
-        exec 6<&-
-      elif (( read_rc != 0 && read_rc <= 128 )); then
-        exec 4<&- 5<&- 6<&-
-        return 80
-      fi
-    fi
   done
-  # The result is complete only after the status channel reaches EOF.
+  IFS= read -r status <&6 || { exec 6<&-; return 80; }
+  exec 6<&-
   if [[ $status =~ ^EXIT[[:space:]]([0-9]+)$ ]]; then
     return "${BASH_REMATCH[1]}"
   fi
