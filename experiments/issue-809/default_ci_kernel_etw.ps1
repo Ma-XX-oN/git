@@ -95,6 +95,63 @@ print("40 default Git invocations: passed", flush=True)
                     $_ -replace '[A-Za-z]:\\[^,\s]+', '[REDACTED_PATH]'
                   }
                 )
+                # xperf's Process records contain start/end counters in microseconds;
+                # each Image row identifies the same process instance by PID.
+                # Report aggregate windows only; never persist system-wide records.
+                $instances = @{}
+                foreach ($line in Get-Content $processReport) {
+                  $event = [regex]::Match($line,
+                    '^\s*(\d+)\s*,\s*(\d+)\s*,\s*(Process|Image)\s*,.*?git\.exe\s*\(\s*(\d+)\s*\)',
+                    [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+                  if (-not $event.Success) { continue }
+                  $startUs = [long]$event.Groups[1].Value
+                  $endUs = [long]$event.Groups[2].Value
+                  $kind = $event.Groups[3].Value
+                  $pid = $event.Groups[4].Value
+                  if (-not $instances.ContainsKey($pid)) {
+                    $instances[$pid] = @{ start = $null; finish = $null; images = [System.Collections.Generic.List[long]]::new() }
+                  }
+                  if ($kind -eq 'Process') {
+                    $instances[$pid].start = $startUs
+                    $instances[$pid].finish = $endUs
+                  } else {
+                    $instances[$pid].images.Add($startUs)
+                  }
+                }
+                $life = [System.Collections.Generic.List[double]]::new()
+                $firstImage = [System.Collections.Generic.List[double]]::new()
+                $lastImageToExit = [System.Collections.Generic.List[double]]::new()
+                $invalid = 0
+                foreach ($entry in $instances.Values) {
+                  if ($null -eq $entry.start -or $null -eq $entry.finish -or
+                      $entry.finish -le $entry.start) { $invalid++; continue }
+                  $life.Add(($entry.finish - $entry.start) / 1000.0)
+                  if ($entry.images.Count -gt 0) {
+                    $sortedImages = @($entry.images | Sort-Object)
+                    if ($sortedImages[0] -lt $entry.start -or
+                        $sortedImages[-1] -gt $entry.finish) { $invalid++; continue }
+                    $firstImage.Add(($sortedImages[0] - $entry.start) / 1000.0)
+                    $lastImageToExit.Add(($entry.finish - $sortedImages[-1]) / 1000.0)
+                  }
+                }
+                function MedianMs($numbers) {
+                  if ($numbers.Count -eq 0) { return $null }
+                  $ordered = @($numbers | Sort-Object)
+                  $middle = [int][math]::Floor($ordered.Count / 2)
+                  if (($ordered.Count % 2) -eq 1) { return [math]::Round($ordered[$middle],3) }
+                  return [math]::Round(($ordered[$middle - 1] + $ordered[$middle]) / 2.0,3)
+                }
+                $data.event_summary['xperf_timeline'] = [ordered]@{
+                  units = 'milliseconds (xperf report counters in microseconds)'
+                  process_instances = $instances.Count
+                  valid_lifetimes = $life.Count
+                  instances_with_images = $firstImage.Count
+                  invalid_intervals = $invalid
+                  median_process_lifetime_ms = MedianMs $life
+                  median_create_to_first_image_ms = MedianMs $firstImage
+                  median_last_image_to_exit_ms = MedianMs $lastImageToExit
+                  caveat = 'Image events are observational markers, not completion of DLL initialization. These windows cannot by themselves attribute CPU, scheduling, security scanning, or CRT cost.'
+                }
                 Remove-Item $processReport -Force -ErrorAction SilentlyContinue
               }
             }
