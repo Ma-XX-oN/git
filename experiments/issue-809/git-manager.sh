@@ -79,8 +79,8 @@ return "$_git809_source_rc"
 
 # Bash builtins in each Git IPC command (no per-command native executable).
 git_ipc() {
-  if [[ -z ${_GIT809_MANAGER_TOKEN:-} || $# -ne 1 ]]; then
-    printf 'git_ipc benchmark currently supports exactly one argument\n' >&2
+  if [[ -z ${_GIT809_MANAGER_TOKEN:-} || $# -gt 31 ]]; then
+    printf 'git_ipc requires at most 31 Git arguments\n' >&2
     return 2
   fi
   local index=$_GIT809_NEXT_SEQUENCE
@@ -99,7 +99,13 @@ git_ipc() {
     printf 'Git IPC request endpoint unavailable\n' >&2
     return 70
   fi
-  printf '\x02\x00\x00\x00git\x00%s\x00' "$1" >&3 || return 71
+  local count=$(( $# + 1 )) header arg
+  printf -v header '\\x%02x\\x00\\x00\\x00' "$count"
+  printf '%b' "$header" >&3 || return 71
+  printf 'git\\x00' >&3 || return 71
+  for arg in "$@"; do
+    printf '%s\\x00' "$arg" >&3 || return 71
+  done
   exec 3>&-
   exec 4<"$pout" || return 72
   while IFS= read -r line <&4 || [[ -n $line ]]; do
