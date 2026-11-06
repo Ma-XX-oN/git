@@ -19,9 +19,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Trace only default Git CI invocations and kernel image-loader lifecycle
-        shell: pwsh
-        run: ./experiments/issue-809/default_ci_kernel_etw.ps1
+      - name: Trace default Git Bash CI invocations and kernel image-loader lifecycle
+        shell: bash
+        run: pwsh -NoProfile -File ./experiments/issue-809/default_ci_kernel_etw.ps1
       - name: Upload safe aggregate kernel trace status
         if: always()
         uses: actions/upload-artifact@v4
