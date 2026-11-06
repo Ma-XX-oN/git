@@ -55,6 +55,7 @@ def main():
   parser = argparse.ArgumentParser()
   parser.add_argument("--git", required=True, type=Path)
   parser.add_argument("--workers", required=True, type=int)
+  parser.add_argument("--owner-winpid", required=True, type=int)
   parser.add_argument("--ready-file", required=True, type=Path)
   args = parser.parse_args()
   if not 1 <= args.workers <= 32:
@@ -62,9 +63,12 @@ def main():
   git = args.git.resolve(strict=True)
   if not git.is_file():
     parser.error("git executable is not a file")
-  # Native Python is launched directly by the sourced Git Bash process.
-  # Retaining the Windows handle prevents PID reuse from changing ownership.
-  owner_pid = os.getppid()
+  # Git Bash/MSYS2 can introduce an intermediate native launcher process.
+  # The sourced shell supplies its own /proc/$/winpid instead of os.getppid().
+  # Retain the opened owner handle; never follow a reused PID.
+  owner_pid = args.owner_winpid
+  if not 1 <= owner_pid <= 0xffffffff:
+    parser.error("invalid owning Windows PID")
   owner = K.OpenProcess(PROCESS_SYNCHRONIZE, False, owner_pid)
   if not owner:
     raise OSError(C.get_last_error(), "OpenProcess(owner)")
