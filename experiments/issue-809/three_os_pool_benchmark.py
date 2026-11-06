@@ -147,11 +147,23 @@ def main():
       if "LARGE_OUTPUT_PASS" not in report["stdout"]:
         raise AssertionError("large Git help output differs from direct execution")
       manager=report["stdout"].split("MANAGER_BEGIN\\n",1)[1].split("\\nMANAGER_END",1)[0]
-      allocated=[int(z.split(" ",1)[1]) for z in manager.splitlines()
-        if z.startswith("ALLOCATED ")]
-      if len(allocated)!=N+3 or len(set(allocated))!=len(allocated):
-        raise AssertionError("worker allocation was reused or not replenished: "+repr(allocated))
-      report["unique_worker_allocations"]=len(allocated)
+      ready=set()
+      allocated=[]
+      for event in manager.splitlines():
+        if event.startswith("WORKER_READY "):
+          pid=int(event.split(" ",1)[1])
+          if pid in ready:
+            raise AssertionError("worker entered ready queue twice: "+str(pid))
+          ready.add(pid)
+        elif event.startswith("ALLOCATED "):
+          pid=int(event.split(" ",1)[1])
+          if pid not in ready:
+            raise AssertionError("worker allocated without a fresh readiness event: "+str(pid))
+          ready.remove(pid)
+          allocated.append(pid)
+      if len(allocated)!=N+3:
+        raise AssertionError("wrong worker allocation count: "+str(len(allocated)))
+      report["allocated_worker_commands"]=len(allocated)
       report["median_saved_ms"]=report["direct"]["median_ms"]-report["ipc"]["median_ms"]
       report["median_speedup"]=report["direct"]["median_ms"]/report["ipc"]["median_ms"]
     print("OS_BENCHMARK "+json.dumps({k:report[k] for k in
