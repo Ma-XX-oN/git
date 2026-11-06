@@ -1,0 +1,53 @@
+name: Git 809 native three-OS pool performance comparison
+on:
+  push:
+    branches: [investigation-809-git-startup]
+    paths:
+      - experiments/issue-809/windows_git_ipc_pool.py
+      - experiments/issue-809/git-manager.sh
+      - experiments/issue-809/three_os_pool_benchmark.py
+      - .github/workflows/issue-809-three-os-pool.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  benchmark:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - if: runner.os == 'Windows'
+        uses: git-for-windows/setup-git-for-windows-sdk@v2
+      - if: runner.os == 'Windows'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Windows source-built Git pool benchmark
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          . /etc/profile
+          PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
+          export GIT809_MANAGER_PYTHON="$(cygpath -w "$PYTHON_EXE")"
+          bash -n experiments/issue-809/git-manager.sh
+          "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_git_ipc_pool.py experiments/issue-809/three_os_pool_benchmark.py
+          "$PYTHON_EXE" experiments/issue-809/three_os_pool_benchmark.py
+      - name: Native Unix source-built Git benchmark
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          python3 -m py_compile experiments/issue-809/three_os_pool_benchmark.py
+          python3 experiments/issue-809/three_os_pool_benchmark.py
+      - name: Save exact benchmark data
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-three-os-${{ matrix.os }}
+          path: git809-bash-pipe-results/three-os-*.json
+          if-no-files-found: warn
