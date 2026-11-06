@@ -100,11 +100,11 @@ git_ipc() {
     return 70
   fi
   local count=$(( $# + 1 )) header arg
-  printf -v header '\\x%02x\\x00\\x00\\x00' "$count"
+  printf -v header '\x%02x\x00\x00\x00' "$count"
   printf '%b' "$header" >&3 || return 71
-  printf 'git\\x00' >&3 || return 71
+  printf 'git\x00' >&3 || return 71
   for arg in "$@"; do
-    printf '%s\\x00' "$arg" >&3 || return 71
+    printf '%s\x00' "$arg" >&3 || return 71
   done
   exec 3>&-
   exec 4<"$pout" || return 72
