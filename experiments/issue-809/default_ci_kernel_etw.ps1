@@ -36,6 +36,22 @@ try {
       if ($prior -match '(?i)recording is in progress') {
         $data.trace_errors += 'Other WPR session already active'
       } else {
+        $py = @'
+import shutil, subprocess, sys
+git = shutil.which("git")
+assert git and "git" in git.lower(), "default Git not found"
+for _ in range(40):
+  p = subprocess.run([git,"--version"], stdin=subprocess.DEVNULL,
+                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                   check=True, timeout=20)
+  assert p.stdout.startswith(b"git version "), "unexpected Git version output"
+print("40 default Git invocations: passed", flush=True)
+'@
+        $untraced = [Diagnostics.Stopwatch]::StartNew()
+        & $data.actual_python -c $py
+        if ($LASTEXITCODE -ne 0) { throw 'untraced default Git baseline failed' }
+        $untraced.Stop()
+        $data['control_untraced_before_ms'] = $untraced.Elapsed.TotalMilliseconds
         $start = (& wpr.exe -start GeneralProfile.Light 2>&1 | Out-String)
         if ($LASTEXITCODE -ne 0) {
           $data.trace_errors += "WPR start failed: $start"
@@ -44,17 +60,7 @@ try {
           $data.wpr_started = $true
           $timer = [Diagnostics.Stopwatch]::StartNew()
           # Native Python subprocess baseline. No source-built Git or reduced feature flags.
-          $py = @'
-import shutil, subprocess, sys
-git = shutil.which("git")
-assert git and "git" in git.lower(), "default Git not found"
-for _ in range(40):
-  p = subprocess.run([git,"--version"], stdin=subprocess.DEVNULL,
-                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                     check=True, timeout=20)
-  assert p.stdout.startswith(b"git version "), "unexpected Git version output"
-print("40 default Git invocations: passed", flush=True)
-'@
+
           & $data.actual_python -c $py
           if ($LASTEXITCODE -ne 0) {
             throw 'default native Git invocations failed'
@@ -67,6 +73,11 @@ print("40 default Git invocations: passed", flush=True)
           if ($LASTEXITCODE -ne 0) {
             $data.trace_errors += "WPR stop failed: $saved"
           } elseif (Test-Path $trace) {
+            $afterTimer = [Diagnostics.Stopwatch]::StartNew()
+            & $data.actual_python -c $py
+            if ($LASTEXITCODE -ne 0) { throw 'untraced Git after-control failed' }
+            $afterTimer.Stop()
+            $data['control_untraced_after_ms'] = $afterTimer.Elapsed.TotalMilliseconds
             & tracerpt.exe $trace -o $dump -of CSV -y -summary $summary | Out-Null
             $data.tracerpt_exit_code = $LASTEXITCODE
             if (Test-Path $summary) {
