@@ -51,8 +51,8 @@ def main():
   OUT.mkdir(parents=True, exist_ok=True)
   exe = (OUT / "git809-ipc.exe").resolve()
   command = ["gcc", "-std=c11", "-O2", "-Wall", "-Wextra",
-             "-Werror", "-municode", "-o", str(exe),
-             str(ROOT / "experiments/issue-809/ipc_single_use.c")]
+             "-Werror", "-o", str(exe),
+             str(ROOT / "experiments/issue-809/ipc_single_use.c"), "-lshell32"]
   build = subprocess.run(command, check=False, stdout=subprocess.PIPE,
                          stderr=subprocess.PIPE, timeout=120)
   if build.returncode:
