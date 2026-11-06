@@ -60,6 +60,7 @@ def main():
     ("windows_native", lambda name: r"\\.\pipe\\".rstrip("\\") + "\\" + name),
     ("msys_unc", lambda name: "//./pipe/" + name),
     ("msys_dev", lambda name: "/dev/pipe/" + name),
+    ("cygwin_nt_namespace", lambda name: "/proc/sys/Device/NamedPipe/" + name),
   ]
   report = {"source_sha": os.getenv("GITHUB_SHA"),
             "gcc": gcc, "bash": bash, "cases": [],
