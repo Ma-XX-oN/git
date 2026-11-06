@@ -115,7 +115,7 @@ def manager(git:Path,token:str):
   # Prestart a genuine Git binary, after Windows CRT and Git wmain setup.
   child=subprocess.Popen([str(git),"--git809-worker",token],
     stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-  pipe=name("git-worker",token)
+  pipe="\\\\.\\pipe\\git809-worker-"+token
   h=INVALID
   try:
     for _ in range(800):
