@@ -70,6 +70,24 @@ static int git809_worker_dispatch(const char *token)
 '''
 DIRECT_HOOK = r'''
 #ifdef GIT809_WORKER_PROBE
+#include <setjmp.h>
+static jmp_buf git809_direct_jump;
+static volatile int git809_direct_active;
+static volatile int git809_direct_exit_status;
+
+/*
+ * The standard Git builtin dispatcher calls exit(ret) from git.c.
+ * The temporary benchmark build intercepts that dispatcher exit only, so
+ * the one-shot worker can flush its native pipes and deliver the status.
+ */
+void git809_worker_exit(int status)
+{
+  if (git809_direct_active) {
+    git809_direct_exit_status = status;
+    longjmp(git809_direct_jump, 1);
+  }
+  exit(status);
+}
 /*
  * Experimental one-shot preinitialized Git worker.  The PID identifies four
  * one-instance named pipes; the Python manager never forwards command bytes.
@@ -188,7 +206,12 @@ static int git809_direct_worker(void)
   }
   _close(outfd);
   _close(errfd);
-  rc = main(count, args);
+  git809_direct_active = 1;
+  if (!setjmp(git809_direct_jump))
+    rc = main(count, args);
+  else
+    rc = git809_direct_exit_status;
+  git809_direct_active = 0;
   fflush(stdout);
   fflush(stderr);
   /*
@@ -238,6 +261,19 @@ def build(root:Path):
            "\t\texit_status = main(argc, argv);")
   source=source.replace(call,changed,1)
   p.write_text(source,encoding="utf-8")
+
+  # git.c calls exit() for every builtin, including git --version.
+  # Redirect those dispatch exits only in this ephemeral Windows build;
+  # normal Git invocation and all other platforms retain their original code.
+  gp=root/"git.c"
+  gs=gp.read_text(encoding="utf-8")
+  ga='#define RUN_SETUP\t\t(1<<0)'
+  assert gs.count(ga)==1,"unexpected Git builtin dispatcher anchor"
+  gs=gs.replace(ga,'#ifdef GIT809_WORKER_PROBE\n'
+    'extern void git809_worker_exit(int status);\n'
+    '#define exit(status) git809_worker_exit(status)\n'
+    '#endif\n'+ga,1)
+  gp.write_text(gs,encoding="utf-8")
   command=["make","-j4","NO_RUST=YesPlease","NO_CURL=YesPlease",
            "NO_GETTEXT=YesPlease","CFLAGS_APPEND=-DGIT809_WORKER_PROBE",
            "git.exe"]
