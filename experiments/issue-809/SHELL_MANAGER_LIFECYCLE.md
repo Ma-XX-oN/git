@@ -1,6 +1,6 @@
 # Git #809 — sourced per-shell worker-manager lifecycle
 
-Status: **experimental, Windows-native; acceptance is tracked by CI results**. This is deliberately limited to starting the shell-owned manager, preinitializing workers, idempotent sourcing, and stopping the manager/workers on owner-shell termination. It does **not** yet replace the `git` command.
+Status: **experimental, Windows-native**. The original shell-owned startup/cleanup milestone is independently accepted; the later IPC dispatch and three-OS benchmark candidate described below requires separate exact-SHA native acceptance.
 
 ## Usage in Git for Windows SDK Bash
 
@@ -26,6 +26,17 @@ No manager control pipe, manager session-ID-named pipe, shell alias, `git_ipc` c
 ## Idempotence and changes to count
 
 Repeated sourcing with the same count preserves the existing manager and workers. Re-sourcing with a different count **preserves the existing count and reports that resizing is not implemented**; no duplicate manager is launched. To select another pool size in this minimal prototype, terminate that shell and create a new session.
+
+
+## Experimental command-dispatch and three-OS benchmark candidate (not yet accepted)
+
+The later benchmark milestone adds `windows_git_ipc_pool.py`, `git_ipc()` and `alias git='git_ipc'` to the sourced shell. The prior startup-only manager remains in `windows_shell_owned_pool.py` for its accepted lifecycle regression. The new manager assigns single-use, genuine wmain-preinitialized Git processes to requests delivered through the existing four separate named pipes, then replenishes consumed workers. Worker pool size is set on first sourcing; repeated sourcing does not yet resize it.
+
+The proof-of-concept IPC client constructs a counted little-endian UTF-8 argv frame using **Bash builtins** and returns the worker's exit status. It reconstructs newline-oriented stdout/stderr with Bash `read` and `printf`: **binary stdout/stderr containing NUL, unterminated lines, arbitrary CRLF boundaries, or interactive streaming are not accepted**. The manager captures output to a bounded 1 MiB-per-stream buffer and sends it after the child exits, not incrementally. The Git worker inherits the manager's initial cwd/environment, not the caller's later cwd/environment. Shell signals, stdin, multiple simultaneous `git_ipc` invocations, secure multi-shell isolation and complete general-command parity remain future implementation work. Do not treat the alias as a production-ready general-purpose Git replacement.
+
+`.github/workflows/issue-809-three-os-pool.yml` builds the same checkout's Git source with `NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease` and `make -j4` on Windows, Linux and macOS. Windows additionally compiles the temporary `GIT809_WORKER_PROBE` instrumentation into `git.exe`; the actual source patch is ephemeral to the CI checkout. Each OS measures 12 direct source-built `git --version` invocations inside one persistent Bash process with Bash `EPOCHREALTIME`. Only Windows also measures 12 alternating paired `git_ipc --version` invocations through a **single persistent Python manager with three preinitialized workers and replenishment**. The worker pool is ready before samples begin. Worker startup and background replenishment costs are not fully attributable to individual samples; cross-OS hosts and toolchains differ and cannot be treated as controlled identical hardware.
+
+Mac OS runners' system Bash 3.2 lacks `EPOCHREALTIME`. The workflow installs Homebrew Bash and the Python harness checks for timer support before collecting samples. Native acceptance requires workflow success and review of per-OS JSON artifacts at the exact source SHA; first failed workflows or older ready-worker timings are not acceptance.
 
 ## Future implementation (explicitly deferred)
 
