@@ -110,7 +110,7 @@ git-ipc() {
   exec 4<"$pout" || return 75
   exec 5<"$perr" || { exec 4<&-; return 76; }
   exec 6<"$pexit" || { exec 4<&- 5<&-; return 77; }
-  exec 7>"$pstdin" || { exec 4<&- 5<&- 6<&-; return 78; }
+  exec 7>>"$pstdin" || { exec 4<&- 5<&- 6<&-; return 78; }
 
   count=$(( $# + 1 ))
   printf -v header '\\x%02x\\x00\\x00\\x00' "$count"
