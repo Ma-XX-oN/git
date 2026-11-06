@@ -100,7 +100,7 @@ git-ipc() {
     return 74
   fi
 
-  local stem="\\.\pipe\${pid}"
+  local stem="\\.\pipe${pid}"
   local pstdin="${stem}-stdin"
   local pout="${stem}-stdout"
   local perr="${stem}-stderr"
