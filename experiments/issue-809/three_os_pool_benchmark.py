@@ -9,6 +9,7 @@ measure direct Git only within a persistent Bash shell.
 from __future__ import annotations
 from decimal import Decimal
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -60,7 +61,7 @@ UNIX_SCRIPT=r'''
 def stats(vals):
   s=sorted(vals)
   assert len(s)==N
-  return {"median_ms":statistics.median(s),"p95_ms":s[10],
+  return {"median_ms":statistics.median(s),"p95_ms":s[math.ceil(.95*len(s))-1],
           "min_ms":s[0],"max_ms":s[-1],"samples_ms":vals}
 def timed(a,b):
   return float((Decimal(b)-Decimal(a))*1000)
