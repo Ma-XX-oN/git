@@ -1,0 +1,42 @@
+name: Git 809 source-shell manager owner lifecycle
+on:
+  push:
+    branches: [investigation-809-git-startup]
+    paths:
+      - experiments/issue-809/git-manager.sh
+      - experiments/issue-809/windows_shell_owned_pool.py
+      - experiments/issue-809/windows_shell_owned_pool_acceptance.py
+      - .github/workflows/issue-809-shell-manager.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-native:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Build transient Git and verify source-owned manager lifecycle
+        shell: bash
+        run: |
+          . /etc/profile
+          PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
+          export GIT809_MANAGER_PYTHON="$(cygpath -w "$PYTHON_EXE")"
+          "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_shell_owned_pool.py
+          "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_shell_owned_pool_acceptance.py
+          "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_real_git_worker_build.py
+          bash -n experiments/issue-809/git-manager.sh
+          "$PYTHON_EXE" experiments/issue-809/windows_shell_owned_pool_acceptance.py
+      - name: Upload shell-owned manager lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-shell-owned-manager-lifecycle
+          path: git809-bash-pipe-results/git809-shell-owned-pool-lifecycle.json
+          if-no-files-found: warn
