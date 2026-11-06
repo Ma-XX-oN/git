@@ -29,24 +29,32 @@ WIN_SCRIPT=r'''
   expected=$("$gitbin" --version) || exit 34
   actual=$(git-ipc --version) || { rc=$?; printf "IPC_INITIAL_FAIL rc=%s\\n" "$rc" >&2; exit 35; }
   [[ $actual == "$expected" ]] || exit 36
-  for ((i=0;i<120;i++)); do
-    if (( i % 2 == 0 )); then
-      direct_begin=$EPOCHREALTIME
-      "$gitbin" --version >/dev/null 2>/dev/null || exit 41
-      direct_end=$EPOCHREALTIME
-      ipc_begin=$EPOCHREALTIME
-      git-ipc --version >/dev/null 2>/dev/null || { rc=$?; printf "IPC_FAIL iteration=%s rc=%s\\n" "$i" "$rc" >&2; cat "$_GIT809_MANAGER_LOG" >&2; exit 42; }
-      ipc_end=$EPOCHREALTIME
+  for mode in poll1ms chunk100; do
+    if [[ $mode == chunk100 ]]; then
+      export GIT809_DRAIN_MODE=chunk100
     else
-      ipc_begin=$EPOCHREALTIME
-      git-ipc --version >/dev/null 2>/dev/null || { rc=$?; printf "IPC_FAIL iteration=%s rc=%s\\n" "$i" "$rc" >&2; cat "$_GIT809_MANAGER_LOG" >&2; exit 43; }
-      ipc_end=$EPOCHREALTIME
-      direct_begin=$EPOCHREALTIME
-      "$gitbin" --version >/dev/null 2>/dev/null || exit 44
-      direct_end=$EPOCHREALTIME
+      unset GIT809_DRAIN_MODE
     fi
-    printf 'PAIR %s %s %s %s %s\n' "$i" "$direct_begin" "$direct_end" "$ipc_begin" "$ipc_end"
+    for ((i=0;i<120;i++)); do
+      if (( i % 2 == 0 )); then
+        direct_begin=$EPOCHREALTIME
+        "$gitbin" --version >/dev/null 2>/dev/null || exit 41
+        direct_end=$EPOCHREALTIME
+        ipc_begin=$EPOCHREALTIME
+        git-ipc --version >/dev/null 2>/dev/null || { rc=$?; printf 'IPC_FAIL mode=%s iteration=%s rc=%s\\n' "$mode" "$i" "$rc" >&2; cat "$_GIT809_MANAGER_LOG" >&2; exit 42; }
+        ipc_end=$EPOCHREALTIME
+      else
+        ipc_begin=$EPOCHREALTIME
+        git-ipc --version >/dev/null 2>/dev/null || { rc=$?; printf 'IPC_FAIL mode=%s iteration=%s rc=%s\\n' "$mode" "$i" "$rc" >&2; cat "$_GIT809_MANAGER_LOG" >&2; exit 43; }
+        ipc_end=$EPOCHREALTIME
+        direct_begin=$EPOCHREALTIME
+        "$gitbin" --version >/dev/null 2>/dev/null || exit 44
+        direct_end=$EPOCHREALTIME
+      fi
+      printf 'PAIR %s %s %s %s %s %s\\n' "$mode" "$i" "$direct_begin" "$direct_end" "$ipc_begin" "$ipc_end"
+    done
   done
+  unset GIT809_DRAIN_MODE
   # Verify that alias actually dispatches to the IPC function, not executable.
   shopt -s expand_aliases
   eval 'git --version' || exit 45
@@ -108,6 +116,7 @@ def main():
   report={"sha":os.getenv("GITHUB_SHA"),"runner_os":os.getenv("RUNNER_OS"),
     "windows_optimized":windows,"git_binary":git_native,
     "build_command":build_cmd,"n":N,
+    "reader_modes":["poll1ms","chunk100"] if windows else ["direct"],
     "method":"one persistent Bash process; source-built Git --version; EPOCHREALTIME; alternating paired order on Windows",
     "startup_included":False,"worker_replenishment_included":windows}
   try:
@@ -129,22 +138,29 @@ def main():
     report["stderr"]=proc.stderr.decode("utf-8","replace")
     if proc.returncode:
       raise AssertionError("Bash benchmark failed rc="+str(proc.returncode)+" "+report["stderr"][-2000:])
-    direct=[]
-    ipc=[]
+    modes=("poll1ms","chunk100") if windows else ("direct",)
+    measures={m:{"direct":[],"ipc":[]} for m in modes}
     for line in report["stdout"].splitlines():
       fields=line.split(" ")
-      if fields[0]=="PAIR" and len(fields)==6:
-        _,idx,db,de,ib,ie=fields
-        if int(idx)!=len(direct):raise AssertionError("pair index mismatch")
-        direct.append(timed(db,de))
-        ipc.append(timed(ib,ie))
-      elif fields[0]=="DIRECT" and len(fields)==4:
+      if windows and fields[0]=="PAIR" and len(fields)==7:
+        _,mode,idx,db,de,ib,ie=fields
+        if mode not in measures: raise AssertionError("unknown mode "+mode)
+        cur=measures[mode]
+        if int(idx)!=len(cur["direct"]):raise AssertionError("pair index mismatch "+mode)
+        cur["direct"].append(timed(db,de))
+        cur["ipc"].append(timed(ib,ie))
+      elif not windows and fields[0]=="DIRECT" and len(fields)==4:
         _,idx,a,b=fields
-        if int(idx)!=len(direct):raise AssertionError("direct index mismatch")
-        direct.append(timed(a,b))
-    report["direct"]=stats(direct)
+        cur=measures["direct"]
+        if int(idx)!=len(cur["direct"]):raise AssertionError("direct index mismatch")
+        cur["direct"].append(timed(a,b))
+    for mode,values in measures.items():
+      values["direct"]=stats(values["direct"])
+      if windows: values["ipc"]=stats(values["ipc"])
+    report["modes"]=measures
+    report["direct"]=measures["poll1ms"]["direct"] if windows else measures["direct"]["direct"]
     if windows:
-      report["ipc"]=stats(ipc)
+      report["ipc"]=measures["poll1ms"]["ipc"]
       if "ALIAS_PASS" not in report["stdout"]:
         raise AssertionError("transparent git alias not exercised")
       if "LARGE_OUTPUT_PASS" not in report["stdout"]:
@@ -164,13 +180,14 @@ def main():
             raise AssertionError("worker allocated without a fresh readiness event: "+str(pid))
           ready.remove(pid)
           allocated.append(pid)
-      if len(allocated)!=N+3:
+      if len(allocated)!=2*N+3:
         raise AssertionError("wrong worker allocation count: "+str(len(allocated)))
       report["allocated_worker_commands"]=len(allocated)
       report["median_saved_ms"]=report["direct"]["median_ms"]-report["ipc"]["median_ms"]
       report["median_speedup"]=report["direct"]["median_ms"]/report["ipc"]["median_ms"]
-    print("OS_BENCHMARK "+json.dumps({k:report[k] for k in
-      ("sha","runner_os","direct",* (("ipc","median_saved_ms","median_speedup") if windows else ()))},
+    print("OS_BENCHMARK "+json.dumps({"sha":report["sha"],"runner_os":report["runner_os"],
+      "modes":{m:{k:({kk:vv for kk,vv in v.items() if kk!="samples_ms"} if isinstance(v,dict) else v)
+        for k,v in measurement.items()} for m,measurement in measures.items()}},
       ensure_ascii=False),flush=True)
   finally:
     dest=OUT/("three-os-"+("windows" if windows else
