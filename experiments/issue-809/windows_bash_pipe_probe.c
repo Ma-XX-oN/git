@@ -17,7 +17,7 @@ int main(int argc, char **argv) {
   if (n < 0 || (size_t)n >= sizeof(name)) return 2;
   HANDLE h = CreateNamedPipeA(name, inbound ? PIPE_ACCESS_INBOUND :
                              outbound ? PIPE_ACCESS_OUTBOUND : PIPE_ACCESS_DUPLEX,
-     PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1, 4096, 4096,
+     PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, PIPE_UNLIMITED_INSTANCES, 4096, 4096,
      5000, NULL);
   if (h == INVALID_HANDLE_VALUE) {
     fprintf(stderr, "CreateNamedPipe failed: %lu\n", GetLastError());
