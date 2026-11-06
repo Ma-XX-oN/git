@@ -74,10 +74,14 @@ def perform_round(entries,git,base,index,owner):
   frame=request["data"]
   if not frame or len(frame)>MAX_FRAME:
     raise RuntimeError("invalid or oversized Git request frame")
-  if len(frame)<8 or not frame.startswith(b"\x02\x00\x00\x00git\x00"):
-    raise ValueError("benchmark requests require exactly one Git argument")
-  if not frame.endswith(b"\x00"):
-    raise ValueError("Git request missing terminating NUL")
+  if len(frame)<8 or frame[1:4]!=b"\x00"*3 or not frame.endswith(b"\x00"):
+    raise ValueError("invalid Git argument frame")
+  count=frame[0]
+  arguments=frame[4:].split(b"\x00")
+  if not 1<=count<=32 or len(arguments)!=count+1 or arguments[0]!=b"git":
+    raise ValueError("invalid Git argument count or program identity")
+  for argument in arguments[:-1]:
+    argument.decode("utf-8","strict")
   child,h=entries.pop(0)
   if not send(h,frame):
     raise RuntimeError("failed to forward request to ready Git worker")
