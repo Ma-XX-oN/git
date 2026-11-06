@@ -51,6 +51,13 @@ WIN_SCRIPT=r'''
   shopt -s expand_aliases
   eval 'git --version' || exit 45
   printf 'ALIAS_PASS\n'
+  expected=$("$gitbin" help -a) || exit 46
+  actual=$(git-ipc help -a) || exit 47
+  [[ $actual == "$expected" ]] || exit 48
+  printf 'LARGE_OUTPUT_PASS\n'
+  printf 'MANAGER_BEGIN\n'
+  cat "$_GIT809_MANAGER_LOG"
+  printf 'MANAGER_END\n'
 '''
 UNIX_SCRIPT=r'''
   gitbin=$1
@@ -137,6 +144,14 @@ def main():
       report["ipc"]=stats(ipc)
       if "ALIAS_PASS" not in report["stdout"]:
         raise AssertionError("transparent git alias not exercised")
+      if "LARGE_OUTPUT_PASS" not in report["stdout"]:
+        raise AssertionError("large Git help output differs from direct execution")
+      manager=report["stdout"].split("MANAGER_BEGIN\\n",1)[1].split("\\nMANAGER_END",1)[0]
+      allocated=[int(z.split(" ",1)[1]) for z in manager.splitlines()
+        if z.startswith("ALLOCATED ")]
+      if len(allocated)!=N+3 or len(set(allocated))!=len(allocated):
+        raise AssertionError("worker allocation was reused or not replenished: "+repr(allocated))
+      report["unique_worker_allocations"]=len(allocated)
       report["median_saved_ms"]=report["direct"]["median_ms"]-report["ipc"]["median_ms"]
       report["median_speedup"]=report["direct"]["median_ms"]/report["ipc"]["median_ms"]
     print("OS_BENCHMARK "+json.dumps({k:report[k] for k in
