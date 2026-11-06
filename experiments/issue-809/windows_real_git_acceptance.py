@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import sys
 import time
 import uuid
@@ -50,7 +51,9 @@ def main():
   if os.name!="nt": raise RuntimeError("native Windows required")
   root=Path.cwd()
   OUT.mkdir(exist_ok=True)
-  source=(root/"compat"/"mingw.c")
+  bash=shutil.which("bash")
+  if not bash or "git-sdk" not in bash.lower():
+    raise RuntimeError("Git SDK Bash not found: "+repr(bash))
   git,build_cmd=build(root)
   report={"source_sha":os.getenv("GITHUB_SHA"),"build_command":build_cmd,
           "git":str(git),"cases":[]}
@@ -77,13 +80,13 @@ def main():
         pipes=[r"\\.\pipe\git809-real-"+kind+"-"+token
                for kind in ("request","stdout","stderr","status")]
         start=time.perf_counter_ns()
-        bash=subprocess.run(["bash","--noprofile","--norc","-c",SCRIPT,
+        bash_result=subprocess.run([bash,"--noprofile","--norc","-c",SCRIPT,
            "real-worker",*pipes,label],capture_output=True,timeout=35,
            check=False,stdin=subprocess.DEVNULL)
         c["elapsed_bash_ms"]=(time.perf_counter_ns()-start)/1e6
-        c.update(bash_rc=bash.returncode,
-                 bash_stdout=bash.stdout.decode("utf-8","replace"),
-                 bash_stderr=bash.stderr.decode("utf-8","replace"))
+        c.update(bash_rc=bash_result.returncode,
+                 bash_stdout=bash_result.stdout.decode("utf-8","replace"),
+                 bash_stderr=bash_result.stderr.decode("utf-8","replace"))
         manager_out,manager_err=manager.communicate(timeout=25)
         c["manager_rc"]=manager.returncode
         c["manager_stdout"]=manager_out.decode("utf-8","replace")
@@ -94,12 +97,12 @@ def main():
           raise RuntimeError("missing exactly one real worker result")
         details=json.loads(result_lines[0][7:])
         c["real_worker"]=details
-        c["passed"]=(bash.returncode==0 and manager.returncode==0 and
+        c["passed"]=(bash_result.returncode==0 and manager.returncode==0 and
           details["worker_rc"]==direct.returncode and
           details["stdout_hex"]==direct.stdout.hex() and
           details["stderr_hex"]==direct.stderr.hex() and
-          bash.stdout.startswith(f"REAL_GIT_WORKER_PASS:{label}:EXIT ".encode())
-          and bash.stderr==b"")
+          bash_result.stdout.startswith(f"REAL_GIT_WORKER_PASS:{label}:EXIT ".encode())
+          and bash_result.stderr==b"")
       except Exception as exc:
         c["error"]=str(exc)
         c["passed"]=False
