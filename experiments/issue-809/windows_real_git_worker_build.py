@@ -253,12 +253,16 @@ def build(root:Path):
   source=source.replace(anchor,HOOK+"\n"+DIRECT_HOOK+"\n"+anchor,1)
   call="\t/* invoke the real main() using our utf8 version of argv. */\n\texit_status = main(argc, argv);"
   assert source.count(call)==1,"unexpected Git main invocation"
-  changed=("\t/* invoke the real main() using our utf8 version of argv. */\n"
-           "#ifdef GIT809_WORKER_PROBE\n"
-           "\tif (argc == 3 && !strcmp(argv[1], \"--git809-worker\"))\n"
-           "\t\texit_status = git809_worker_dispatch(argv[2]);\n"
-           "\telse if (argc == 2 && !strcmp(argv[1], \"--git809-direct-worker\"))\n"\n           "\t\texit_status = git809_direct_worker();\n"\n           "\telse\n#endif\n"
-           "\t\texit_status = main(argc, argv);")
+  changed=(
+    "\t/* invoke the real main() using our utf8 version of argv. */\n"
+    "#ifdef GIT809_WORKER_PROBE\n"
+    '\tif (argc == 3 && !strcmp(argv[1], "--git809-worker"))\n'
+    "\t\texit_status = git809_worker_dispatch(argv[2]);\n"
+    '\telse if (argc == 2 && !strcmp(argv[1], "--git809-direct-worker"))\n'
+    "\t\texit_status = git809_direct_worker();\n"
+    "\telse\n#endif\n"
+    "\t\texit_status = main(argc, argv);"
+  )
   source=source.replace(call,changed,1)
   p.write_text(source,encoding="utf-8")
 
