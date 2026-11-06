@@ -111,20 +111,32 @@ class Pool:
 
 def allocation_server(owner_pid:int,pool:Pool):
   address=r"\\.\pipe\git809-allocate-"+str(owner_pid)
-  h=K.CreateNamedPipeW(address,
+  # Git Bash's first open occupies one instance; the next carries GET.
+  h_probe=K.CreateNamedPipeW(address,
     PIPE_ACCESS_DUPLEX|FILE_FLAG_FIRST_PIPE_INSTANCE,
-    PIPE_TYPE_BYTE|PIPE_WAIT,1,256,256,5000,None)
+    PIPE_TYPE_BYTE|PIPE_WAIT,2,256,256,5000,None)
+  if h_probe==INVALID:
+    raise OSError(C.get_last_error(),"CreateNamedPipe(allocation probe)")
+  h=K.CreateNamedPipeW(address,
+    PIPE_ACCESS_DUPLEX,
+    PIPE_TYPE_BYTE|PIPE_WAIT,2,256,256,5000,None)
   if h==INVALID:
-    raise OSError(C.get_last_error(),"CreateNamedPipe(allocation)")
+    K.CloseHandle(h_probe)
+    raise OSError(C.get_last_error(),"CreateNamedPipe(allocation data)")
   print("ALLOCATOR_READY "+address,flush=True)
   try:
     while not pool.closing.is_set():
-      if not K.ConnectNamedPipe(h,None):
+      if not K.ConnectNamedPipe(h_probe,None):
         if C.get_last_error()!=ERROR_PIPE_CONNECTED:
           if pool.closing.is_set():
             return
-          raise OSError(C.get_last_error(),"ConnectNamedPipe(allocation)")
+          raise OSError(C.get_last_error(),"ConnectNamedPipe(allocation probe)")
       try:
+        if not K.ConnectNamedPipe(h,None):
+          if C.get_last_error()!=ERROR_PIPE_CONNECTED:
+            if pool.closing.is_set():
+              return
+            raise OSError(C.get_last_error(),"ConnectNamedPipe(allocation data)")
         buf=C.create_string_buffer(64)
         count=W.DWORD()
         if K.ReadFile(h,buf,64,C.byref(count),None) and buf.raw[:count.value]==b"GET\n":
@@ -138,8 +150,10 @@ def allocation_server(owner_pid:int,pool:Pool):
           K.FlushFileBuffers(h)
       finally:
         K.DisconnectNamedPipe(h)
+        K.DisconnectNamedPipe(h_probe)
   finally:
     K.CloseHandle(h)
+    K.CloseHandle(h_probe)
 
 def main():
   parser=argparse.ArgumentParser()
