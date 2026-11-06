@@ -121,31 +121,41 @@ git-ipc() {
   done
   exec 7>&-
 
-  # Drain stdout and stderr concurrently so neither backpressures Git.
-  (
-    while IFS= read -r line <&4 || [[ -n $line ]]; do
-      printf '%s\n' "$line"
-    done
-  ) &
-  local out_reader=$!
-  (
-    while IFS= read -r line <&5 || [[ -n $line ]]; do
-      printf '%s\n' "$line" >&2
-    done
-  ) &
-  local err_reader=$!
-  exec 4<&-
-  exec 5<&-
-  wait "$out_reader"
-  local out_rc=$?
-  wait "$err_reader"
-  local err_rc=$?
+  # Poll both streams without creating a Bash subshell for either.
+  # -t 0 checks readiness only. -N reads chunks without waiting for newline;
+  # a fractional timeout bounds a partial read when less than 4096 bytes arrive.
+  # Bash returns >128 on timeout and still assigns any partial data to chunk.
+  local out_open=1 err_open=1 chunk read_rc
+  while (( out_open || err_open )); do
+    if (( out_open )) && IFS= read -r -t 0 -u 4; then
+      chunk=
+      IFS= read -r -N 4096 -t 0.001 -u 4 chunk
+      read_rc=$?
+      [[ -z $chunk ]] || printf '%s' "$chunk"
+      if (( read_rc == 1 )); then
+        out_open=0
+        exec 4<&-
+      elif (( read_rc != 0 && read_rc <= 128 )); then
+        exec 4<&- 5<&- 6<&-
+        return 81
+      fi
+    fi
+    if (( err_open )) && IFS= read -r -t 0 -u 5; then
+      chunk=
+      IFS= read -r -N 4096 -t 0.001 -u 5 chunk
+      read_rc=$?
+      [[ -z $chunk ]] || printf '%s' "$chunk" >&2
+      if (( read_rc == 1 )); then
+        err_open=0
+        exec 5<&-
+      elif (( read_rc != 0 && read_rc <= 128 )); then
+        exec 4<&- 5<&- 6<&-
+        return 81
+      fi
+    fi
+  done
   IFS= read -r status <&6 || { exec 6<&-; return 80; }
   exec 6<&-
-  if (( out_rc != 0 || err_rc != 0 )); then
-    printf 'Git output drainage failed\n' >&2
-    return 81
-  fi
   if [[ $status =~ ^EXIT[[:space:]]([0-9]+)$ ]]; then
     return "${BASH_REMATCH[1]}"
   fi
