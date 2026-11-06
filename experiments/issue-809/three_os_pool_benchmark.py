@@ -41,17 +41,17 @@ WIN_SCRIPT=r'''
         "$gitbin" --version >/dev/null 2>/dev/null || exit 41
         direct_end=$EPOCHREALTIME
         ipc_begin=$EPOCHREALTIME
-        git-ipc --version >/dev/null 2>/dev/null || { rc=$?; printf 'IPC_FAIL mode=%s iteration=%s rc=%s\\n' "$mode" "$i" "$rc" >&2; cat "$_GIT809_MANAGER_LOG" >&2; exit 42; }
+        git-ipc --version >/dev/null 2>/dev/null || { rc=$?; printf 'IPC_FAIL mode=%s iteration=%s rc=%s\n' "$mode" "$i" "$rc" >&2; cat "$_GIT809_MANAGER_LOG" >&2; exit 42; }
         ipc_end=$EPOCHREALTIME
       else
         ipc_begin=$EPOCHREALTIME
-        git-ipc --version >/dev/null 2>/dev/null || { rc=$?; printf 'IPC_FAIL mode=%s iteration=%s rc=%s\\n' "$mode" "$i" "$rc" >&2; cat "$_GIT809_MANAGER_LOG" >&2; exit 43; }
+        git-ipc --version >/dev/null 2>/dev/null || { rc=$?; printf 'IPC_FAIL mode=%s iteration=%s rc=%s\n' "$mode" "$i" "$rc" >&2; cat "$_GIT809_MANAGER_LOG" >&2; exit 43; }
         ipc_end=$EPOCHREALTIME
         direct_begin=$EPOCHREALTIME
         "$gitbin" --version >/dev/null 2>/dev/null || exit 44
         direct_end=$EPOCHREALTIME
       fi
-      printf 'PAIR %s %s %s %s %s %s\\n' "$mode" "$i" "$direct_begin" "$direct_end" "$ipc_begin" "$ipc_end"
+      printf 'PAIR %s %s %s %s %s %s\n' "$mode" "$i" "$direct_begin" "$direct_end" "$ipc_begin" "$ipc_end"
     done
   done
   unset GIT809_DRAIN_MODE
