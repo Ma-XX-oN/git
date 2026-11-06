@@ -149,7 +149,7 @@ def main():
         raise AssertionError("transparent git alias not exercised")
       if "LARGE_OUTPUT_PASS" not in report["stdout"]:
         raise AssertionError("large Git help output differs from direct execution")
-      manager=report["stdout"].split("MANAGER_BEGIN\\n",1)[1].split("\\nMANAGER_END",1)[0]
+      manager=report["stdout"].split("MANAGER_BEGIN\n",1)[1].split("\nMANAGER_END",1)[0]
       ready=set()
       allocated=[]
       for event in manager.splitlines():
