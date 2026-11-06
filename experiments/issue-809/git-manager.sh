@@ -31,7 +31,7 @@ _git809_source_manager() {
     return 2
   fi
   local script_path script_dir temp native_ready
-  script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[1]}")" && pwd -P) || return 1
+  script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) || return 1
   script_path=$(cygpath -w "$script_dir/windows_shell_owned_pool.py") || return 1
   temp=$(mktemp -d) || return 1
   native_ready=$(cygpath -w "$temp/ready.json") || return 1
