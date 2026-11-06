@@ -18,7 +18,7 @@ import subprocess
 import sys
 import time
 
-N=12
+N=120
 OUT=Path("git809-bash-pipe-results")
 WIN_SCRIPT=r'''
   source "$1" 3 || exit 31
@@ -26,7 +26,10 @@ WIN_SCRIPT=r'''
   printf 'POOL %s %s\n' "$_GIT809_MANAGER_BASH_PID" "$_GIT809_MANAGER_READY"
   source "$1" 3 || exit 32
   [[ "$_GIT809_MANAGER_WORKERS" == 3 ]] || exit 33
-  for ((i=0;i<12;i++)); do
+  expected=$("$gitbin" --version) || exit 34
+  actual=$(git-ipc --version) || exit 35
+  [[ $actual == "$expected" ]] || exit 36
+  for ((i=0;i<120;i++)); do
     if (( i % 2 == 0 )); then
       direct_begin=$EPOCHREALTIME
       "$gitbin" --version >/dev/null 2>/dev/null || exit 41
@@ -51,7 +54,7 @@ WIN_SCRIPT=r'''
 '''
 UNIX_SCRIPT=r'''
   gitbin=$1
-  for ((i=0;i<12;i++)); do
+  for ((i=0;i<120;i++)); do
     a=$EPOCHREALTIME
     "$gitbin" --version >/dev/null 2>/dev/null || exit 41
     b=$EPOCHREALTIME
