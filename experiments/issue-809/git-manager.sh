@@ -76,7 +76,7 @@ fi
 git-ipc() {
   if [[ -z ${_GIT809_OWNER_WINPID:-} || $# -gt 31 ]]; then
     printf 'git-ipc requires a running manager and at most 31 arguments\n' >&2
-    printf 'git-ipc: invalid invocation\n' >&2; return 255
+    printf 'GIT-IPC ERROR: invalid invocation\n' >&2; return 255
   fi
   local allocator; printf -v allocator '%s%s' '\\.\pipe\git809-allocate-' "$_GIT809_OWNER_WINPID"
   local pid i count header arg status line
@@ -86,18 +86,18 @@ git-ipc() {
   done
   if (( i == 200 )); then
     printf 'Git manager allocation pipe unavailable\n' >&2
-    printf 'git-ipc: allocator pipe unavailable\n' >&2; return 255
+    printf 'GIT-IPC ERROR: allocator pipe unavailable\n' >&2; return 255
   fi
-  printf 'GET\n' >&3 || { exec 3>&-; printf 'git-ipc: allocator request write failed\n' >&2; return 255; }
-  IFS= read -r pid <&3 || { exec 3>&-; printf 'git-ipc: allocator response read failed\n' >&2; return 255; }
+  printf 'GET\n' >&3 || { exec 3>&-; printf 'GIT-IPC ERROR: allocator request write failed\n' >&2; return 255; }
+  IFS= read -r pid <&3 || { exec 3>&-; printf 'GIT-IPC ERROR: allocator response read failed\n' >&2; return 255; }
   exec 3>&-
   if [[ $pid == WAIT ]]; then
     printf 'Git worker pool temporarily depleted\n' >&2
-    printf 'git-ipc: no worker ready\n' >&2; return 255
+    printf 'GIT-IPC ERROR: no worker ready\n' >&2; return 255
   fi
   if [[ ! $pid =~ ^[1-9][0-9]*$ ]]; then
     printf 'Invalid Git worker PID response: %s\n' "$pid" >&2
-    printf 'git-ipc: invalid worker PID response\n' >&2; return 255
+    printf 'GIT-IPC ERROR: invalid worker PID response\n' >&2; return 255
   fi
 
   local stem; printf -v stem '%s%s' '\\.\pipe\' "$pid"
@@ -107,17 +107,17 @@ git-ipc() {
   local pexit="${stem}-exit-code"
 
   # Open in the same order that the native worker accepts connections.
-  exec 4<"$pout" || printf 'git-ipc: stdout pipe open failed\n' >&2; return 255
-  exec 5<"$perr" || { exec 4<&-; printf 'git-ipc: stderr pipe open failed\n' >&2; return 255; }
-  exec 6<"$pexit" || { exec 4<&- 5<&-; printf 'git-ipc: exit-status pipe open failed\n' >&2; return 255; }
-  exec 7>>"$pstdin" || { exec 4<&- 5<&- 6<&-; printf 'git-ipc: stdin pipe open failed\n' >&2; return 255; }
+  exec 4<"$pout" || printf 'GIT-IPC ERROR: stdout pipe open failed\n' >&2; return 255
+  exec 5<"$perr" || { exec 4<&-; printf 'GIT-IPC ERROR: stderr pipe open failed\n' >&2; return 255; }
+  exec 6<"$pexit" || { exec 4<&- 5<&-; printf 'GIT-IPC ERROR: exit-status pipe open failed\n' >&2; return 255; }
+  exec 7>>"$pstdin" || { exec 4<&- 5<&- 6<&-; printf 'GIT-IPC ERROR: stdin pipe open failed\n' >&2; return 255; }
 
   count=$(( $# + 1 ))
   printf -v header '\\x%02x\\x00\\x00\\x00' "$count"
-  printf '%b' "$header" >&7 || printf 'git-ipc: worker request write failed\n' >&2; return 255
-  printf 'git\x00' >&7 || printf 'git-ipc: worker request write failed\n' >&2; return 255
+  printf '%b' "$header" >&7 || printf 'GIT-IPC ERROR: worker request write failed\n' >&2; return 255
+  printf 'git\x00' >&7 || printf 'GIT-IPC ERROR: worker request write failed\n' >&2; return 255
   for arg in "$@"; do
-    printf '%s\x00' "$arg" >&7 || printf 'git-ipc: worker request write failed\n' >&2; return 255
+    printf '%s\x00' "$arg" >&7 || printf 'GIT-IPC ERROR: worker request write failed\n' >&2; return 255
   done
   exec 7>&-
 
@@ -139,7 +139,7 @@ git-ipc() {
           exec 4<&-
         elif (( read_rc != 0 && read_rc <= 128 )); then
           exec 4<&- 5<&- 6<&-
-          printf 'git-ipc: output pipe read failed\n' >&2; return 255
+          printf 'GIT-IPC ERROR: output pipe read failed\n' >&2; return 255
         fi
       fi
       if (( err_open )) && IFS= read -r -t 0 -u 5; then
@@ -152,17 +152,17 @@ git-ipc() {
           exec 5<&-
         elif (( read_rc != 0 && read_rc <= 128 )); then
           exec 4<&- 5<&- 6<&-
-          printf 'git-ipc: output pipe read failed\n' >&2; return 255
+          printf 'GIT-IPC ERROR: output pipe read failed\n' >&2; return 255
         fi
       fi
     done
-    IFS= read -r status <&6 || { exec 6<&-; printf 'git-ipc: exit-status read failed\n' >&2; return 255; }
+    IFS= read -r status <&6 || { exec 6<&-; printf 'GIT-IPC ERROR: exit-status read failed\n' >&2; return 255; }
     exec 6<&-
     if [[ $status =~ ^EXIT[[:space:]]([0-9]+)$ ]]; then
       return "${BASH_REMATCH[1]}"
     fi
     printf 'Invalid Git exit-code response: %s\n' "$status" >&2
-    printf 'git-ipc: malformed exit status\n' >&2; return 255
+    printf 'GIT-IPC ERROR: malformed exit status\n' >&2; return 255
   fi
   # Poll stdout and stderr in one Bash process; read exit status after both close.
   # -t 0 checks readiness only. -N reads chunks without waiting for newline;
@@ -180,7 +180,7 @@ git-ipc() {
         exec 4<&-
       elif (( read_rc != 0 && read_rc <= 128 )); then
         exec 4<&- 5<&- 6<&-
-        printf 'git-ipc: output pipe read failed\n' >&2; return 255
+        printf 'GIT-IPC ERROR: output pipe read failed\n' >&2; return 255
       fi
     fi
     if (( err_open )) && IFS= read -r -t 0 -u 5; then
@@ -193,17 +193,17 @@ git-ipc() {
         exec 5<&-
       elif (( read_rc != 0 && read_rc <= 128 )); then
         exec 4<&- 5<&- 6<&-
-        printf 'git-ipc: output pipe read failed\n' >&2; return 255
+        printf 'GIT-IPC ERROR: output pipe read failed\n' >&2; return 255
       fi
     fi
   done
-  IFS= read -r status <&6 || { exec 6<&-; printf 'git-ipc: exit-status read failed\n' >&2; return 255; }
+  IFS= read -r status <&6 || { exec 6<&-; printf 'GIT-IPC ERROR: exit-status read failed\n' >&2; return 255; }
   exec 6<&-
   if [[ $status =~ ^EXIT[[:space:]]([0-9]+)$ ]]; then
     return "${BASH_REMATCH[1]}"
   fi
   printf 'Invalid Git exit-code response: %s\n' "$status" >&2
-  printf 'git-ipc: malformed exit status\n' >&2; return 255
+  printf 'GIT-IPC ERROR: malformed exit status\n' >&2; return 255
 }
 alias git='git-ipc'
 return 0
