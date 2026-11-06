@@ -64,7 +64,7 @@ def main():
   if not git.is_file():
     parser.error("git executable is not a file")
   # Git Bash/MSYS2 can introduce an intermediate native launcher process.
-  # The sourced shell supplies its own /proc/$/winpid instead of os.getppid().
+  # The sourced shell supplies its own /proc/$BASHPID/winpid instead of os.getppid().
   # Retain the opened owner handle; never follow a reused PID.
   owner_pid = args.owner_winpid
   if not 1 <= owner_pid <= 0xffffffff:
