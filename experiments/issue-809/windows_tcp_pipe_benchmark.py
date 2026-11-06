@@ -24,6 +24,7 @@ COUNT=150
 PAYLOAD="p"*64
 BASH=r'''
 set -e
+set -x
 endpoint=$1
 kind=$2
 runs=$3
@@ -33,6 +34,7 @@ if [[ $kind == tcp ]]; then
 else
   exec 3<>"$endpoint" || exit 42
 fi
+set +x
 for ((i=0;i<runs;i++)); do
   start=$EPOCHREALTIME
   printf 'Q%06d-%s\n' "$i" "$payload" >&3 || exit 43
@@ -169,7 +171,8 @@ def case(bash:str,mode:str):
         samples.append(elapsed_us(parts[2],parts[3]))
     record={"mode":mode,"configured_instances":0 if mode=="tcp" else len(handles),
       "samples":len(samples),"expected":COUNT,"exit":result.returncode,
-      "server":metrics,"stderr":result.stderr.decode("utf-8","replace")[-700:]}
+      "server":metrics,"stdout":result.stdout.decode("utf-8","replace")[:400],
+      "stderr":result.stderr.decode("utf-8","replace")[-1300:]}
     if samples:
       sorted_us=sorted(samples)
       record.update(median_us=statistics.median(samples),
@@ -199,6 +202,12 @@ def case(bash:str,mode:str):
 
 def main():
   bash=os.environ.get("GIT809_BASH","bash")
+  preflight=subprocess.run([bash,"--noprofile","--norc","-c",
+    "printf BASH_READY"],capture_output=True,timeout=6)
+  if preflight.returncode or preflight.stdout!=b"BASH_READY":
+    raise AssertionError("Bash startup failed: "+repr((preflight.returncode,
+      preflight.stdout,preflight.stderr)))
+  print("BASH_READY "+bash,flush=True)
   results=[case(bash,mode) for mode in ("tcp","pipe2","pipe1")]
   output=Path("git809-bash-pipe-results")
   output.mkdir(exist_ok=True)
