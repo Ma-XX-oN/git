@@ -246,7 +246,39 @@ static int run_client(const char *mode,const char *token) {
   puts("ok");
   return 0;
 }
+static int verify_decoder(void) {
+  unsigned char msg[MAX_WIRE];
+  DWORD len=build_request(msg);
+  ParsedArgs args;
+  if(!decode_argv(msg,len,&args) || args.argc!=5 ||
+     strcmp(args.argv[0],"git") || strcmp(args.argv[1],"--version") ||
+     strcmp(args.argv[2],"") || strcmp(args.argv[3],"quoted \"path\" \\") ||
+     strcmp(args.argv[4],"UTF-8: \xE2\x86\x92") || args.argv[5]!=NULL)
+    return 1;
+  if(decode_argv(msg,len-1,&args)) return 2;
+  if(decode_argv(msg,3,&args)) return 3;
+  if(decode_argv(msg,len+1,&args)) return 4;
+  unsigned char mutated[MAX_WIRE];
+  memcpy(mutated,msg,len);
+  put_u32(mutated,MAX_ARGS+1u);
+  if(decode_argv(mutated,len,&args)) return 5;
+  memcpy(mutated,msg,len);
+  put_u32(mutated,6u);
+  if(decode_argv(mutated,len,&args)) return 6;
+  memcpy(mutated,msg,len);
+  /* Change valid UTF-8 arrow to an invalid standalone continuation byte. */
+  for(DWORD i=4;i+2<len;i++) {
+    if(mutated[i]==0xE2u && mutated[i+1]==0x86u && mutated[i+2]==0x92u) {
+      mutated[i]=0x80u;
+      break;
+    }
+  }
+  if(decode_argv(mutated,len,&args)) return 7;
+  puts("argv decoder PASS");
+  return 0;
+}
 int main(int argc,char **argv) {
+  if(argc==2 && strcmp(argv[1],"selftest")==0) return verify_decoder();
   if(argc==2 && strcmp(argv[1],"base")==0) {puts("ok");return 0;}
   if(argc<3) {fputs("usage: client base | worker endpoint | manager MODE TOKEN | client MODE TOKEN\n",stderr);return 2;}
   if(strcmp(argv[1],"worker")==0) {run_worker(argv[2]);return 0;}
