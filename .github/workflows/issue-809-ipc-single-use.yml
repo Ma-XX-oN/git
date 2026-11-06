@@ -1,0 +1,38 @@
+name: Git 809 Windows single-use IPC cost
+on:
+  push:
+    branches: [investigation-809-git-startup]
+    paths:
+      - experiments/issue-809/ipc_single_use.c
+      - experiments/issue-809/ipc_single_use_benchmark.py
+      - .github/workflows/issue-809-ipc-single-use.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-native:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Build native C no-op worker pool and benchmark Windows IPC
+        shell: bash
+        run: |
+          . /etc/profile
+          PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
+          test -f "$PYTHON_EXE"
+          "$PYTHON_EXE" -m py_compile experiments/issue-809/ipc_single_use_benchmark.py
+          "$PYTHON_EXE" experiments/issue-809/ipc_single_use_benchmark.py
+      - name: Upload IPC samples and validation status
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-windows-single-use-ipc
+          path: git809-ipc-results/*.json
+          if-no-files-found: warn
