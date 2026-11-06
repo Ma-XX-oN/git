@@ -110,9 +110,9 @@ def main():
                              capture_output=True, timeout=TIMEOUT).stdout
     assert version.startswith(b"git version "), version
     cases = {
-      "baseline": ([str(exe), "base"], b"ok\n"),
-      "pipe": ([str(exe), "client", "pipe", token + "pipe"], b"ok\n"),
-      "shm": ([str(exe), "client", "shm", token + "shm"], b"ok\n"),
+      "baseline": ([str(exe), "base"], b"ok\r\n"),
+      "pipe": ([str(exe), "client", "pipe", token + "pipe"], b"ok\r\n"),
+      "shm": ([str(exe), "client", "shm", token + "shm"], b"ok\r\n"),
       "git": ([str(installed), "--version"], version),
     }
     values = {case: [] for case in cases}
