@@ -64,7 +64,7 @@ def main():
   token = uuid.uuid4().hex[:16]
   managers = {}
   report = {
-    "experiment": "Git809-Windows-single-use-native-noop-worker",
+    "experiment": "Git809-Windows-single-use-counted-argv-worker",
     "source_sha": os.environ.get("GITHUB_SHA", ""),
     "runner_os": os.environ.get("RUNNER_OS", ""),
     "runner_image": os.environ.get("ImageOS", ""),
@@ -78,12 +78,13 @@ def main():
     "direct_git_sha256": sha(installed),
     "worker_pool_size": 3,
     "protocol": {
-      "pipe": "native wrapper->manager named pipe; manager->single-use worker named pipe; manager returns reply",
-      "shm": "native wrapper->manager pagefile-backed named shared memory + auto-reset events; manager->single-use worker named pipe",
+      "pipe": "counted UTF-8 argv via wrapper->manager named pipe; manager->single-use worker named pipe; manager returns validated digest",
+      "shm": "counted UTF-8 argv via named mapping + auto-reset events; manager->single-use worker named pipe",
       "baseline": "native no-op client prints ok and exits",
       "git": "direct native installed git --version",
+      "argv_wire_format": "little-endian u32 argc, then exactly argc NUL-terminated UTF-8 strings (including an empty argument); maximum 32 arguments and 4096 bytes",
       "limitations": [
-        "No Git command execution in IPC prototype",
+        "No Git command execution in IPC prototype; client sends a fixed representative argument fixture",
         "One client at a time; not a concurrency or contention acceptance test",
         "Manager replenishment runs after reply, potentially delaying the next request",
         "Shared memory only replaces client-manager channel; manager-worker remains named pipe",
