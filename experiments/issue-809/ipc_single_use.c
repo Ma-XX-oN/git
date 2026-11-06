@@ -74,7 +74,6 @@ static uint32_t dispatch(uint32_t request,int *next,const char *token) {
   transfer(workers[i].pipe,&reply,sizeof(reply),0);
   if(reply!=(request^MAGIC)) { fputs("worker mismatch\n",stderr);ExitProcess(96); }
   stop_worker(i);
-  start_worker(i,token);
   return reply;
 }
 static void run_worker(const char *endpoint) {
@@ -105,6 +104,7 @@ static void run_manager_pipe(const char *token) {
       uint32_t reply=dispatch(req,&next,token);
       transfer(h,&reply,sizeof(reply),1);
       FlushFileBuffers(h);
+      start_worker((next-1)%POOL_SIZE,token);
     }
     DisconnectNamedPipe(h);CloseHandle(h);
   }
@@ -137,6 +137,7 @@ static void run_manager_shm(const char *token) {
     s->answer=(LONG)answer;
     MemoryBarrier();
     if(!SetEvent(res)) fail("set response event");
+    start_worker((next-1)%POOL_SIZE,token);
   }
 }
 static int run_client(const char *mode,const char *token) {
