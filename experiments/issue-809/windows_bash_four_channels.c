@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#define SLOTS 6
+#define SLOTS 2
 #define MAXMSG 4096
 typedef struct {
   char path[180];
