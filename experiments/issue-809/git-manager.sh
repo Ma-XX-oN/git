@@ -144,7 +144,7 @@ git-ipc() {
       fi
       if (( err_open )) && IFS= read -r -t 0 -u 5; then
         stderr_line=
-        IFS= read -r -t 0.001 -u 5 stderr_line
+        IFS= read -r -t 0.100 -u 5 stderr_line
         read_rc=$?
         if [[ -n $stderr_line ]]; then
           printf '%s' "$stderr_line" >&2
