@@ -35,6 +35,8 @@ K.ReadFile.argtypes=[W.HANDLE,W.LPVOID,W.DWORD,C.POINTER(W.DWORD),W.LPVOID]
 K.ReadFile.restype=W.BOOL
 K.WriteFile.argtypes=[W.HANDLE,W.LPCVOID,W.DWORD,C.POINTER(W.DWORD),W.LPVOID]
 K.WriteFile.restype=W.BOOL
+K.FlushFileBuffers.argtypes=[W.HANDLE]
+K.FlushFileBuffers.restype=W.BOOL
 K.CloseHandle.argtypes=[W.HANDLE]
 K.CloseHandle.restype=W.BOOL
 INVALID=C.c_void_p(-1).value
@@ -80,7 +82,7 @@ class Pool:
 
   def alloc(self):
     try:
-      p=self.ready.get_nowait()
+      p=self.ready.get(timeout=5)
     except queue.Empty:
       return "WAIT\n"
     if p.poll() is not None:
@@ -132,6 +134,8 @@ def allocation_server(owner_pid:int,pool:Pool):
         n=W.DWORD()
         if not K.WriteFile(h,answer,len(answer),C.byref(n),None):
           print("ALLOCATOR_WRITE_FAILED "+str(C.get_last_error()),flush=True)
+        else:
+          K.FlushFileBuffers(h)
       finally:
         K.DisconnectNamedPipe(h)
   finally:
