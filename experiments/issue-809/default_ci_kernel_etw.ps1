@@ -80,6 +80,24 @@ print("40 default Git invocations: passed", flush=True)
             $data['control_untraced_after_ms'] = $afterTimer.Elapsed.TotalMilliseconds
             & tracerpt.exe $trace -o $dump -of CSV -y -summary $summary | Out-Null
             $data.tracerpt_exit_code = $LASTEXITCODE
+            # xperf's native process action includes process, thread, image
+            # timing reports. Keep only bounded Git rows, never raw ETW.
+            $xperfTool = Get-Command xperf.exe -ErrorAction SilentlyContinue
+            if ($xperfTool) {
+              $processReport = Join-Path $env:RUNNER_TEMP 'git809-process-event-report.txt'
+              & $xperfTool.Source -i $trace -o $processReport -a process | Out-Null
+              $data.event_summary['xperf_process_rc'] = $LASTEXITCODE
+              if (Test-Path $processReport) {
+                $lines = @(Get-Content $processReport | Where-Object { $_ -match '(?i)git\.exe' } | Select-Object -First 25)
+                $data.event_summary['xperf_git_process_rows'] = @(
+                  $lines | ForEach-Object {
+                    # Redact path segments, and keep only process labels/numbers.
+                    $_ -replace '[A-Za-z]:\\[^,\s]+', '[REDACTED_PATH]'
+                  }
+                )
+                Remove-Item $processReport -Force -ErrorAction SilentlyContinue
+              }
+            }
             if (Test-Path $summary) {
               $content = Get-Content $summary -ErrorAction SilentlyContinue
               # Report broad event types only, not paths, environment or system traces.
