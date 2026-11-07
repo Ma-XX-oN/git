@@ -140,14 +140,18 @@ def allocation_server(owner_pid:int,pool:Pool):
     connected=queue.Queue()
     threads=[]
     def accept(h,index):
+      print(f"ALLOC_API_ENTER ns={time.perf_counter_ns()} tid={threading.get_native_id()} op=ConnectNamedPipe handle={h} instance={index}",flush=True)
       ok=bool(K.ConnectNamedPipe(h,None))
       err=0 if ok else C.get_last_error()
+      print(f"ALLOC_API_RETURN ns={time.perf_counter_ns()} tid={threading.get_native_id()} op=ConnectNamedPipe handle={h} instance={index} ok={ok} error={err}",flush=True)
       connected.put((index,ok or err in (ERROR_PIPE_CONNECTED,ERROR_NO_DATA),err))
     try:
       for index in range(2):
+        print(f"ALLOC_API_ENTER ns={time.perf_counter_ns()} tid={threading.get_native_id()} op=CreateNamedPipe instance={index}",flush=True)
         h=K.CreateNamedPipeW(address,
           PIPE_ACCESS_DUPLEX|(FILE_FLAG_FIRST_PIPE_INSTANCE if first and index==0 else 0),
           PIPE_TYPE_BYTE|PIPE_WAIT,2,256,256,5000,None)
+        print(f"ALLOC_API_RETURN ns={time.perf_counter_ns()} op=CreateNamedPipe instance={index} handle={h} error={C.get_last_error() if h==INVALID else 0}",flush=True)
         if h==INVALID:
           raise OSError(C.get_last_error(),"CreateNamedPipe(allocation)")
         handles.append(h)
@@ -180,18 +184,32 @@ def allocation_server(owner_pid:int,pool:Pool):
             " errors="+str((first_error,second_error)),flush=True)
       buf=C.create_string_buffer(64)
       count=W.DWORD()
-      if K.ReadFile(h,buf,64,C.byref(count),None) and buf.raw[:count.value]==b"GET\n":
+      print(f"ALLOC_API_ENTER ns={time.perf_counter_ns()} tid={threading.get_native_id()} op=ReadFile handle={h}",flush=True)
+      read_ok=bool(K.ReadFile(h,buf,64,C.byref(count),None))
+      read_error=0 if read_ok else C.get_last_error()
+      print(f"ALLOC_API_RETURN ns={time.perf_counter_ns()} op=ReadFile handle={h} ok={read_ok} bytes={count.value} error={read_error}",flush=True)
+      if read_ok and buf.raw[:count.value]==b"GET\n":
         answer=pool.alloc().encode("ascii")
       else:
         answer=b"INVALID\n"
       n=W.DWORD()
-      if not K.WriteFile(h,answer,len(answer),C.byref(n),None) or n.value!=len(answer):
-        raise OSError(C.get_last_error(),"WriteFile(allocation)")
-      if not K.FlushFileBuffers(h):
-        raise OSError(C.get_last_error(),"FlushFileBuffers(allocation)")
+      print(f"ALLOC_API_ENTER ns={time.perf_counter_ns()} op=WriteFile handle={h} bytes={len(answer)}",flush=True)
+      write_ok=bool(K.WriteFile(h,answer,len(answer),C.byref(n),None))
+      write_error=0 if write_ok else C.get_last_error()
+      print(f"ALLOC_API_RETURN ns={time.perf_counter_ns()} op=WriteFile handle={h} ok={write_ok} bytes={n.value} error={write_error}",flush=True)
+      if not write_ok or n.value!=len(answer):
+        raise OSError(write_error,"WriteFile(allocation)")
+      print(f"ALLOC_API_ENTER ns={time.perf_counter_ns()} op=FlushFileBuffers handle={h}",flush=True)
+      flush_ok=bool(K.FlushFileBuffers(h))
+      flush_error=0 if flush_ok else C.get_last_error()
+      print(f"ALLOC_API_RETURN ns={time.perf_counter_ns()} op=FlushFileBuffers handle={h} ok={flush_ok} error={flush_error}",flush=True)
+      if not flush_ok:
+        raise OSError(flush_error,"FlushFileBuffers(allocation)")
     finally:
       for h in handles:
-        K.DisconnectNamedPipe(h)
+        print(f"ALLOC_API_ENTER ns={time.perf_counter_ns()} op=DisconnectNamedPipe handle={h}",flush=True)
+        disconnected=bool(K.DisconnectNamedPipe(h))
+        print(f"ALLOC_API_RETURN ns={time.perf_counter_ns()} op=DisconnectNamedPipe handle={h} ok={disconnected} error={0 if disconnected else C.get_last_error()}",flush=True)
       for t in threads:
         t.join(timeout=5)
         if t.is_alive():
