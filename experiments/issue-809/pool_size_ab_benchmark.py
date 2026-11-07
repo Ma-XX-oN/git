@@ -49,6 +49,9 @@ SHELL = r"""
     [[ ${_GIT809_MANAGER_WORKERS:-} == "$count" ]] || exit 32
     export GIT809_DRAIN_MODE=chunk100
     manager_log=$_GIT809_MANAGER_LOG
+    if [[ ${GIT809_TRACE:-} == 1 ]]; then
+      printf 'MANAGER_LOG_NATIVE %s\n' "$(cygpath -w "$manager_log")"
+    fi
   else
     manager_log=$_GIT809_UNIX_MANAGER_LOG
   fi
@@ -112,10 +115,18 @@ def run_case(bash, script, git_shell, environment, workers, round_index, windows
         stdout = (exc.stdout or b"").decode("utf-8", "replace")
         stderr = (exc.stderr or b"").decode("utf-8", "replace")
         complete = [row for row in stdout.splitlines() if row.startswith("PAIR ")]
+        native_logs = [row.split(" ", 1)[1] for row in stdout.splitlines()
+                       if row.startswith("MANAGER_LOG_NATIVE ")]
+        manager_trace = ""
+        if native_logs:
+            try:
+                manager_trace = Path(native_logs[-1]).read_text(encoding="utf-8")[-8000:]
+            except OSError as error:
+                manager_trace = repr(error)
         raise AssertionError(
             f"pool={workers} round={round_index} timeout; "
             f"pairs={len(complete)} last={complete[-1] if complete else None}; "
-            f"stderr={stderr[-1200:]}") from exc
+            f"stderr={stderr[-1200:]} manager_trace={manager_trace}") from exc
     elapsed = time.perf_counter() - started
     output = result.stdout.decode("utf-8", "strict")
     errors = result.stderr.decode("utf-8", "strict")
@@ -177,6 +188,8 @@ def main():
         script = str(root / "experiments/issue-809/git-manager-unix.sh")
     env = os.environ.copy()
     env["GIT809_PLATFORM"] = "windows" if windows else "unix"
+    if windows:
+        env["GIT809_TRACE"] = "1"
     env["GIT809_WORKER_GIT"] = native
     env["GIT809_MANAGER_PYTHON"] = env.get("GIT809_MANAGER_PYTHON") or sys.executable
     report = {
