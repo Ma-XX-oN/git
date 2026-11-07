@@ -107,15 +107,26 @@ def run_case(bash, script, git_shell, environment, workers, round_index, windows
             [bash, "--noprofile", "--norc", "-c", SHELL,
              "pool-ab", str(workers), script, git_shell],
             env=environment, stdin=subprocess.DEVNULL,
-            capture_output=True, timeout=240)
+            capture_output=True, timeout=60 if windows else 240)
     except subprocess.TimeoutExpired as exc:
         stdout = (exc.stdout or b"").decode("utf-8", "replace")
         stderr = (exc.stderr or b"").decode("utf-8", "replace")
         complete = [row for row in stdout.splitlines() if row.startswith("PAIR ")]
+        manager_trace = ""
+        if windows:
+            tmp = subprocess.run(["cygpath", "-w", "/tmp"], capture_output=True,
+                                 text=True, encoding="utf-8", check=True).stdout.strip()
+            files = sorted(Path(tmp).glob("tmp.*/manager.log"),
+                           key=lambda file: file.stat().st_mtime, reverse=True)
+            if files:
+                manager_trace = files[0].read_text(encoding="utf-8", errors="replace")
+                trace_path = OUT / "latest-timeout-manager.log"
+                trace_path.write_text(manager_trace, encoding="utf-8")
+                print(f"GIT809_TIMEOUT_MANAGER_LOG={trace_path}", flush=True)
         raise AssertionError(
             f"pool={workers} round={round_index} timeout; "
             f"pairs={len(complete)} last={complete[-1] if complete else None}; "
-            f"stderr={stderr[-1200:]}") from exc
+            f"stderr={stderr[-1200:]}; manager_tail={manager_trace[-3200:]}") from exc
     elapsed = time.perf_counter() - started
     output = result.stdout.decode("utf-8", "strict")
     errors = result.stderr.decode("utf-8", "strict")
