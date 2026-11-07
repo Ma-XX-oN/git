@@ -125,6 +125,20 @@ jobs:
           source = source.replace(old, new)
           # Packaging is unnecessary: retain the original source and flags,
           # but stage the unstripped DLL for the isolated executable test.
+          # Preserve the original build(), but package only the DLL needed
+          # for this disposable experiment, not unbuilt auxiliary programs.
+          assert source.count("package_msys2-runtime() {") == 1
+          assert source.count("pkgname=(\'msys2-runtime\' \'msys2-runtime-devel\')") == 1
+          source = source.replace(
+            "pkgname=(\'msys2-runtime\' \'msys2-runtime-devel\')",
+            "pkgname=(\'msys2-runtime\')", 1)
+          source = source.split("package_msys2-runtime() {", 1)[0]
+          source += (
+            'package_msys2-runtime() {' + chr(10)
+            + '  install -Dm755 "${srcdir}/dest/usr/bin/msys-2.0.dll" '
+            + '"${pkgdir}/usr/bin/msys-2.0.dll"' + chr(10)
+            + '}' + chr(10)
+          )
           recipe.write_text(source)
           GIT809_DLL_ONLY
           makepkg --noextract --noprepare --syncdeps --noconfirm --skipchecksums
@@ -132,17 +146,6 @@ jobs:
           workspace_posix=$(cygpath -u "$GITHUB_WORKSPACE")
           printf '%s\n' "$PWD/src/dest/usr/bin/msys-2.0.dll" > "$workspace_posix/experiments/issue-809/patched-runtime-path.txt"
           sha256sum src/dest/usr/bin/msys-2.0.dll
-      - name: Run existing upstream pathname regression tests against newly built runtime
-        shell: bash
-        run: |
-          set -euxo pipefail
-          export MSYSTEM=MSYS
-          export PATH="/opt/bin:/usr/bin:$PATH"
-          root=/usr/src/MSYS2-packages/msys2-runtime/src
-          suite=$(find "$root" -path '*/winsup/testsuite/Makefile' -print -quit)
-          test -n "$suite"
-          cd "$(dirname "$suite")"
-          make check TESTS="winsup.api/ltp/open02 winsup.api/ltp/open03 winsup.api/ltp/stat01 winsup.api/ltp/stat02 winsup.api/ltp/stat03 winsup.api/ltp/lstat02 winsup.api/ltp/readlink01 winsup.api/ltp/readlink02 winsup.api/ltp/symlink01 winsup.api/ltp/symlink02"
       - name: Compare pristine Git Bash and isolated patched runtime
         shell: pwsh
         run: |
@@ -185,3 +188,14 @@ jobs:
           }
           & $bash --noprofile --norc -c 'f=$(mktemp) || exit 1; printf "normal_file_ok\n" > "$f" || exit 2; IFS= read -r payload < "$f" || exit 3; test "$payload" = normal_file_ok || exit 4; rm -f "$f"'
           if ($LASTEXITCODE -ne 0) { throw "Ordinary file redirection regression" }
+      - name: Run existing upstream pathname regression tests against newly built runtime
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export MSYSTEM=MSYS
+          export PATH="/opt/bin:/usr/bin:$PATH"
+          root=/usr/src/MSYS2-packages/msys2-runtime/src
+          suite=$(find "$root" -path '*/winsup/testsuite/Makefile' -print -quit)
+          test -n "$suite"
+          cd "$(dirname "$suite")"
+          make check TESTS="winsup.api/ltp/open02 winsup.api/ltp/open03 winsup.api/ltp/stat01 winsup.api/ltp/stat02 winsup.api/ltp/stat03 winsup.api/ltp/lstat02 winsup.api/ltp/readlink01 winsup.api/ltp/readlink02 winsup.api/ltp/symlink01 winsup.api/ltp/symlink02"
