@@ -20,8 +20,8 @@ import subprocess
 import sys
 import time
 
-N = 120
-RUN_ORDER = (1, 2, 3, 4, 5, 5, 4, 3, 2, 1)
+N = 500
+RUN_ORDER = (2, 2, 2, 2, 2, 2, 2, 2)
 OUT = Path("git809-bash-pipe-results")
 
 SHELL = r"""
@@ -59,7 +59,7 @@ SHELL = r"""
   actual=$(git-ipc --version) || exit 34
   [[ $actual == "$expected" ]] || exit 35
   printf 'READY_CHECK %s\n' "$count"
-  for ((i=0;i<120;i++)); do
+  for ((i=0;i<500;i++)); do
     if (( i % 2 == 0 )); then
       a=$EPOCHREALTIME
       "$gitbin" --version >/dev/null || exit 41
@@ -110,7 +110,7 @@ def run_case(bash, script, git_shell, environment, workers, round_index, windows
             [bash, "--noprofile", "--norc", "-c", SHELL,
              "pool-ab", str(workers), script, git_shell],
             env=environment, stdin=subprocess.DEVNULL,
-            capture_output=True, timeout=240)
+            capture_output=True, timeout=120)
     except subprocess.TimeoutExpired as exc:
         stdout = (exc.stdout or b"").decode("utf-8", "replace")
         stderr = (exc.stderr or b"").decode("utf-8", "replace")
@@ -200,7 +200,7 @@ def main():
         "samples_per_case": N,
         "round_order": RUN_ORDER,
         "reader_timeout_ms": 100,
-        "pool_sizes": (1, 2, 3, 4, 5),
+        "pool_sizes": (2,),
         "manager_present_in_both_configurations": True,
         "results": [],
     }
