@@ -132,9 +132,14 @@ def run_case(bash, script, git_shell, environment, workers, round_index, windows
     errors = result.stderr.decode("utf-8", "strict")
     if result.returncode:
         complete = [row for row in output.splitlines() if row.startswith("PAIR ")]
+        failure_path = OUT / f"two-instance-failure-round-{round_index}.log"
+        failure_path.write_text(
+            "STDERR FULL\\n" + errors + "\\nSTDOUT FULL\\n" + output,
+            encoding="utf-8")
         raise AssertionError(
             f"pool={workers} round={round_index} rc={result.returncode} "
-            f"pairs={len(complete)} stderr={errors[-2000:]}")
+            f"pairs={len(complete)} first_stderr={errors[:1800]!r} "
+            f"last_stderr={errors[-1800:]!r} full_log={failure_path}")
     rows = output.splitlines()
     assert f"READY_CHECK {workers}" in rows, "worker ready/response missing"
     direct, ipc = [], []
