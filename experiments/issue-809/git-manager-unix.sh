@@ -87,8 +87,13 @@ git-ipc() {
       return 255
     }
   fi
-  IFS= read -r worker <&"$_GIT809_UNIX_REPLY_FD"
-  rc=$?
+  if [[ ${GIT809_REPLY_READ_MODE:-blocking} == timed ]]; then
+    IFS= read -r -t 1 worker <&"$_GIT809_UNIX_REPLY_FD"
+    rc=$?
+  else
+    IFS= read -r worker <&"$_GIT809_UNIX_REPLY_FD"
+    rc=$?
+  fi
   if (( rc != 0 )); then
     printf 'GIT-IPC ERROR: allocation response failed read_rc=%s partial=%q manager_pid=%s\n' "$rc" "$worker" "$_GIT809_UNIX_MANAGER_PID" >&2
     return 255
@@ -155,8 +160,8 @@ git-ipc() {
   exec 6<&-
   if [[ ${GIT809_PROFILE_PHASES:-} == 1 ]]; then
     profile_exit=$EPOCHREALTIME
-    printf 'GIT809_PHASE mode=%s start=%s allocated=%s opened=%s sent=%s drained=%s exited=%s\n' \
-      "${GIT809_PERSISTENT_REQ:-0}" "$profile_start" "$profile_alloc" "$profile_open" "$profile_sent" "$profile_drained" "$profile_exit" >&2
+    printf 'GIT809_PHASE mode=%s readmode=%s start=%s allocated=%s opened=%s sent=%s drained=%s exited=%s\n' \
+      "${GIT809_PERSISTENT_REQ:-0}" "${GIT809_REPLY_READ_MODE:-blocking}" "$profile_start" "$profile_alloc" "$profile_open" "$profile_sent" "$profile_drained" "$profile_exit" >&2
   fi
   if [[ $status =~ ^EXIT[[:space:]]([0-9]+)$ ]]; then
     return "${BASH_REMATCH[1]}"
