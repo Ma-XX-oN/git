@@ -22,10 +22,11 @@ PATCH = r"""      /*
        * ship this exception as a general MSYS2 policy.
        */
       {
-        const char *prefix = "\\\\\\\\.\\pipe\\git809-redirect-";
+        const char *prefix = "\\\\.\\pipe\\git809-redirect-";
         const size_t prefix_len = strlen (prefix);
         const char *candidate = suffix.path;
-        bool test_pipe = strncmp (candidate, prefix, prefix_len) == 0;
+        bool test_pipe = strlen (candidate) == prefix_len + 32
+                         && strncmp (candidate, prefix, prefix_len) == 0;
         if (test_pipe)
           {
             const char *p = candidate + prefix_len;
@@ -33,8 +34,6 @@ PATCH = r"""      /*
               if (!((p[n] >= '0' && p[n] <= '9')
                     || (p[n] >= 'a' && p[n] <= 'f')))
                 test_pipe = false;
-            if (p[32] != '\\0')
-              test_pipe = false;
           }
         if (test_pipe)
           {
