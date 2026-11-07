@@ -25,6 +25,13 @@ _git809_unix_source() {
   local launched=$! i
   for ((i=0;i<200;i++)); do
     if [[ -f $directory/ready.json ]]; then
+      # One persistent reader per owning Bash shell. Reopening it for each
+      # command can observe EOF from the prior reply writer before the
+      # server finishes closing that connection.
+      exec {_GIT809_UNIX_REPLY_FD}< "$directory/allocate-reply" || {
+        printf 'GIT-IPC ERROR: Unix allocation reply channel open failed\n' >&2
+        return 255
+      }
       _GIT809_UNIX_DIRECTORY=$directory
       _GIT809_UNIX_MANAGER_PID=$launched
       _GIT809_UNIX_MANAGER_LOG=$directory/manager.log
@@ -53,11 +60,15 @@ git-ipc() {
     return 255
   fi
   local dir=$_GIT809_UNIX_DIRECTORY worker count header arg chunk rc status
+  [[ -n ${_GIT809_UNIX_REPLY_FD:-} ]] || {
+    printf 'GIT-IPC ERROR: Unix allocation reply channel unavailable\n' >&2
+    return 255
+  }
   printf 'GET\n' > "$dir/allocate-req" || {
     printf 'GIT-IPC ERROR: allocation request failed\n' >&2
     return 255
   }
-  IFS= read -r worker < "$dir/allocate-reply"
+  IFS= read -r worker <&"$_GIT809_UNIX_REPLY_FD"
   rc=$?
   if (( rc != 0 )); then
     printf 'GIT-IPC ERROR: allocation response failed read_rc=%s partial=%q manager_pid=%s\n' "$rc" "$worker" "$_GIT809_UNIX_MANAGER_PID" >&2
