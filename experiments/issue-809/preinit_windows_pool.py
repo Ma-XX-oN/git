@@ -47,7 +47,12 @@ FILE_FLAG_FIRST_PIPE_INSTANCE=0x00080000
 PIPE_TYPE_BYTE=0
 PIPE_WAIT=0
 ERROR_PIPE_CONNECTED=535
-POLL_SECONDS=10
+POLL_SECONDS=1
+# An allocated worker is single-use. The manager kills abandoned clients
+# after a finite period without inspecting or proxying command bytes.
+MAX_COMMAND_SECONDS=int(os.environ.get("GIT_PREINIT_TIMEOUT_SECONDS","600"))
+if not 1<=MAX_COMMAND_SECONDS<=3600:
+  raise RuntimeError("GIT_PREINIT_TIMEOUT_SECONDS must be 1..3600")
 
 class Pool:
   def __init__(self, git:Path, target:int):
@@ -55,6 +60,7 @@ class Pool:
     self.target=target
     self.ready=queue.Queue()
     self.children=[]
+    self.checked_out={}
     self.lock=threading.Lock()
     self.closing=threading.Event()
     self.errors=[]
@@ -90,8 +96,21 @@ class Pool:
       return "WAIT\n"
     # Start replacement before replying to client. Never join this thread.
     threading.Thread(target=self.spawn,daemon=True).start()
+    with self.lock:
+      self.checked_out[p.pid]=(p,time.monotonic())
     print("ALLOCATED "+str(p.pid),flush=True)
     return str(p.pid)+"\n"
+
+  def reap(self):
+    now=time.monotonic()
+    with self.lock:
+      for pid,(p,start) in list(self.checked_out.items()):
+        if p.poll() is not None:
+          del self.checked_out[pid]
+        elif now-start > MAX_COMMAND_SECONDS:
+          print("WORKER_TIMEOUT "+str(pid),flush=True)
+          p.kill()
+          del self.checked_out[pid]
 
   def close(self):
     self.closing.set()
@@ -204,6 +223,7 @@ def main():
     tmp.replace(args.ready_file)
     print("READY "+json.dumps(record),flush=True)
     while K.WaitForSingleObject(owner,POLL_SECONDS*1000)==WAIT_TIMEOUT:
+      pool.reap()
       if not allocator.is_alive():
         raise RuntimeError("allocation server unexpectedly stopped")
       if pool.errors:
