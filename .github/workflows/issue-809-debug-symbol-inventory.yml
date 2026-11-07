@@ -1,0 +1,37 @@
+name: Git 809 inspect runtime debug symbols
+on:
+  push:
+    branches: [experiment-809-detours-handle-trace]
+    paths:
+      - .github/workflows/issue-809-debug-symbol-inventory.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  sdk-debug-symbol-inventory:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+        with:
+          flavor: full
+      - name: Inspect installed runtime build ID and matching separate debug symbols
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export MSYSTEM=MSYS
+          export PATH="/usr/bin:$PATH"
+          pacman -Q msys2-runtime
+          pacman -Q msys2-runtime-devel || true
+          sha256sum /usr/bin/msys-2.0.dll
+          objdump -s -j .gnu_debuglink /usr/bin/msys-2.0.dll || true
+          if test -s /usr/bin/msys-2.0.dbg; then
+            printf 'GIT809_DBG_PRESENT=1\n'
+            sha256sum /usr/bin/msys-2.0.dbg
+            objdump --dwarf=info /usr/bin/msys-2.0.dbg | grep -m 3 DW_TAG_subprogram || test "${PIPESTATUS[0]}" = 141
+          else
+            printf 'GIT809_DBG_PRESENT=0\n'
+          fi
