@@ -42,6 +42,45 @@ jobs:
           # Keep these compatibility additions local to this temporary checkout.
           printf '%s\n' 'COMPAT_OBJS += compat/win32/path-utils.o' 'NEEDS_LIBICONV = YesPlease' >> config.mak
           python3 experiments/issue-809/pool_size_ab_benchmark.py
+          # Diagnostic only: measure the Windows wait primitive used by MSYS2.
+          cat > /tmp/git809-wait-probe.c <<'GIT809_C'
+          #include <windows.h>
+          #include <stdio.h>
+          #include <stdlib.h>
+          #define SAMPLES 200
+          static int compare(const void *a, const void *b)
+          {
+            double x = *(const double *)a, y = *(const double *)b;
+            return (x > y) - (x < y);
+          }
+          int main(void)
+          {
+            HANDLE event = CreateEventA(NULL, TRUE, FALSE, NULL);
+            LARGE_INTEGER frequency;
+            double samples[SAMPLES], total = 0;
+            int i, above10 = 0;
+            if (!event || !QueryPerformanceFrequency(&frequency) || frequency.QuadPart <= 0)
+              return 2;
+            for (i = 0; i < SAMPLES; i++) {
+              LARGE_INTEGER begin, end;
+              DWORD result;
+              if (!QueryPerformanceCounter(&begin)) return 3;
+              result = WaitForSingleObject(event, 1);
+              if (!QueryPerformanceCounter(&end) || result != WAIT_TIMEOUT) return 4;
+              samples[i] = 1000.0 * (double)(end.QuadPart - begin.QuadPart) / (double)frequency.QuadPart;
+              total += samples[i];
+              if (samples[i] >= 10.0) above10++;
+            }
+            qsort(samples, SAMPLES, sizeof(samples[0]), compare);
+            printf("GIT809_NATIVE_WAIT requested=1ms samples=%d median_ms=%.4f p95_ms=%.4f min_ms=%.4f max_ms=%.4f above10ms=%d mean_ms=%.4f\n",
+              SAMPLES, (samples[99] + samples[100])/2, samples[189], samples[0],
+              samples[SAMPLES-1], above10, total/SAMPLES);
+            CloseHandle(event);
+            return 0;
+          }
+          GIT809_C
+          gcc -O2 -Wall -Wextra /tmp/git809-wait-probe.c -o /tmp/git809-wait-probe.exe -lkernel32
+          /tmp/git809-wait-probe.exe
           # Phase profiling is separate from acceptance timings.
           test -f git.exe
           export GIT809_WORKER_GIT="$PWD/git.exe"
