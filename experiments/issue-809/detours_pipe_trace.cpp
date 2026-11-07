@@ -83,10 +83,10 @@ static void emit(const char* op, NTSTATUS status, HANDLE handle, ACCESS_MASK acc
   DWORD tid = GetCurrentThreadId();
   int length = _snprintf_s(line, sizeof(line), _TRUNCATE,
     "GIT809_DETOURS seq=%ld tick=%llu pid=%lu tid=%lu op=%s status=0x%08lx "
-    "handle=%p access=0x%08lx opts=0x%08lx root=%p path=%s stack=",
+    "handle=%p access=0x%08lx opts=0x%08lx root=%p imagebase=%p path=%s stack=",
     InterlockedIncrement(&events), GetTickCount64(), GetCurrentProcessId(), tid,
     op, (unsigned long)status, handle, (unsigned long)access, (unsigned long)opts,
-    attrs ? attrs->RootDirectory : nullptr, path);
+    attrs ? attrs->RootDirectory : nullptr, GetModuleHandleW(L"msys-2.0.dll"), path);
   if (length > 0) {
     for (USHORT i = 0; i < frames && length < (int)sizeof(line)-40; ++i) {
       int n = _snprintf_s(line+length, sizeof(line)-length, _TRUNCATE, "%p,", stack[i]);
