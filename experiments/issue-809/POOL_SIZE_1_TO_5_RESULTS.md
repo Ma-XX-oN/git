@@ -69,3 +69,28 @@ The macOS full 2/4/5 matrix did not pass acceptance; its single-round
 points cannot independently establish an optimum pool size, nor
 establish that the manager is unnecessary. Fix and test the
 allocation reply protocol separately before accepting that claim.
+
+
+## Follow-up: allocation FIFO lifecycle fix (pending macOS acceptance)
+
+After the failed macOS run, a local FIFO reproduction demonstrated this
+ordering: Bash reads one reply, opens a new read endpoint while the prior
+writer is still connected, then receives EOF when the prior writer closes.
+The old implementation opened and closed the reply writer for every GET and
+opened a new reader for every `git-ipc` call. This creates an avoidable
+request/reply lifecycle race even with strictly serial Git commands.
+
+The experimental fix gives the owning Bash session a persistent reply
+reader and gives the Unix manager a matching persistent reply writer.
+Only the allocation channel changes; the four Git-worker FIFOs and
+immediate asynchronous worker replenishment remain unchanged. Manager
+startup bounds the writer connection to 5 seconds and verifies owner
+liveness. Diagnostic changes before the fix were committed as
+`13bce6c9` and `502cfc08`; the lifecycle correction is at
+`8d45a257`, `ce3d73b1`, and `6bcbd46d`.
+
+**Acceptance is pending** for exact source
+`6bcbd46da16e50d869450c915ca7f450ea9991a8`.
+GitHub Actions run: https://github.com/Ma-XX-oN/git/actions/runs/42338691987.
+The original failed workflow data above remains historical, not
+retroactively accepted.
