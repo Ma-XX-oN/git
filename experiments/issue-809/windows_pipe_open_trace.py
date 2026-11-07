@@ -57,8 +57,10 @@ def main() -> int:
   parser.add_argument("--client", choices=("bash", "native", "attached"), default="bash")
   parser.add_argument("--builtin-dll")
   parser.add_argument("--expect", choices=("any", "success", "failure"), default="any")
+  parser.add_argument("--name-kind", choices=("matched", "unmatched"), default="matched")
   args = parser.parse_args()
-  pipe_name = "\\\\.\\pipe\\git809-redirect-" + uuid.uuid4().hex
+  prefix = "git809-redirect-" if args.name_kind == "matched" else "git809-unmatched-"
+  pipe_name = "\\.\pipe\\" + prefix + uuid.uuid4().hex
   handles = []
   logs = []
   lock = threading.Lock()
