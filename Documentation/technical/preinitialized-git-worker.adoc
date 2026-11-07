@@ -1,0 +1,96 @@
+Preinitialized Git worker (Windows experimental)
+=============================================
+
+This document describes the Windows-only `git --preinit` process contract.
+It is not the ordinary Git CLI interface. The initial upstream proposal
+must separately demonstrate binary, error, timeout and security acceptance
+before this behavior can be called production-ready.
+
+Launch and ownership
+--------------------
+
+`git --preinit` (no other arguments) starts a *single-use* native Git
+worker. It writes `READY <native-win32-pid>\n` to the original launcher
+stdout after creating four native Windows named pipes, then waits for a
+command request. A separate shell-owned manager starts several workers,
+collects READY messages, returns an available worker's PID to its caller
+and immediately starts preparing a replacement. The manager only
+allocates workers; it does **not** forward Git arguments, stdout, stderr
+or exit status.
+
+Four direct worker channels
+---------------------------
+
+For PID `12345` the endpoints are:
+
+* `\\\\.\\pipe\\12345-stdin`: client writes one argument frame;
+* `\\\\.\\pipe\\12345-stdout`: worker writes stdout bytes;
+* `\\\\.\\pipe\\12345-stderr`: worker writes stderr bytes;
+* `\\\\.\\pipe\\12345-exit-code`: worker writes its final status.
+
+The Git for Windows Bash implementation uses two native pipe instances
+for each *logical* endpoint. This is an interoperability workaround for
+the extra Bash connection established before the data-bearing handle,
+not a separate read/write channel. The worker accepts its channels in
+the order stdout, stderr, exit-code, stdin. Pipe names are process-PID
+scoped; the manager's allocation pipe is a fifth logical channel.
+
+The stdin frame consists of a little-endian uint32 argument count
+(including the leading `git` string), then the count's NUL-terminated
+UTF-8 byte strings concatenated without padding. The frame must contain
+1..32 strings, be no more than 4096 bytes total, and name `git` as its
+first string. The worker rejects malformed lengths and malformed UTF-8.
+This `stdin` endpoint is a command *frame*, not general forwarding of
+the Git command's standard input.
+
+The worker executes Git once. stdout and stderr are raw byte streams
+without framing and are required to preserve bytes including embedded
+NUL. Each stream has its own pipe so they can be drained concurrently.
+After Git execution, the worker flushes and closes both streams. Only
+then does it send the ASCII status record `EXIT <decimal-code>\n` on the
+exit-code channel. Consumers must drain stdout and stderr to EOF before
+using the exit-code channel, and must not confuse empty-but-open with EOF.
+
+The Bash `git-ipc` experimental client uses `read -d ''` with a 100 ms
+timeout for text workloads and has no binary-output guarantee. Binary
+parity must be exercised using a native client that preserves bytes
+rather than Bash variables. The original Git process's native status is
+returned for successfully completed commands; the Bash IPC wrapper
+returns 255 and prints `GIT-IPC ERROR: ...` on a transport failure.
+
+Scope and lifecycle restrictions
+--------------------------------
+
+Ordinary `git <command>` and every non-`--preinit` invocation must stay
+unchanged on all operating systems. Only Windows enters this worker
+mode. The experimental Linux/macOS FIFOs are not part of the proposed
+Windows public switch; both continue to use ordinary Git by default.
+
+Current request scope is a single, noninteractive command, executed in
+the worker's inherited working directory and environment. Interactive
+stdin, per-request cwd/env changes, general terminal usage, concurrent
+requests to the same worker, arbitrary signals and cancellation, and
+full Git command parity are **not** promised.
+
+Security and recovery acceptance remains mandatory. Production use
+requires verifying access control for PID-addressed pipes, ownership
+validation, client disconnect/abandoned-output time limits, stale
+workers, owner exit and cancellation; an open pipe alone is not proof
+that the caller is authorized. On ordinary worker exit Windows releases
+kernel pipe handles, but an unresponsive worker must be terminated by
+its owning manager. The shell manager's temporary ready/log directory
+has separate lifecycle cleanup requirements.
+
+Native acceptance checks
+------------------------
+
+The Windows CI must compile this *normal source checkout* without
+the temporary `GIT809_WORKER_PROBE` instrumentation, test the READY/PID
+handshake, four pipe channels, framing and statuses, compare stdout,
+stderr and status against direct Git (including NUL-containing binary
+data, Unicode and nonzero exits), test slow readers/EOF and timeout
+failure paths, test worker replacement and normal Git compatibility,
+then benchmark at least 100 paired operations. CI results are valid
+only for the precise source commit and configuration tested.
+
+Issue: https://github.com/Ma-XX-oN/git/issues/1
