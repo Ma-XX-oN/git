@@ -89,19 +89,6 @@ jobs:
             /usr/src/MSYS2-packages/msys2-runtime/src/msys2-runtime/winsup/cygwin/path.cc
           cd /usr/src/MSYS2-packages/msys2-runtime
           git -C src/msys2-runtime diff -- winsup/cygwin/path.cc
-          # Historical source with newer GCC: disable only this diagnosed
-          # warning-as-error; do not change dcrt0.cc or disable other errors.
-          python3 - <<'GIT809_COMPILER'
-          from pathlib import Path
-          p = Path("PKGBUILD")
-          source = p.read_text()
-          original = '  CXXFLAGS="$OPTIM -pipe -ggdb"'
-          assert source.count(original) == 1, "historical compiler contract drift"
-          # GCC 16 emits additional C++20 compatibility warnings in the
-          # historical source. Keep them visible, but do not treat
-          # pre-existing warnings as compiler failures in this experiment.
-          p.write_text(source.replace(original, '  CXXFLAGS="$OPTIM -pipe -ggdb -Wno-error"'))
-          GIT809_COMPILER
           makepkg --noextract --noprepare --syncdeps --noconfirm --skipchecksums
           test -s src/dest/usr/bin/msys-2.0.dll
           workspace_posix=$(cygpath -u "$GITHUB_WORKSPACE")
