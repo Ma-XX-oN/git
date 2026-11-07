@@ -47,6 +47,7 @@ FILE_FLAG_FIRST_PIPE_INSTANCE=0x00080000
 PIPE_TYPE_BYTE=0
 PIPE_WAIT=0
 ERROR_PIPE_CONNECTED=535
+ERROR_NO_DATA=232
 POLL_SECONDS=10
 
 class Pool:
@@ -120,7 +121,7 @@ def allocation_server(owner_pid:int,pool:Pool):
     def accept(h,index):
       ok=bool(K.ConnectNamedPipe(h,None))
       err=0 if ok else C.get_last_error()
-      connected.put((index,ok or err==ERROR_PIPE_CONNECTED,err))
+      connected.put((index,ok or err in (ERROR_PIPE_CONNECTED,ERROR_NO_DATA),err))
     try:
       for index in range(2):
         h=K.CreateNamedPipeW(address,
@@ -138,8 +139,17 @@ def allocation_server(owner_pid:int,pool:Pool):
       second_index,second_ok,second_error=connected.get(timeout=15)
       if not first_ok or not second_ok or first_index==second_index:
         raise OSError(first_error or second_error,"ConnectNamedPipe(allocation)")
-      h=handles[second_index]
-      print("ALLOCATOR_CONNECTED probe="+str(first_index)+" data="+str(second_index),flush=True)
+      if first_error==ERROR_NO_DATA and second_error==ERROR_NO_DATA:
+        raise RuntimeError("both allocation clients disconnected before data exchange")
+      if second_error==ERROR_NO_DATA and first_error!=ERROR_NO_DATA:
+        probe_index=second_index
+        data_index=first_index
+      else:
+        probe_index=first_index
+        data_index=second_index
+      h=handles[data_index]
+      print("ALLOCATOR_CONNECTED probe="+str(probe_index)+" data="+str(data_index)+
+            " errors="+str((first_error,second_error)),flush=True)
       buf=C.create_string_buffer(64)
       count=W.DWORD()
       if K.ReadFile(h,buf,64,C.byref(count),None) and buf.raw[:count.value]==b"GET\n":
