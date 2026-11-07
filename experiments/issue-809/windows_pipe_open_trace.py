@@ -58,6 +58,8 @@ def main() -> int:
   parser.add_argument("--client", choices=("bash", "native", "attached"), default="bash")
   parser.add_argument("--builtin-dll")
   parser.add_argument("--strace", help="Windows Cygwin/MSYS strace.exe for runtime event logging")
+  parser.add_argument("--detours-launcher", help="Detours injector exe")
+  parser.add_argument("--detours-dll", help="Detours Nt API hook DLL")
   parser.add_argument("--expect", choices=("any", "success", "failure"), default="any")
   parser.add_argument("--name-kind", choices=("matched", "unmatched", "malformed"), default="matched")
   args = parser.parse_args()
@@ -156,8 +158,28 @@ def main() -> int:
         command = [args.strace, "-m", "debug+syscall+flush+inherit",
                    "-o", str(trace_path)] + command
         record(f"TRACE_FILE={trace_path}")
-      child = subprocess.run(command, capture_output=True, timeout=12,
-                             check=False)
+      injected_log = None
+      env = os.environ.copy()
+      if args.detours_launcher:
+        if not args.detours_dll or not os.path.isfile(args.detours_dll):
+          parser.error("--detours-launcher requires existing --detours-dll")
+        injected_log = Path(os.environ.get("RUNNER_TEMP", os.getcwd())) / (
+          f"git809-detours-{args.direction}-{args.name_kind}-{identifier}.log")
+        env["GIT809_PIPE_LEAF"] = prefix + identifier
+        env["GIT809_DETOURS_LOG"] = str(injected_log)
+        command = [args.detours_launcher, args.detours_dll] + command
+        record(f"DETOURS_LOG={injected_log} leaf={prefix + identifier}")
+      child = subprocess.run(command, capture_output=True, timeout=15,
+                             check=False, env=env)
+      if injected_log:
+        if not injected_log.exists():
+          raise RuntimeError(f"No Detours native log produced: {injected_log}; stderr={child.stderr!r}")
+        native_lines = injected_log.read_text(encoding="utf-8",errors="replace").splitlines()
+        record(f"DETOURS_NATIVE_COUNT={len(native_lines)} trace_file={injected_log}")
+        for line in native_lines[-100:]:
+          record(f"NATIVE {line}")
+        if not any("op=HOOK_READY" in x for x in native_lines):
+          raise RuntimeError(f"Detours did not confirm hook installation: {injected_log}")
       if trace_path:
         if not trace_path.is_file():
           raise RuntimeError(f"Runtime trace not produced: {trace_path}")
