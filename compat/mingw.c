@@ -3783,19 +3783,57 @@ static int git_preinit_worker(void)
   int i, j, count, pos, rc = 120, written, outfd, errfd;
   const char *args[33] = {0};
   DWORD pid = GetCurrentProcessId();
+  HANDLE token = NULL;
+  TOKEN_USER *token_user = NULL;
+  DWORD token_size = 0, acl_size;
+  ACL *acl = NULL;
+  SECURITY_DESCRIPTOR security_descriptor;
+  SECURITY_ATTRIBUTES security_attributes;
 
   for (i = 0; i < 4; i++)
     for (j = 0; j < 2; j++)
       pipes[i][j] = INVALID_HANDLE_VALUE;
+
+  /*
+   * A pipe's default security descriptor gives Everyone and Anonymous
+   * read access. Restrict all four PID-addressed channels to the process
+   * owner before publishing their names in the READY handshake.
+   */
+  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+    goto cleanup;
+  GetTokenInformation(token, TokenUser, NULL, 0, &token_size);
+  if (!token_size || GetLastError() != ERROR_INSUFFICIENT_BUFFER)
+    goto cleanup;
+  token_user = malloc(token_size);
+  if (!token_user ||
+      !GetTokenInformation(token, TokenUser, token_user, token_size,
+                           &token_size))
+    goto cleanup;
+  acl_size = sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE) -
+             sizeof(DWORD) + GetLengthSid(token_user->User.Sid);
+  acl = malloc(acl_size);
+  if (!acl ||
+      !InitializeAcl(acl, acl_size, ACL_REVISION) ||
+      !AddAccessAllowedAce(acl, ACL_REVISION, GENERIC_ALL,
+                           token_user->User.Sid) ||
+      !InitializeSecurityDescriptor(&security_descriptor,
+                                    SECURITY_DESCRIPTOR_REVISION) ||
+      !SetSecurityDescriptorDacl(&security_descriptor, TRUE, acl, FALSE))
+    goto cleanup;
+  security_attributes.nLength = sizeof(security_attributes);
+  security_attributes.lpSecurityDescriptor = &security_descriptor;
+  security_attributes.bInheritHandle = FALSE;
+
   for (i = 0; i < 4; i++) {
     if (snprintf(names[i], sizeof(names[i]), "\\\\.\\pipe\\%lu-%s",
                  (unsigned long)pid, suffixes[i]) >= sizeof(names[i]))
       goto cleanup;
     for (j = 0; j < 2; j++) {
       pipes[i][j] = CreateNamedPipeA(names[i],
-        i == 0 ? PIPE_ACCESS_INBOUND : PIPE_ACCESS_OUTBOUND,
+        (i == 0 ? PIPE_ACCESS_INBOUND : PIPE_ACCESS_OUTBOUND) |
+          (j == 0 ? FILE_FLAG_FIRST_PIPE_INSTANCE : 0),
         PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-        2, 65536, 65536, 5000, NULL);
+        2, 65536, 65536, 5000, &security_attributes);
       if (pipes[i][j] == INVALID_HANDLE_VALUE) {
         rc = 121;
         goto cleanup;
@@ -3927,6 +3965,10 @@ cleanup:
     for (j = 0; j < 2; j++)
       if (pipes[i][j] != INVALID_HANDLE_VALUE)
         CloseHandle(pipes[i][j]);
+  free(acl);
+  free(token_user);
+  if (token)
+    CloseHandle(token);
   return rc;
 }
 int wmain(int argc, const wchar_t **wargv)
