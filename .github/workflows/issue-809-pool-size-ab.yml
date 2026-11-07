@@ -42,6 +42,11 @@ jobs:
           # Keep these compatibility additions local to this temporary checkout.
           printf '%s\n' 'COMPAT_OBJS += compat/win32/path-utils.o' 'NEEDS_LIBICONV = YesPlease' >> config.mak
           python3 experiments/issue-809/pool_size_ab_benchmark.py
+          # Phase profiling is separate from acceptance timings.
+          test -f git.exe
+          export GIT809_WORKER_GIT="$PWD/git.exe"
+          export GIT809_PROFILE_PHASES=1
+          bash --noprofile --norc -c 'source experiments/issue-809/git-manager-unix.sh 3 || exit 1; for ((i=0;i<40;i++)); do git-ipc --version >/dev/null || exit 2; done'
       - name: Preserve all raw measurements
         if: always()
         uses: actions/upload-artifact@v4
