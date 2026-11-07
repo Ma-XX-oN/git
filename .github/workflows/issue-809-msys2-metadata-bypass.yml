@@ -114,9 +114,15 @@ jobs:
             }
             Copy-Item $win $runtime -Force
             foreach ($direction in @('read','write')) {
-              Write-Output "PIPE_METADATA_CASE mode=patched direction=$direction instances=1"
-              python -u experiments/issue-809/windows_pipe_open_trace.py --client bash --instances 1 --direction $direction --bash "$sdk\bash.exe" --expect success
+              Write-Output "PIPE_METADATA_CASE mode=patched direction=$direction instances=1 name=matched"
+              python -u experiments/issue-809/windows_pipe_open_trace.py --client bash --instances 1 --direction $direction --bash "$sdk\bash.exe" --expect success --name-kind matched
               if ($LASTEXITCODE -ne 0) { throw "Patched test failed: $direction" }
+              Write-Output "PIPE_METADATA_CASE mode=patched direction=$direction instances=1 name=unmatched"
+              python -u experiments/issue-809/windows_pipe_open_trace.py --client bash --instances 1 --direction $direction --bash "$sdk\bash.exe" --expect failure --name-kind unmatched
+              if ($LASTEXITCODE -ne 0) { throw "Unmatched negative test failed: $direction" }
+              Write-Output "PIPE_METADATA_CASE mode=patched direction=$direction instances=2 name=unmatched"
+              python -u experiments/issue-809/windows_pipe_open_trace.py --client bash --instances 2 --direction $direction --bash "$sdk\bash.exe" --expect success --name-kind unmatched
+              if ($LASTEXITCODE -ne 0) { throw "Unmatched two-instance control failed: $direction" }
             }
           }
           finally {
