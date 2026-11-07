@@ -78,6 +78,7 @@ git-ipc() {
     printf 'git-ipc requires a running manager and at most 31 arguments\n' >&2
     printf 'GIT-IPC ERROR: invalid invocation\n' >&2; return 255
   fi
+  [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE start bashpid=%s\n' "$BASHPID" >>"$_GIT809_MANAGER_LOG"
   local allocator; printf -v allocator '%s%s' '\\.\pipe\git809-allocate-' "$_GIT809_OWNER_WINPID"
   local pid i count header arg status line
   for ((i=0;i<200;i++)); do
@@ -91,6 +92,7 @@ git-ipc() {
   printf 'GET\n' >&3 || { exec 3>&-; printf 'GIT-IPC ERROR: allocator request write failed\n' >&2; return 255; }
   IFS= read -r pid <&3 || { exec 3>&-; printf 'GIT-IPC ERROR: allocator response read failed\n' >&2; return 255; }
   exec 3>&-
+  [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE allocated pid=%s bashpid=%s\n' "$pid" "$BASHPID" >>"$_GIT809_MANAGER_LOG"
   if [[ $pid == WAIT ]]; then
     printf 'Git worker pool temporarily depleted\n' >&2
     printf 'GIT-IPC ERROR: no worker ready\n' >&2; return 255
@@ -107,9 +109,13 @@ git-ipc() {
   local pexit="${stem}-exit-code"
 
   # Open in the same order that the native worker accepts connections.
+  [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE open stdout pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
   exec 4<"$pout" || { printf 'GIT-IPC ERROR: stdout pipe open failed\n' >&2; return 255; }
+  [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE open stderr pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
   exec 5<"$perr" || { exec 4<&-; printf 'GIT-IPC ERROR: stderr pipe open failed\n' >&2; return 255; }
+  [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE open exit pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
   exec 6<"$pexit" || { exec 4<&- 5<&-; printf 'GIT-IPC ERROR: exit-status pipe open failed\n' >&2; return 255; }
+  [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE open stdin pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
   exec 7>>"$pstdin" || { exec 4<&- 5<&- 6<&-; printf 'GIT-IPC ERROR: stdin pipe open failed\n' >&2; return 255; }
 
   count=$(( $# + 1 ))
@@ -120,6 +126,7 @@ git-ipc() {
     printf '%s\x00' "$arg" >&7 || { printf 'GIT-IPC ERROR: worker request write failed\n' >&2; return 255; }
   done
   exec 7>&-
+  [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE sent stdin pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
 
   # Experimental second timing mode: stdout accumulates all available
   # text up to a 100 ms deadline without requiring a newline or byte count.
@@ -156,6 +163,7 @@ git-ipc() {
         fi
       fi
     done
+    [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE drained data pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
     IFS= read -r status <&6 || { exec 6<&-; printf 'GIT-IPC ERROR: exit-status read failed\n' >&2; return 255; }
     exec 6<&-
     if [[ $status =~ ^EXIT[[:space:]]([0-9]+)$ ]]; then
