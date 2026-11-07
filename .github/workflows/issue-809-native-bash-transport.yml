@@ -48,10 +48,22 @@ jobs:
             [[ "$(<"$sample")" == "$expected" ]] || exit 55
             rm -f "$sample"
             for ((i=0; i<120; i++)); do
-              first=$EPOCHREALTIME
-              git-ipc --version >/dev/null || exit 56
-              last=$EPOCHREALTIME
-              printf "NATIVE_BASH_SAMPLE i=%s begin=%s end=%s\\n" "$i" "$first" "$last"
+              if (( i % 2 == 0 )); then
+                a=$EPOCHREALTIME
+                "$GIT809_WORKER_GIT" --version >/dev/null || exit 56
+                b=$EPOCHREALTIME
+                c=$EPOCHREALTIME
+                git-ipc --version >/dev/null || exit 57
+                d=$EPOCHREALTIME
+              else
+                c=$EPOCHREALTIME
+                git-ipc --version >/dev/null || exit 57
+                d=$EPOCHREALTIME
+                a=$EPOCHREALTIME
+                "$GIT809_WORKER_GIT" --version >/dev/null || exit 56
+                b=$EPOCHREALTIME
+              fi
+              printf "NATIVE_BASH_PAIR i=%s direct_start=%s direct_end=%s ipc_start=%s ipc_end=%s\\n" "$i" "$a" "$b" "$c" "$d"
             done
             printf "NATIVE_BASH_PASS count=120 workers=3\\n"
           '
