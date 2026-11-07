@@ -26,10 +26,12 @@ jobs:
           $bash = 'C:\Program Files\Git\bin\bash.exe'
           if (-not (Test-Path $bash)) { throw 'Git Bash executable missing' }
           python -m py_compile experiments/issue-809/windows_pipe_open_trace.py
-          foreach ($direction in @('read','write')) {
-            foreach ($count in @(1,2)) {
-              Write-Output "PIPE_CASE direction=$direction instances=$count"
-              python -u experiments/issue-809/windows_pipe_open_trace.py --instances $count --direction $direction --bash $bash
-              if ($LASTEXITCODE -ne 0) { throw "Trace probe failed: $direction $count" }
+          foreach ($client in @('native','bash')) {
+            foreach ($direction in @('read','write')) {
+              foreach ($count in @(1,2)) {
+                Write-Output "PIPE_CASE client=$client direction=$direction instances=$count"
+                python -u experiments/issue-809/windows_pipe_open_trace.py --client $client --instances $count --direction $direction --bash $bash
+                if ($LASTEXITCODE -ne 0) { throw "Trace probe failed: $client $direction $count" }
+              }
             }
           }
