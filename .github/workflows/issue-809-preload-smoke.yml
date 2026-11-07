@@ -1,0 +1,36 @@
+name: Git 809 native preload Windows IPC smoke
+on:
+  push:
+    branches: [feature/git-preinit-windows-upstream]
+    paths:
+      - compat/mingw.c
+      - git.c
+      - t/helper/git809-preload-smoke.py
+      - .github/workflows/issue-809-preload-smoke.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-preload:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Build real Git source with Git for Windows SDK
+        shell: bash
+        run: |
+          . /etc/profile
+          make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git.exe
+      - name: Verify four-channel worker with early-closed stdin and exit propagation
+        shell: bash
+        run: |
+          . /etc/profile
+          PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
+          "$PYTHON_EXE" -m py_compile t/helper/git809-preload-smoke.py
+          "$PYTHON_EXE" t/helper/git809-preload-smoke.py "$(cygpath -w "$PWD/git.exe")"
