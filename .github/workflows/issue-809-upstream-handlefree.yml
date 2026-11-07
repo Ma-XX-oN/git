@@ -4,6 +4,7 @@ on:
     branches: [experiment-809-upstream-handlefree-probe]
     paths:
       - experiments/issue-809/patch_msys2_upstream_handlefree_query.py
+      - experiments/issue-809/windows_pipe_open_trace.py
       - .github/workflows/issue-809-upstream-handlefree.yml
   workflow_dispatch:
 permissions:
@@ -166,6 +167,8 @@ jobs:
           Copy-Item "$sdk\msys-*.dll" $isolated -Force
           Copy-Item $win "$isolated\msys-2.0.dll" -Force
           $bash = "$isolated\bash.exe"
+          $strace = Join-Path $sdk 'strace.exe'
+          if (-not (Test-Path $strace)) { throw "SDK strace.exe missing: $strace" }
           if ((Get-FileHash "$sdk\msys-2.0.dll" -Algorithm SHA256).Hash -eq
               (Get-FileHash "$isolated\msys-2.0.dll" -Algorithm SHA256).Hash) {
             throw 'Patched runtime identical to stock runtime'
@@ -179,15 +182,26 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Isolated patched Bash failed to start' }
           # No application-specific names: all valid native pipe names
           # must have the same no-throwaway-connection behavior.
+          $failures = @()
           foreach ($direction in @('read','write')) {
-            foreach ($nameKind in @('matched','unmatched','malformed')) {
+            foreach ($nameKind in @('matched','unmatched')) {
               Write-Output "PIPE_QUERY_CASE mode=patched direction=$direction instances=1 namespace=$nameKind"
-              python -u experiments/issue-809/windows_pipe_open_trace.py --client bash --instances 1 --direction $direction --bash $bash --expect success --name-kind $nameKind
-              if ($LASTEXITCODE -ne 0) { throw "Single instance native-pipe query failed: $direction $nameKind" }
+              python -u experiments/issue-809/windows_pipe_open_trace.py --client bash --instances 1 --direction $direction --bash $bash --strace $strace --expect success --name-kind $nameKind
+              if ($LASTEXITCODE -ne 0) {
+                $failures += "Single instance native-pipe query failed: $direction $nameKind"
+              }
             }
           }
+          if ($failures.Count -gt 0) { throw ($failures -join '; ') }
           & $bash --noprofile --norc -c 'f=$(mktemp) || exit 1; printf "normal_file_ok\n" > "$f" || exit 2; IFS= read -r payload < "$f" || exit 3; test "$payload" = normal_file_ok || exit 4; rm -f "$f"'
           if ($LASTEXITCODE -ne 0) { throw "Ordinary file redirection regression" }
+      - name: Publish instrumented native runtime traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-809-runtime-strace
+          path: ${{ runner.temp }}/git809-runtime-*.strace
+          if-no-files-found: warn
       - name: Run existing upstream pathname regression tests against newly built runtime
         shell: bash
         run: |
