@@ -99,6 +99,7 @@ def run(args):
     os.mkfifo(response, 0o600)
     req_fd = os.open(request, os.O_RDWR | os.O_NONBLOCK)
     incoming = bytearray()
+    response_fd = None
     try:
         for _ in range(args.workers):
             pool.spawn()
@@ -108,6 +109,12 @@ def run(args):
         ready.write_text(json.dumps({"state": "READY", "workers": args.workers,
                          "manager_pid": os.getpid()}) + "\n", encoding="utf-8")
         print("POOL_READY " + str(args.workers), flush=True)
+        # Keep one writer open for the entire manager session. Reopening the
+        # writer per request lets Bash's next read attach to the previous
+        # writer before it closes, causing a spurious EOF on macOS.
+        # The shell opens its persistent reader after observing ready.json.
+        response_fd = os.open(response, os.O_WRONLY)
+        print("ALLOC_REPLY_SESSION_READY", flush=True)
         while owner_alive(args.owner_pid) and not pool.errors:
             readable, _, _ = select.select([req_fd], [], [], 0.25)
             if not readable:
@@ -122,23 +129,16 @@ def run(args):
                 line, _, remainder = incoming.partition(b"\n")
                 incoming = bytearray(remainder)
                 answer = pool.allocate() if line == b"GET" else "INVALID"
-                print("ALLOC_REPLY_BEGIN answer=" + repr(answer), flush=True)
-                fd = os.open(response, os.O_WRONLY)
-                print("ALLOC_REPLY_OPEN answer=" + repr(answer), flush=True)
-                try:
-                    payload = (answer + "\n").encode("utf-8")
-                    written = os.write(fd, payload)
-                    print("ALLOC_REPLY_WRITE bytes=" + str(written) +
-                          " expected=" + str(len(payload)), flush=True)
-                    if written != len(payload):
-                        raise RuntimeError("short FIFO allocation reply write")
-                finally:
-                    os.close(fd)
-                    print("ALLOC_REPLY_CLOSED", flush=True)
+                payload = (answer + "\n").encode("utf-8")
+                written = os.write(response_fd, payload)
+                if written != len(payload):
+                    raise RuntimeError("short FIFO allocation reply write")
         if pool.errors:
             raise RuntimeError("worker initialization failure: " + repr(pool.errors))
     finally:
         ready.unlink(missing_ok=True) if "ready" in locals() else None
+        if response_fd is not None:
+            os.close(response_fd)
         os.close(req_fd)
         pool.close()
         request.unlink(missing_ok=True)
