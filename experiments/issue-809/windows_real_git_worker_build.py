@@ -129,7 +129,7 @@ struct git809_pipe_local {
 typedef LONG (NTAPI *git809_query_fn)(HANDLE, PVOID, PVOID, ULONG, int);
 static void git809_trace_api(const char *op, const char *phase,
                             HANDLE h, DWORD result, DWORD error, DWORD aux);
-static int git809_pipe_state(HANDLE pipe, ULONG *state)
+static int git809_pipe_state(HANDLE pipe, ULONG *state, ULONG *available)
 {
   static git809_query_fn query;
   struct { union { LONG status; PVOID pointer; }; ULONG_PTR information; } io;
@@ -145,6 +145,7 @@ static int git809_pipe_state(HANDLE pipe, ULONG *state)
                    (DWORD)status, local.end, local.state);
   if (status < 0 || local.end != 1) return 0;
   *state = local.state;
+  *available = local.read_available;
   return 1;
 }
 
@@ -187,15 +188,15 @@ static int git809_accept_pair(HANDLE pair[2], int *probe, int *data)
    * Query the independent kernel connection state until the metadata
    * client closes. This preserves synchronous handles for Git stdout. */
   for (j = 0; j < 2000; j++) {
-    ULONG state0, state1;
-    if (!git809_pipe_state(pair[0], &state0) ||
-        !git809_pipe_state(pair[1], &state1)) {
+    ULONG state0, state1, available0, available1;
+    if (!git809_pipe_state(pair[0], &state0, &available0) ||
+        !git809_pipe_state(pair[1], &state1, &available1)) {
       git809_trace_api("pipe-state-query", "FAILED", pair[0], 0, 0, (DWORD)j);
       goto finish;
     }
     if (j == 0 || j == 1999) {
-      git809_trace_api("pipe-state-zero", "OBSERVED", pair[0], state0, 0, (DWORD)j);
-      git809_trace_api("pipe-state-one", "OBSERVED", pair[1], state1, 0, (DWORD)j);
+      git809_trace_api("pipe-state-zero", "OBSERVED", pair[0], state0, available0, (DWORD)j);
+      git809_trace_api("pipe-state-one", "OBSERVED", pair[1], state1, available1, (DWORD)j);
     }
     if (state0 == 4 && state1 == 3) {
       *probe = 0; *data = 1; ok = 1; break;
