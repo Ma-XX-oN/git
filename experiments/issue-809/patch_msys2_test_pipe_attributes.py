@@ -55,6 +55,7 @@ PATCH = r"""      /*
             return 0;
           }
       }
+"""
 
 def main():
   p = argparse.ArgumentParser()
@@ -67,7 +68,7 @@ def main():
   assert source.count("      if (h)\n\t{\n\t  NtClose (h);") >= 1, "missing loop cleanup prerequisite"
   assert "      while (suffix.next ())" in source, "suffix initialization changed"
   assert source.index("      while (suffix.next ())") < source.index(ANCHOR), "insertion outside candidate loop"
-  assert "RWF #809 temporary experiment" not in source, "already patched"
+  assert "RWF #809 isolated test" not in source, "already patched"
   patched = source.replace(ANCHOR, PATCH + ANCHOR, 1)
   target.write_text(patched, encoding="utf-8")
   print("GIT809_METADATA_PATCH_APPLIED", target)
