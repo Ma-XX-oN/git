@@ -111,12 +111,16 @@ git-ipc() {
   # Open in the same order that the native worker accepts connections.
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE open stdout pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
   exec 4<"$pout" || { printf 'GIT-IPC ERROR: stdout pipe open failed\n' >&2; return 255; }
+  [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE opened stdout pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE open stderr pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
   exec 5<"$perr" || { exec 4<&-; printf 'GIT-IPC ERROR: stderr pipe open failed\n' >&2; return 255; }
+  [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE opened stderr pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE open exit pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
   exec 6<"$pexit" || { exec 4<&- 5<&-; printf 'GIT-IPC ERROR: exit-status pipe open failed\n' >&2; return 255; }
+  [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE opened exit pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE open stdin pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
   exec 7>>"$pstdin" || { exec 4<&- 5<&- 6<&-; printf 'GIT-IPC ERROR: stdin pipe open failed\n' >&2; return 255; }
+  [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE opened stdin pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
 
   count=$(( $# + 1 ))
   printf -v header '\\x%02x\\x00\\x00\\x00' "$count"
