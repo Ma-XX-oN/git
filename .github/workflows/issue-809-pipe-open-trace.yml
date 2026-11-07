@@ -1,0 +1,35 @@
+name: Git 809 Git Bash pipe-open trace
+on:
+  push:
+    branches: [experiment-809-win32-native-bash-transport]
+    paths:
+      - experiments/issue-809/windows_pipe_open_trace.py
+      - .github/workflows/issue-809-pipe-open-trace.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  trace-redirect:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Trace Bash redirection connections and first-handle behavior
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bash = 'C:\Program Files\Git\bin\bash.exe'
+          if (-not (Test-Path $bash)) { throw 'Git Bash executable missing' }
+          python -m py_compile experiments/issue-809/windows_pipe_open_trace.py
+          foreach ($direction in @('read','write')) {
+            foreach ($count in @(1,2)) {
+              Write-Output "PIPE_CASE direction=$direction instances=$count"
+              python -u experiments/issue-809/windows_pipe_open_trace.py --instances $count --direction $direction --bash $bash
+              if ($LASTEXITCODE -ne 0) { throw "Trace probe failed: $direction $count" }
+            }
+          }
