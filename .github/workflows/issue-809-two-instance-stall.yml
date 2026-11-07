@@ -37,5 +37,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: git809-two-instance-stall-diagnostic
-          path: git809-bash-pipe-results/pool-size-matched-1to5-windows.json
+          path: |
+            git809-bash-pipe-results/pool-size-matched-1to5-windows.json
+            git809-bash-pipe-results/two-instance-failure-round-*.log
           if-no-files-found: warn
