@@ -17,6 +17,7 @@ N = 120
 OUT = Path("git809-bash-pipe-results")
 SCRIPT = r'''
   source "$1" 3 || exit 31
+  trap 'rc=$?; if (( rc != 0 )); then printf "UNIX_MANAGER_DIAGNOSTIC rc=%s\n" "$rc" >&2; cat "$_GIT809_UNIX_MANAGER_LOG" >&2; fi' EXIT
   gitbin=$2
   expected=$("$gitbin" --version) || exit 32
   actual=$(git-ipc --version) || exit 33
