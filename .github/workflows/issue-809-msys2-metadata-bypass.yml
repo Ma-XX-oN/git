@@ -32,6 +32,8 @@ jobs:
           command -v sdk
           sdk build msys2-runtime
           test -f /usr/src/MSYS2-packages/msys2-runtime/src/msys2-runtime/winsup/cygwin/path.cc
+          git -C /usr/src/MSYS2-packages/msys2-runtime/src/msys2-runtime rev-parse HEAD
+          sha256sum /usr/bin/msys-2.0.dll
       - name: Apply exact name-restricted source test and rebuild runtime
         shell: bash
         run: |
@@ -48,7 +50,9 @@ jobs:
           cd "$build_dir"
           make -j4
           test -s msys0.dll
-          printf '%s\n' "$PWD/msys0.dll" > "$GITHUB_WORKSPACE/experiments/issue-809/patched-runtime-path.txt"
+          workspace_posix=$(cygpath -u "$GITHUB_WORKSPACE")
+          printf '%s\n' "$PWD/msys0.dll" > "$workspace_posix/experiments/issue-809/patched-runtime-path.txt"
+          sha256sum msys0.dll
       - name: Compare pristine Git Bash and isolated patched runtime
         shell: pwsh
         run: |
