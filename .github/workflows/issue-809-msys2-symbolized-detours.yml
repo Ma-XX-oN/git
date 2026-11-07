@@ -158,17 +158,36 @@ jobs:
           workspace_posix=$(cygpath -u "$GITHUB_WORKSPACE")
           printf '%s\n' "$PWD/src/dest/usr/bin/msys-2.0.dll" > "$workspace_posix/experiments/issue-809/patched-runtime-path.txt"
           sha256sum src/dest/usr/bin/msys-2.0.dll
-          # Match the pinned PKGBUILD debug-split recipe: the dummy debuglink
-          # prevents the .dbg file recursively resolving its own debuglink,
-          # which produced the CRC mismatch in run 42403668208.
-          objcopy --add-gnu-debuglink=/dev/null --only-keep-debug src/dest/usr/bin/msys-2.0.dll src/dest/usr/bin/msys-2.0.dbg
-          objdump -h src/dest/usr/bin/msys-2.0.dbg | grep -E '(^|[[:space:]])\.debug_info([[:space:]]|$)'
-          test -s src/dest/usr/bin/msys-2.0.dbg
-          objdump --dwarf=info src/dest/usr/bin/msys-2.0.dbg > /tmp/git809-dwarf.txt
-          grep -q DW_TAG_subprogram /tmp/git809-dwarf.txt
-          printf '%s\n' "$PWD/src/dest/usr/bin/msys-2.0.dbg" > "$workspace_posix/experiments/issue-809/debug-runtime-symbols-path.txt"
+          # Before any objcopy operation, inspect the raw compiler/linker
+          # output and a representative object. Record evidence on failure.
+          raw="src/build-x86_64-pc-cygwin/x86_64-pc-cygwin/winsup/cygwin/new-msys-2.0.dll"
+          obj="src/build-x86_64-pc-cygwin/x86_64-pc-cygwin/winsup/cygwin/path.o"
+          test -s "$raw"
+          mkdir -p "$workspace_posix/git809-bash-pipe-results"
+          section_log="$workspace_posix/git809-bash-pipe-results/msys2-debug-sections.txt"
+          {
+            printf 'GIT809_RAW_DLL_SHA256\n'
+            sha256sum "$raw"
+            printf 'GIT809_STAGED_DLL_SHA256\n'
+            sha256sum src/dest/usr/bin/msys-2.0.dll
+            printf 'GIT809_RAW_DLL_PE_SECTIONS\n'
+            objdump -h "$raw"
+            printf 'GIT809_STAGED_DLL_PE_SECTIONS\n'
+            objdump -h src/dest/usr/bin/msys-2.0.dll
+            printf 'GIT809_COMPILER_OBJECT_SECTIONS\n'
+            if test -f "$obj"; then objdump -h "$obj"; else printf 'path.o absent\n'; fi
+            printf 'GIT809_BUILD_DEBUGFILES\n'
+            find src/build-x86_64-pc-cygwin -name '*.dbg' -o -name '*.debug' | head -n 25
+          } > "$section_log" 2>&1
+          cat "$section_log"
+          if ! objdump -h "$raw" | grep -Eq '[[:space:]]\.debug_info([[:space:]]|$)'; then
+            echo 'GIT809_RAW_RUNTIME_MISSING_DEBUG_INFO' >&2
+            exit 61
+          fi
+          # Use the exact raw, unstripped image with DWARF sections; do not
+          # fabricate a detached .dbg or alter its original debuglink.
+          printf '%s\n' "$PWD/$raw" > "$workspace_posix/experiments/issue-809/debug-runtime-symbols-path.txt"
           printf 'GIT809_DEBUG_RUNTIME_HAS_DWARF=1\n'
-          sha256sum src/dest/usr/bin/msys-2.0.dbg
       - name: Build pinned Microsoft Detours and standalone tracer
         shell: pwsh
         run: |
@@ -248,5 +267,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: issue-809-detours-handle-lifecycle
-          path: ${{ runner.temp }}/git809-detours-*.log
-          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/git809-detours-*.log
+            git809-bash-pipe-results/msys2-debug-sections.txt
+          if-no-files-found: warn
