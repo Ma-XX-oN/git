@@ -57,10 +57,12 @@ git-ipc() {
     printf 'GIT-IPC ERROR: allocation request failed\n' >&2
     return 255
   }
-  IFS= read -r worker < "$dir/allocate-reply" || {
-    printf 'GIT-IPC ERROR: allocation response failed\n' >&2
+  IFS= read -r worker < "$dir/allocate-reply"
+  rc=$?
+  if (( rc != 0 )); then
+    printf 'GIT-IPC ERROR: allocation response failed read_rc=%s partial=%q manager_pid=%s\n' "$rc" "$worker" "$_GIT809_UNIX_MANAGER_PID" >&2
     return 255
-  }
+  fi
   if [[ $worker == WAIT || $worker == INVALID || ! -d $worker ]]; then
     printf 'GIT-IPC ERROR: unavailable or invalid Git worker\n' >&2
     return 255
