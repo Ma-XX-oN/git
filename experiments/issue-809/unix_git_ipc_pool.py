@@ -101,6 +101,7 @@ def run(args):
     req_fd = os.open(request, os.O_RDWR | os.O_NONBLOCK)
     incoming = bytearray()
     response_fd = None
+    trace_manager = os.environ.get("GIT809_TRACE_MANAGER") == "1"
     try:
         for _ in range(args.workers):
             pool.spawn()
@@ -140,11 +141,16 @@ def run(args):
             while b"\n" in incoming:
                 line, _, remainder = incoming.partition(b"\n")
                 incoming = bytearray(remainder)
+                received_ns = time.time_ns() if trace_manager else 0
                 answer = pool.allocate() if line == b"GET" else "INVALID"
+                allocated_ns = time.time_ns() if trace_manager else 0
                 payload = (answer + "\n").encode("utf-8")
                 written = os.write(response_fd, payload)
                 if written != len(payload):
                     raise RuntimeError("short FIFO allocation reply write")
+                if trace_manager:
+                    sent_ns = time.time_ns()
+                    print(f"ALLOC_PHASE received={received_ns} allocated={allocated_ns} sent={sent_ns}", flush=True)
         if pool.errors:
             raise RuntimeError("worker initialization failure: " + repr(pool.errors))
     finally:
