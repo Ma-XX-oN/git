@@ -85,12 +85,12 @@ def main():
   # The SDK packaging patches and the upstream source use different layout.
   # Match control flow and declaration invariants, not indentation.
   function_start = source.index("symlink_info::check (")
-  function_body = source[function_start:source.index("\\n/* \\"path\\" is the path", function_start)]
+  function_body = source[function_start:source.index('\n/* "path" is the path', function_start)]
   before_metadata = function_body[:function_body.index(ANCHOR)]
-  assert re.search(r"\\breset\\s*\\(\\s*\\)\\s*;", before_metadata), "reset() must precede special case"
-  assert re.search(r"\\bh\\s*=\\s*NULL\\s*;", before_metadata), "metadata handle must be initialized"
-  assert re.search(r"\\bwhile\\s*\\(\\s*suffix\\.next\\s*\\(\\s*\\)\\s*\\)", before_metadata), "suffix candidate loop changed"
-  assert re.search(r"\\bif\\s*\\(\\s*h\\s*\\)\\s*\\{\\s*NtClose\\s*\\(\\s*h\\s*\\)", before_metadata), "prior metadata handle cleanup changed"
+  assert re.search(r"\breset\s*\(\s*\)\s*;", before_metadata), "reset() must precede special case"
+  assert re.search(r"\bh\s*=\s*NULL\s*;", before_metadata), "metadata handle must be initialized"
+  assert re.search(r"\bwhile\s*\(\s*suffix\.next\s*\(\s*\)\s*\)", before_metadata), "suffix candidate loop changed"
+  assert re.search(r"\bif\s*\(\s*h\s*\)\s*\{\s*NtClose\s*\(\s*h\s*\)", before_metadata), "prior metadata handle cleanup changed"
   assert "path_len (ext_here - path);" in before_metadata, "path length prerequisite missing"
   assert "error (0);" in before_metadata, "error state prerequisite missing"
   assert "RWF #809 isolated test" not in source, "already patched"
