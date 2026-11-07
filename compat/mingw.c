@@ -4053,7 +4053,7 @@ int wmain(int argc, const wchar_t **wargv)
 	winansi_init();
 
 	/*
-	 * --preinit is an exclusive process-startup mode, not a Git option
+	 * --preload is an exclusive process-startup mode, not a Git option
 	 * that can be combined with a command or other global options.
 	 * Stop at "--" so a command's literal path is not intercepted.
 	 */
@@ -4061,13 +4061,13 @@ int wmain(int argc, const wchar_t **wargv)
 		int preinit = 0;
 
 		for (i = 1; i < argc && strcmp(argv[i], "--"); i++)
-			if (!strcmp(argv[i], "--preinit")) {
+			if (!strcmp(argv[i], "--preload")) {
 				preinit = 1;
 				break;
 			}
 		if (preinit && argc != 2) {
 			fprintf(stderr,
-				"error: --preinit must be used without other arguments\n");
+				"error: --preload must be used without other arguments\n");
 			exit_status = 129;
 		} else if (preinit) {
 			exit_status = git_preinit_worker();
