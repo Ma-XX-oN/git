@@ -72,7 +72,7 @@ git-ipc() {
   exec 7>"$worker/stdin" || { exec 4<&- 5<&- 6<&-; printf 'GIT-IPC ERROR: stdin open failed\n' >&2; return 255; }
 
   count=$(( $# + 1 ))
-  printf -v header '\x%02x\x00\x00\x00' "$count"
+  printf -v header '\\x%02x\\x00\\x00\\x00' "$count"
   printf '%b' "$header" >&7 || { printf 'GIT-IPC ERROR: request header write failed\n' >&2; return 255; }
   printf 'git\x00' >&7 || { printf 'GIT-IPC ERROR: command write failed\n' >&2; return 255; }
   for arg in "$@"; do
