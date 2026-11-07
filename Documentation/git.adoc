@@ -47,7 +47,11 @@ OPTIONS
 	it does not run the command passed on the original command line.
 	The worker's binary protocol, security requirements and current
 	limitations are described in
-	linkgit:git[1] and `Documentation/technical/preinitialized-git-worker.adoc`.
+	`Documentation/technical/preinitialized-git-worker.adoc`.
+	The switch must appear as the sole argument after `git`:
+	`git --preinit`. Combining it with `-C`, `-c`, a Git command,
+	or any other argument is an error (exit status 129). Worker-pool
+	configuration is handled by the external manager, not by this switch.
 	On other platforms this option is not available.
 +
 This is a restricted IPC feature, not a general replacement for
