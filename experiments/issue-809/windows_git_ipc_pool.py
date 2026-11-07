@@ -110,50 +110,34 @@ class Pool:
         p.stdout.close()
 
 def allocation_server(owner_pid:int,pool:Pool):
-  address=r"\\.\pipe\git809-allocate-"+str(owner_pid)
-  # Git Bash's first open occupies one instance; the next carries GET.
-  h_probe=K.CreateNamedPipeW(address,
-    PIPE_ACCESS_DUPLEX|FILE_FLAG_FIRST_PIPE_INSTANCE,
-    PIPE_TYPE_BYTE|PIPE_WAIT,2,256,256,5000,None)
-  if h_probe==INVALID:
-    raise OSError(C.get_last_error(),"CreateNamedPipe(allocation probe)")
+  address=r"\\\\.\\pipe\\git809-allocate-"+str(owner_pid)
+  # Native Bash builtin uses one Win32 connection, with no probe/open relay.
   h=K.CreateNamedPipeW(address,
-    PIPE_ACCESS_DUPLEX,
-    PIPE_TYPE_BYTE|PIPE_WAIT,2,256,256,5000,None)
+    PIPE_ACCESS_DUPLEX|FILE_FLAG_FIRST_PIPE_INSTANCE,
+    PIPE_TYPE_BYTE|PIPE_WAIT,1,256,256,5000,None)
   if h==INVALID:
-    K.CloseHandle(h_probe)
-    raise OSError(C.get_last_error(),"CreateNamedPipe(allocation data)")
+    raise OSError(C.get_last_error(),"CreateNamedPipe(allocation)")
   print("ALLOCATOR_READY "+address,flush=True)
   try:
     while not pool.closing.is_set():
-      if not K.ConnectNamedPipe(h_probe,None):
-        if C.get_last_error()!=ERROR_PIPE_CONNECTED:
-          if pool.closing.is_set():
-            return
-          raise OSError(C.get_last_error(),"ConnectNamedPipe(allocation probe)")
+      if not K.ConnectNamedPipe(h,None) and C.get_last_error()!=ERROR_PIPE_CONNECTED:
+        raise OSError(C.get_last_error(),"ConnectNamedPipe(allocation)")
       try:
-        if not K.ConnectNamedPipe(h,None):
-          if C.get_last_error()!=ERROR_PIPE_CONNECTED:
-            if pool.closing.is_set():
-              return
-            raise OSError(C.get_last_error(),"ConnectNamedPipe(allocation data)")
         buf=C.create_string_buffer(64)
         count=W.DWORD()
-        if K.ReadFile(h,buf,64,C.byref(count),None) and buf.raw[:count.value]==b"GET\n":
+        if K.ReadFile(h,buf,64,C.byref(count),None) and buf.raw[:count.value]==b"GET\\n":
           answer=pool.alloc().encode("ascii")
         else:
-          answer=b"INVALID\n"
+          answer=b"INVALID\\n"
         n=W.DWORD()
-        if not K.WriteFile(h,answer,len(answer),C.byref(n),None):
-          print("ALLOCATOR_WRITE_FAILED "+str(C.get_last_error()),flush=True)
-        else:
-          K.FlushFileBuffers(h)
+        if not K.WriteFile(h,answer,len(answer),C.byref(n),None) or n.value!=len(answer):
+          raise OSError(C.get_last_error(),"WriteFile(allocation)")
+        if not K.FlushFileBuffers(h):
+          raise OSError(C.get_last_error(),"FlushFileBuffers(allocation)")
       finally:
         K.DisconnectNamedPipe(h)
-        K.DisconnectNamedPipe(h_probe)
   finally:
     K.CloseHandle(h)
-    K.CloseHandle(h_probe)
 
 def main():
   parser=argparse.ArgumentParser()
