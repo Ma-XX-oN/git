@@ -25,7 +25,8 @@ PATCH = r"""      /*
         const char *prefix = "\\\\.\\pipe\\git809-redirect-";
         const size_t prefix_len = strlen (prefix);
         const char *candidate = suffix.path;
-        bool test_pipe = strlen (candidate) == prefix_len + 32
+        bool test_pipe = (pc_flags () & PC_KEEP_HANDLE)
+                         && strlen (candidate) == prefix_len + 32
                          && strncmp (candidate, prefix, prefix_len) == 0;
         if (test_pipe)
           {
@@ -39,8 +40,8 @@ PATCH = r"""      /*
           {
             /* reset() and suffix.has() ran above; suffix.next() is
              * already active.  Keep mount_flags and path_len intact. */
-            if (h)
-              api_fatal ("git809 test-pipe bypass reached with open handle");
+            if (h || conv_hdl.handle ())
+              api_fatal ("git809 test-pipe bypass reached with open metadata handle");
             fileattr (FILE_ATTRIBUTE_NORMAL);
             error (0);
             issymlink (false);
