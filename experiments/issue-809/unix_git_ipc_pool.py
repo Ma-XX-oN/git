@@ -81,6 +81,14 @@ class Pool:
             directory.rmdir()
 
 
+def owner_alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+
+
 def run(args):
     root = Path(args.directory).resolve(strict=True)
     git = Path(args.git).resolve(strict=True)
@@ -100,7 +108,7 @@ def run(args):
         ready.write_text(json.dumps({"state": "READY", "workers": args.workers,
                          "manager_pid": os.getpid()}) + "\n", encoding="utf-8")
         print("POOL_READY " + str(args.workers), flush=True)
-        while os.getppid() == args.owner_pid and not pool.errors:
+        while owner_alive(args.owner_pid) and not pool.errors:
             readable, _, _ = select.select([req_fd], [], [], 0.25)
             if not readable:
                 continue
