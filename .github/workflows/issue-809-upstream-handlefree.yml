@@ -112,7 +112,9 @@ jobs:
           source = recipe.read_text()
           old = '  LC_ALL=C make' + chr(10) + '  LC_ALL=C make -j1 DESTDIR="${srcdir}"/dest install' + chr(10)
           new = (
-            '  LC_ALL=C make -C x86_64-pc-cygwin/winsup/cygwin' + chr(10)
+            '  LC_ALL=C make configure-target-winsup' + chr(10)
+            + '  test -f x86_64-pc-cygwin/winsup/cygwin/Makefile' + chr(10)
+            + '  LC_ALL=C make -C x86_64-pc-cygwin/winsup/cygwin new-msys-2.0.dll' + chr(10)
             + '  mkdir -p "${srcdir}"/dest/usr/bin' + chr(10)
             + '  cp x86_64-pc-cygwin/winsup/cygwin/new-msys-2.0.dll '
             + '"${srcdir}"/dest/usr/bin/msys-2.0.dll' + chr(10)
