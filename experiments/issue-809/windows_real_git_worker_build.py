@@ -115,15 +115,16 @@ static int git809_direct_worker(void)
     if (snprintf(names[i], sizeof(names[i]), "\\\\.\\pipe\\%lu-%s",
                  (unsigned long)pid, suffixes[i]) >= sizeof(names[i]))
       goto cleanup;
-    for (j = 0; j < 2; j++) {
-      pipes[i][j] = CreateNamedPipeA(names[i],
-        i == 0 ? PIPE_ACCESS_INBOUND : PIPE_ACCESS_OUTBOUND,
-        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-        2, 65536, 65536, 5000, NULL);
-      if (pipes[i][j] == INVALID_HANDLE_VALUE) {
-        rc = 121;
-        goto cleanup;
-      }
+    /* Publish only the probe instance. The data instance must not
+     * exist until the probe has connected, because Windows does not
+     * reserve instance index 0 for the first client connection. */
+    pipes[i][0] = CreateNamedPipeA(names[i],
+      i == 0 ? PIPE_ACCESS_INBOUND : PIPE_ACCESS_OUTBOUND,
+      PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+      2, 65536, 65536, 5000, NULL);
+    if (pipes[i][0] == INVALID_HANDLE_VALUE) {
+      rc = 121;
+      goto cleanup;
     }
   }
   /* READY is an initialization handshake, not Git command output. */
@@ -138,7 +139,15 @@ static int git809_direct_worker(void)
     const int order[4] = {1, 2, 3, 0};
     for (i = 0; i < 4; i++) {
       int channel = order[i];
-      if (!git809_direct_connect(pipes[channel][0]) ||
+      if (!git809_direct_connect(pipes[channel][0])) {
+        rc = 122;
+        goto cleanup;
+      }
+      pipes[channel][1] = CreateNamedPipeA(names[channel],
+        channel == 0 ? PIPE_ACCESS_INBOUND : PIPE_ACCESS_OUTBOUND,
+        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+        2, 65536, 65536, 5000, NULL);
+      if (pipes[channel][1] == INVALID_HANDLE_VALUE ||
           !git809_direct_connect(pipes[channel][1])) {
         rc = 122;
         goto cleanup;
