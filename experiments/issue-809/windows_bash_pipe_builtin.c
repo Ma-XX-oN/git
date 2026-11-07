@@ -91,6 +91,7 @@ int git809pipe_builtin(WORD_LIST *list)
   char *end;
   unsigned count = 1;
   int i, rc = 255;
+  const char *stage = "validate";
   memset(frame, 0, 4);
   if (!owner || !*owner)
     goto cleanup;
@@ -118,11 +119,14 @@ int git809pipe_builtin(WORD_LIST *list)
     pos += size;
   }
   snprintf(path, sizeof(path), "\\\\.\\pipe\\git809-allocate-%lu", owner_pid);
+  stage = "allocate-connect";
   allocator = connect_pipe(path, GENERIC_READ | GENERIC_WRITE);
   if (allocator == INVALID_HANDLE_VALUE)
     goto cleanup;
+  stage = "allocate-request";
   if (!WriteFile(allocator, "GET\n", 4, &n, NULL) || n != 4)
     goto cleanup;
+  stage = "allocate-reply";
   length = 0;
   while (length < sizeof(reply)-1) {
     if (!ReadFile(allocator, reply + length, 1, &n, NULL) || n != 1)
@@ -139,6 +143,7 @@ int git809pipe_builtin(WORD_LIST *list)
     goto cleanup;
   CloseHandle(allocator);
   allocator = INVALID_HANDLE_VALUE;
+  stage = "worker-connect";
   /* Match worker's fixed one-instance ConnectNamedPipe sequence. */
   for (i = 0; i < 4; i++) {
     pipe_name(path, sizeof(path), pid, names[i]);
@@ -146,10 +151,12 @@ int git809pipe_builtin(WORD_LIST *list)
     if (pipe[i] == INVALID_HANDLE_VALUE)
       goto cleanup;
   }
+  stage = "worker-request";
   if (!WriteFile(pipe[3], frame, (DWORD)pos, &n, NULL) || n != pos)
     goto cleanup;
   CloseHandle(pipe[3]);
   pipe[3] = INVALID_HANDLE_VALUE;
+  stage = "output-drain";
   for (i = 0; i < 2; i++) {
     output[i].pipe = pipe[i];
     output[i].fd = i == 0 ? STDOUT_FILENO : STDERR_FILENO;
@@ -168,6 +175,7 @@ int git809pipe_builtin(WORD_LIST *list)
     CloseHandle(pipe[i]);
     pipe[i] = INVALID_HANDLE_VALUE;
   }
+  stage = "exit-response";
   length = 0;
   while (length < sizeof(buffer)-1) {
     if (!ReadFile(pipe[2], buffer + length, 1, &n, NULL) || n != 1)
@@ -176,9 +184,17 @@ int git809pipe_builtin(WORD_LIST *list)
       break;
   }
   buffer[length] = '\0';
-  if (sscanf(buffer, "EXIT %d", &rc) != 1 || rc < 0 || rc > 255)
-    rc = 255;
+  {
+    char extra;
+    if (!length || buffer[length-1] != '\n' ||
+        sscanf(buffer, "EXIT %d%c", &rc, &extra) != 1 ||
+        rc < 0 || rc > 255)
+      rc = 255;
+  }
 cleanup:
+  if (rc == 255)
+    fprintf(stderr, "GIT809_NATIVE_ERROR stage=%s win32_error=%lu\n",
+            stage, (unsigned long)GetLastError());
   /* Never free a channel context while its thread is still reading. */
   for (i = 0; i < 2; i++)
     if (threads[i]) {
