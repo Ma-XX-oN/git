@@ -166,6 +166,30 @@ def main():
         raise RuntimeError("Windows native test only")
     root = Path.cwd()
     git = (root / "git.exe").resolve(strict=True)
+    # --preinit must never process additional arguments or start a worker.
+    invalid = [
+        ["--preinit", "status"],
+        ["--preinit", "--version"],
+        ["--preinit", "--"],
+        ["--preinit", "--workers", "4"],
+        ["-C", ".", "--preinit"],
+        ["-c", "user.name=test", "--preinit"],
+        ["--preinit", "--preinit"],
+    ]
+    for args in invalid:
+        p = subprocess.run([str(git), *args], cwd=root,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           timeout=5)
+        assert p.returncode == 129, (args, p.returncode, p.stderr)
+        assert p.stdout == b"", (args, p.stdout)
+        assert b"--preinit must be used without other arguments" in p.stderr, (
+            args, p.stderr)
+        print("PREINIT_EXCLUSIVE_PASS " + repr(args), flush=True)
+    normal = subprocess.run([str(git), "--version"], cwd=root,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            timeout=5)
+    assert normal.returncode == 0 and normal.stdout.startswith(b"git version ")
+    print("PREINIT_NORMAL_GIT_PASS", flush=True)
     blob = bytes(range(256)) * 2048
     recorded = subprocess.run([str(git), "hash-object", "-w", "--stdin"],
                               input=blob, check=True, stdout=subprocess.PIPE,
