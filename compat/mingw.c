@@ -3761,7 +3761,7 @@ static volatile int git_preinit_exit_status;
  * In this function call the actual CRT exit(), without tracing twice.
  */
 #undef exit
-void git_preinit_worker_exit(int status)
+NORETURN void git_preinit_worker_exit(int status)
 {
   if (git_preinit_active) {
     git_preinit_exit_status = status;
