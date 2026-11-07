@@ -102,13 +102,26 @@ def prepare(root, windows):
 
 def run_case(bash, script, git_shell, environment, workers, round_index, windows):
     started = time.perf_counter()
+    process = subprocess.Popen(
+        [bash, "--noprofile", "--norc", "-c", SHELL,
+         "pool-ab", str(workers), script, git_shell],
+        env=environment, stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
-        result = subprocess.run(
-            [bash, "--noprofile", "--norc", "-c", SHELL,
-             "pool-ab", str(workers), script, git_shell],
-            env=environment, stdin=subprocess.DEVNULL,
-            capture_output=True, timeout=60 if windows else 240)
+        out, err = process.communicate(timeout=60 if windows else 240)
     except subprocess.TimeoutExpired as exc:
+        if windows:
+            from windows_ipc_timeout_dumps import capture
+            try:
+                capture(process.pid, OUT / "timeout-dumps")
+            except (OSError, RuntimeError, ValueError) as dump_error:
+                print(f"GIT809_DUMP_FAILURE {dump_error}", flush=True)
+            # Dump before killing the entire experimental child process tree.
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)],
+                           capture_output=True, timeout=15, check=False)
+        if process.poll() is None:
+            process.kill()
+        process.communicate()
         stdout = (exc.stdout or b"").decode("utf-8", "replace")
         stderr = (exc.stderr or b"").decode("utf-8", "replace")
         complete = [row for row in stdout.splitlines() if row.startswith("PAIR ")]
@@ -128,12 +141,12 @@ def run_case(bash, script, git_shell, environment, workers, round_index, windows
             f"pairs={len(complete)} last={complete[-1] if complete else None}; "
             f"stderr={stderr[-1200:]}; manager_tail={manager_trace[-3200:]}") from exc
     elapsed = time.perf_counter() - started
-    output = result.stdout.decode("utf-8", "strict")
-    errors = result.stderr.decode("utf-8", "strict")
-    if result.returncode:
+    output = out.decode("utf-8", "strict")
+    errors = err.decode("utf-8", "strict")
+    if process.returncode:
         complete = [row for row in output.splitlines() if row.startswith("PAIR ")]
         raise AssertionError(
-            f"pool={workers} round={round_index} rc={result.returncode} "
+            f"pool={workers} round={round_index} rc={process.returncode} "
             f"pairs={len(complete)} stderr={errors[-2000:]}")
     rows = output.splitlines()
     assert f"READY_CHECK {workers}" in rows, "worker ready/response missing"
@@ -190,6 +203,10 @@ def main():
     env["GIT809_PLATFORM"] = "windows" if windows else "unix"
     env["GIT809_WORKER_GIT"] = native
     env["GIT809_MANAGER_PYTHON"] = env.get("GIT809_MANAGER_PYTHON") or sys.executable
+    if windows:
+        trace_dir = (OUT / "native-worker").resolve()
+        trace_dir.mkdir(parents=True, exist_ok=True)
+        env["GIT809_NATIVE_TRACE_DIR"] = str(trace_dir)
     report = {
         "sha": env.get("GITHUB_SHA"),
         "os": env.get("RUNNER_OS", sys.platform),
