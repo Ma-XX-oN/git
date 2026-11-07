@@ -63,10 +63,10 @@ def main() -> int:
         # the actual mapped image base to the debug file's ImageBase.
         canonical = preferred_base + (addr - imagebase)
         assert preferred_base <= canonical < preferred_base + mapped_size
-        result = subprocess.run([str(a.addr2line), "-f", "-C", "-e", str(a.debug_file),
-                                 f"0x{canonical:x}"], capture_output=True,
-                                text=True, encoding="utf-8", check=True)
-        fn, _, location = result.stdout.partition("\n")
+        symbol_lookup = subprocess.run([str(a.addr2line), "-f", "-C", "-e", str(a.debug_file),
+                                        f"0x{canonical:x}"], capture_output=True,
+                                       text=True, encoding="utf-8", check=True)
+        fn, _, location = symbol_lookup.stdout.partition("\n")
         print(f"GIT809_SYMBOL file={f.name} kind={kind} op={operation} "
               f"status=0x{result:08x} base=0x{imagebase:x} "
               f"address=0x{addr:x} preferred=0x{canonical:x} "
