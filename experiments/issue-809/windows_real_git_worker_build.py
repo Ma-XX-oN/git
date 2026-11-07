@@ -300,7 +300,8 @@ static int git809_direct_worker(void)
   _close(_fileno(stderr));
 cleanup:
   written = snprintf(result, sizeof(result), "EXIT %d\n", rc);
-  if (pipes[3][data_index[3]] != INVALID_HANDLE_VALUE) {
+  if (data_index[3] >= 0 &&
+      pipes[3][data_index[3]] != INVALID_HANDLE_VALUE) {
     if (written > 0 && written < sizeof(result) &&
         WriteFile(pipes[3][data_index[3]], result, written, &n, NULL))
       FlushFileBuffers(pipes[3][data_index[3]]);
