@@ -49,9 +49,7 @@ SHELL = r"""
     [[ ${_GIT809_MANAGER_WORKERS:-} == "$count" ]] || exit 32
     export GIT809_DRAIN_MODE=chunk100
     manager_log=$_GIT809_MANAGER_LOG
-    if [[ ${GIT809_TRACE:-} == 1 ]]; then
       printf 'MANAGER_LOG_NATIVE %s\n' "$(cygpath -w "$manager_log")"
-    fi
   else
     manager_log=$_GIT809_UNIX_MANAGER_LOG
   fi
@@ -105,12 +103,13 @@ def prepare(root, windows):
 
 def run_case(bash, script, git_shell, environment, workers, round_index, windows):
     started = time.perf_counter()
+    process = subprocess.Popen(
+        [bash, "--noprofile", "--norc", "-c", SHELL,
+         "pool-ab", str(workers), script, git_shell],
+        env=environment, stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
-        result = subprocess.run(
-            [bash, "--noprofile", "--norc", "-c", SHELL,
-             "pool-ab", str(workers), script, git_shell],
-            env=environment, stdin=subprocess.DEVNULL,
-            capture_output=True, timeout=120)
+        out_bytes, err_bytes = process.communicate(timeout=120)
     except subprocess.TimeoutExpired as exc:
         stdout = (exc.stdout or b"").decode("utf-8", "replace")
         stderr = (exc.stderr or b"").decode("utf-8", "replace")
@@ -118,15 +117,57 @@ def run_case(bash, script, git_shell, environment, workers, round_index, windows
         native_logs = [row.split(" ", 1)[1] for row in stdout.splitlines()
                        if row.startswith("MANAGER_LOG_NATIVE ")]
         manager_trace = ""
+        snapshot = ""
         if native_logs:
             try:
-                manager_trace = Path(native_logs[-1]).read_text(encoding="utf-8")[-8000:]
+                manager_trace = Path(native_logs[-1]).read_text(encoding="utf-8")
             except OSError as error:
                 manager_trace = repr(error)
+        if windows:
+            import re
+            # Out-of-process inspection only after the deadline, with no
+            # instrumentation added to timed IPC operations.
+            ids = [process.pid]
+            allocations = re.findall(r"^ALLOCATED ([0-9]+)$", manager_trace,
+                                     flags=re.MULTILINE)
+            if allocations:
+                ids.append(int(allocations[-1]))
+            managers = re.findall(r'"manager_pid":\s*([0-9]+)', manager_trace)
+            if managers:
+                ids.append(int(managers[-1]))
+            ps = ("foreach ($i in @(" + ",".join(str(x) for x in ids) +
+                  ")) { $p = Get-Process -Id $i -ErrorAction SilentlyContinue; " +
+                  "if ($p) { Write-Output ('PID=' + $i); " +
+                  "$p.Threads | Select-Object Id,ThreadState,WaitReason | " +
+                  "Format-Table -AutoSize | Out-String -Width 200 } }")
+            try:
+                snap = subprocess.run(
+                    ["powershell.exe", "-NoProfile", "-NonInteractive",
+                     "-Command", ps], capture_output=True, timeout=15,
+                    check=False)
+                snapshot = snap.stdout.decode("utf-8", "replace") + (
+                    snap.stderr.decode("utf-8", "replace"))
+            except (OSError, subprocess.TimeoutExpired) as error:
+                snapshot = repr(error)
+        failure_path = OUT / f"two-instance-timeout-round-{round_index}.log"
+        failure_path.write_text(
+            f"PID={process.pid} rounds={len(complete)}\n" +
+            "PROCESS_THREAD_SNAPSHOT\n" + snapshot + "\n" +
+            "MANAGER_LOG\n" + manager_trace + "\n" +
+            "STDERR\n" + stderr + "\nSTDOUT\n" + stdout,
+            encoding="utf-8")
+        process.kill()
+        try:
+            process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
         raise AssertionError(
             f"pool={workers} round={round_index} timeout; "
             f"pairs={len(complete)} last={complete[-1] if complete else None}; "
-            f"stderr={stderr[-1200:]} manager_trace={manager_trace}") from exc
+            f"threads={snapshot[-1500:]!r} manager_tail={manager_trace[-2500:]!r} "
+            f"diagnostic={failure_path}") from exc
+    result = subprocess.CompletedProcess(
+        process.args, process.returncode, out_bytes, err_bytes)
     elapsed = time.perf_counter() - started
     output = result.stdout.decode("utf-8", "strict")
     errors = result.stderr.decode("utf-8", "strict")
