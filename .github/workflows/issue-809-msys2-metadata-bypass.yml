@@ -68,9 +68,12 @@ jobs:
           # extracted upstream commit instead of trusting that archive.
           makepkg --nobuild --syncdeps --noconfirm --skipchecksums
           test -f src/msys2-runtime/winsup/cygwin/path.cc
+          # PKGBUILD fetches the upstream Cygwin 3.6.10 tag and applies
+          # MSYS2 patches; the fork commit is NOT the source HEAD here.
+          upstream=$(git -C src/msys2-runtime rev-parse "refs/tags/cygwin-3.6.10^{commit}")
           actual_source=$(git -C src/msys2-runtime rev-parse HEAD)
-          test "$actual_source" = da84778cbc92590c1996c02c68c5a3d3c49e00af
-          printf "GIT809_RUNTIME_SOURCE_SHA=%s\n" "$actual_source"
+          test "$actual_source" = "$upstream"
+          printf "GIT809_RUNTIME_UPSTREAM_SHA=%s\n" "$actual_source"
           sha256sum /usr/bin/msys-2.0.dll
       - name: Apply exact name-restricted source test and rebuild runtime
         shell: bash
@@ -78,6 +81,7 @@ jobs:
           set -euxo pipefail
           export MSYSTEM=MSYS
           export PATH="/usr/bin:$PATH"
+          python3 -m py_compile experiments/issue-809/patch_msys2_test_pipe_attributes.py
           python3 experiments/issue-809/patch_msys2_test_pipe_attributes.py \
             /usr/src/MSYS2-packages/msys2-runtime/src/msys2-runtime/winsup/cygwin/path.cc
           cd /usr/src/MSYS2-packages/msys2-runtime
