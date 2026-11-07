@@ -122,11 +122,19 @@ def run(args):
                 line, _, remainder = incoming.partition(b"\n")
                 incoming = bytearray(remainder)
                 answer = pool.allocate() if line == b"GET" else "INVALID"
+                print("ALLOC_REPLY_BEGIN answer=" + repr(answer), flush=True)
                 fd = os.open(response, os.O_WRONLY)
+                print("ALLOC_REPLY_OPEN answer=" + repr(answer), flush=True)
                 try:
-                    os.write(fd, (answer + "\n").encode("utf-8"))
+                    payload = (answer + "\n").encode("utf-8")
+                    written = os.write(fd, payload)
+                    print("ALLOC_REPLY_WRITE bytes=" + str(written) +
+                          " expected=" + str(len(payload)), flush=True)
+                    if written != len(payload):
+                        raise RuntimeError("short FIFO allocation reply write")
                 finally:
                     os.close(fd)
+                    print("ALLOC_REPLY_CLOSED", flush=True)
         if pool.errors:
             raise RuntimeError("worker initialization failure: " + repr(pool.errors))
     finally:
