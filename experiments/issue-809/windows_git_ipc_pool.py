@@ -114,30 +114,32 @@ def allocation_server(owner_pid:int,pool:Pool):
   first=True
   print("ALLOCATOR_START "+address,flush=True)
   while not pool.closing.is_set():
-    # Recreate the pair for EVERY allocation. Leaving both disconnected
-    # instances available across calls would reintroduce unordered assignment.
-    h_probe=K.CreateNamedPipeW(address,
-      PIPE_ACCESS_DUPLEX|(FILE_FLAG_FIRST_PIPE_INSTANCE if first else 0),
-      PIPE_TYPE_BYTE|PIPE_WAIT,2,256,256,5000,None)
-    if h_probe==INVALID:
-      raise OSError(C.get_last_error(),"CreateNamedPipe(allocation probe)")
-    first=False
-    h=INVALID
+    handles=[]
+    connected=queue.Queue()
+    threads=[]
+    def accept(h,index):
+      ok=bool(K.ConnectNamedPipe(h,None))
+      err=0 if ok else C.get_last_error()
+      connected.put((index,ok or err==ERROR_PIPE_CONNECTED,err))
     try:
-      if not K.ConnectNamedPipe(h_probe,None):
-        if C.get_last_error()!=ERROR_PIPE_CONNECTED:
-          if pool.closing.is_set():
-            return
-          raise OSError(C.get_last_error(),"ConnectNamedPipe(allocation probe)")
-      # Only now publish the data instance. The probe connection cannot
-      # accidentally attach to the data handle that did not yet exist.
-      h=K.CreateNamedPipeW(address,PIPE_ACCESS_DUPLEX,
-        PIPE_TYPE_BYTE|PIPE_WAIT,2,256,256,5000,None)
-      if h==INVALID:
-        raise OSError(C.get_last_error(),"CreateNamedPipe(allocation data)")
-      if not K.ConnectNamedPipe(h,None):
-        if C.get_last_error()!=ERROR_PIPE_CONNECTED:
-          raise OSError(C.get_last_error(),"ConnectNamedPipe(allocation data)")
+      for index in range(2):
+        h=K.CreateNamedPipeW(address,
+          PIPE_ACCESS_DUPLEX|(FILE_FLAG_FIRST_PIPE_INSTANCE if first and index==0 else 0),
+          PIPE_TYPE_BYTE|PIPE_WAIT,2,256,256,5000,None)
+        if h==INVALID:
+          raise OSError(C.get_last_error(),"CreateNamedPipe(allocation)")
+        handles.append(h)
+      first=False
+      for index,h in enumerate(handles):
+        t=threading.Thread(target=accept,args=(h,index),daemon=True)
+        t.start()
+        threads.append(t)
+      first_index,first_ok,first_error=connected.get(timeout=15)
+      second_index,second_ok,second_error=connected.get(timeout=15)
+      if not first_ok or not second_ok or first_index==second_index:
+        raise OSError(first_error or second_error,"ConnectNamedPipe(allocation)")
+      h=handles[second_index]
+      print("ALLOCATOR_CONNECTED probe="+str(first_index)+" data="+str(second_index),flush=True)
       buf=C.create_string_buffer(64)
       count=W.DWORD()
       if K.ReadFile(h,buf,64,C.byref(count),None) and buf.raw[:count.value]==b"GET\n":
@@ -145,16 +147,19 @@ def allocation_server(owner_pid:int,pool:Pool):
       else:
         answer=b"INVALID\n"
       n=W.DWORD()
-      if not K.WriteFile(h,answer,len(answer),C.byref(n),None):
-        print("ALLOCATOR_WRITE_FAILED "+str(C.get_last_error()),flush=True)
-      else:
-        K.FlushFileBuffers(h)
+      if not K.WriteFile(h,answer,len(answer),C.byref(n),None) or n.value!=len(answer):
+        raise OSError(C.get_last_error(),"WriteFile(allocation)")
+      if not K.FlushFileBuffers(h):
+        raise OSError(C.get_last_error(),"FlushFileBuffers(allocation)")
     finally:
-      if h!=INVALID:
+      for h in handles:
         K.DisconnectNamedPipe(h)
+      for t in threads:
+        t.join(timeout=5)
+        if t.is_alive():
+          raise RuntimeError("allocation connection waiter did not stop")
+      for h in handles:
         K.CloseHandle(h)
-      K.DisconnectNamedPipe(h_probe)
-      K.CloseHandle(h_probe)
 
 def main():
   parser=argparse.ArgumentParser()
