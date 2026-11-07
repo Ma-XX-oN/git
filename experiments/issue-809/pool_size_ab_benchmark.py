@@ -212,11 +212,15 @@ def main():
     output_path = OUT / ("pool-size-matched-1to5-" + report["os"].lower() + ".json")
     try:
         for round_index, workers in enumerate(RUN_ORDER, 1):
+            if windows:
+                env["GIT809_TRACE"] = "0" if round_index % 2 else "1"
             result = run_case(bash, script, git_shell, env, workers, round_index, windows)
+            result["trace_enabled"] = env.get("GIT809_TRACE") == "1"
             report["results"].append(result)
             print("POOL_SIZE_AB " + json.dumps({
                 "sha": report["sha"], "os": report["os"],
                 "round": round_index, "workers": workers,
+                "trace_enabled": result["trace_enabled"],
                 "direct_median_ms": result["direct"]["median_ms"],
                 "ipc_median_ms": result["ipc"]["median_ms"],
                 "ipc_p95_ms": result["ipc"]["p95_ms"],
