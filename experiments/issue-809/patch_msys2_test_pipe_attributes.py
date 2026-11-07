@@ -8,14 +8,18 @@ The actual pipe open and Win32 connection path remain unchanged.
 from pathlib import Path
 import argparse
 
-ANCHOR = "      status = NtCreateFile (&h,\n\t\t\t     READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_READ_EA,"
+ANCHOR = "      /* The EA given to NtCreateFile allows to get a handle to a symlink on\n"
 
 PATCH = r"""      /*
-       * RWF #809 temporary experiment, deliberately restricted to the
-       * \\.\\pipe\\git809-redirect-<32 lowercase hex digits> namespace.
-       * The only aim is to test whether the normal preliminary NtCreateFile
-       * attribute query consumes one native named-pipe connection.  Do not
-       * ship this exception as a general MSYS2 policy.
+       * RWF #809 isolated test: the test-pipe endpoint is a non-symlink,
+       * non-directory, non-device.  Skip only the speculative metadata
+       * NtCreateFile; the caller will still perform its normal data open.
+       * This is not a general rule for Windows named pipes.
+       *
+       * Postconditions of the ordinary existing-file path consumed by
+       * path_conv::check: no symlink/content, no device, valid attributes,
+       * zero error, no appended suffix, no reparse flags, original mount
+       * flags, original path length, and no owned metadata handle.
        */
       {
         const char *prefix = "\\\\.\\pipe\\git809-redirect-";
@@ -33,11 +37,24 @@ PATCH = r"""      /*
           }
         if (test_pipe)
           {
+            /* reset() and suffix.has() ran above; suffix.next() is
+             * already active.  Keep mount_flags and path_len intact. */
+            if (h)
+              api_fatal ("git809 test-pipe bypass reached with open handle");
             fileattr (FILE_ATTRIBUTE_NORMAL);
-            goto file_not_symlink;
+            error (0);
+            issymlink (false);
+            dev (FH_NADA);
+            path_flags (0);
+            ext_tacked_on (false);
+            clear_content ();
+            assert (!issymlink () && !isdevice ()
+                    && error () == 0
+                    && fileattr () == FILE_ATTRIBUTE_NORMAL
+                    && !ext_tacked_on () && path_flags () == 0);
+            return 0;
           }
       }
-"""
 
 def main():
   p = argparse.ArgumentParser()
@@ -46,6 +63,10 @@ def main():
   target = args.path
   source = target.read_text(encoding="utf-8")
   assert source.count(ANCHOR) == 1, "unexpected MSYS2 symlink-info source"
+  assert source.count("      reset ();") >= 1, "missing reset prerequisite"
+  assert source.count("      if (h)\n\t{\n\t  NtClose (h);") >= 1, "missing loop cleanup prerequisite"
+  assert "      while (suffix.next ())" in source, "suffix initialization changed"
+  assert source.index("      while (suffix.next ())") < source.index(ANCHOR), "insertion outside candidate loop"
   assert "RWF #809 temporary experiment" not in source, "already patched"
   patched = source.replace(ANCHOR, PATCH + ANCHOR, 1)
   target.write_text(patched, encoding="utf-8")
