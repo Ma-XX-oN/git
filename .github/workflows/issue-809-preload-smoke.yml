@@ -34,3 +34,16 @@ jobs:
           PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
           "$PYTHON_EXE" -m py_compile t/helper/git809-preload-smoke.py
           "$PYTHON_EXE" t/helper/git809-preload-smoke.py "$(cygpath -w "$PWD/git.exe")"
+      - name: Verify Bash manager allocates real --preload workers
+        shell: bash
+        run: |
+          . /etc/profile
+          PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
+          export GIT809_MANAGER_PYTHON="$(cygpath -w "$PYTHON_EXE")"
+          export GIT809_WORKER_GIT="$(cygpath -w "$PWD/git.exe")"
+          "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_git_ipc_pool.py
+          bash -n experiments/issue-809/git-manager.sh
+          source experiments/issue-809/git-manager.sh 2
+          result="$(git-ipc --version)"
+          [[ "$result" == git\ version\ * ]] || { printf 'unexpected ipc output: %s\n' "$result" >&2; exit 1; }
+          printf '%s\n' "$result"
