@@ -63,17 +63,24 @@ jobs:
           $location = $location.Trim()
           $win = (& "$sdk\cygpath.exe" -w "$location").Trim()
           if (-not (Test-Path $win)) { throw "Patched DLL not found: $win" }
-          $isolated = Join-Path $env:RUNNER_TEMP 'git809-isolated-msys2'
-          New-Item -ItemType Directory -Path $isolated -Force | Out-Null
-          Copy-Item "$sdk\bash.exe" "$isolated\bash.exe"
-          Copy-Item $win "$isolated\msys-2.0.dll"
-          $bash = "$isolated\bash.exe"
-          foreach ($mode in @('original','patched')) {
-            $exe = if ($mode -eq 'original') { "$sdk\bash.exe" } else { $bash }
-            $expect = if ($mode -eq 'original') { 'failure' } else { 'success' }
+          # The GitHub runner and SDK are disposable. Back up the stock
+          # runtime and restore it in finally; no user installation is touched.
+          $runtime = "$sdk\msys-2.0.dll"
+          $backup = Join-Path $env:RUNNER_TEMP 'git809-original-msys-2.0.dll'
+          Copy-Item $runtime $backup -Force
+          try {
             foreach ($direction in @('read','write')) {
-              Write-Output "PIPE_METADATA_CASE mode=$mode direction=$direction instances=1"
-              python -u experiments/issue-809/windows_pipe_open_trace.py --client bash --instances 1 --direction $direction --bash $exe --expect $expect
-              if ($LASTEXITCODE -ne 0) { throw "Probe failed: $mode $direction" }
+              Write-Output "PIPE_METADATA_CASE mode=original direction=$direction instances=1"
+              python -u experiments/issue-809/windows_pipe_open_trace.py --client bash --instances 1 --direction $direction --bash "$sdk\bash.exe" --expect failure
+              if ($LASTEXITCODE -ne 0) { throw "Original control failed: $direction" }
             }
+            Copy-Item $win $runtime -Force
+            foreach ($direction in @('read','write')) {
+              Write-Output "PIPE_METADATA_CASE mode=patched direction=$direction instances=1"
+              python -u experiments/issue-809/windows_pipe_open_trace.py --client bash --instances 1 --direction $direction --bash "$sdk\bash.exe" --expect success
+              if ($LASTEXITCODE -ne 0) { throw "Patched test failed: $direction" }
+            }
+          }
+          finally {
+            Copy-Item $backup $runtime -Force
           }
