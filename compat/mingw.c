@@ -3746,6 +3746,243 @@ static BOOL WINAPI handle_ctrl_c(DWORD ctrl_type)
  * To be more compatible with the core git code, we convert
  * argv into UTF8 and pass them directly to main().
  */
+#include <setjmp.h>
+static jmp_buf git_preinit_jump;
+static volatile int git_preinit_active;
+static volatile int git_preinit_exit_status;
+
+/*
+ * The standard Git builtin dispatcher calls exit(ret) from git.c.
+ * The temporary benchmark build intercepts that dispatcher exit only, so
+ * the one-shot worker can flush its native pipes and deliver the status.
+ */
+void git_preinit_worker_exit(int status)
+{
+  if (git_preinit_active) {
+    git_preinit_exit_status = status;
+    longjmp(git_preinit_jump, 1);
+  }
+  exit(status);
+}
+/*
+ * Experimental preinitialized Git worker.  The PID identifies four
+ * two instances per channel; the Python manager never forwards command bytes.
+ */
+static int git_preinit_connect(HANDLE h, int probe_instance)
+{
+  DWORD error;
+
+  if (ConnectNamedPipe(h, NULL))
+    return 1;
+  error = GetLastError();
+  /*
+   * Git Bash can close its first (probe) pipe connection before the
+   * server has called ConnectNamedPipe(). ERROR_NO_DATA means that
+   * client has already disconnected. This is acceptable for the
+   * deliberately unused probe instance, NEVER the data instance.
+   */
+  return error == ERROR_PIPE_CONNECTED ||
+         (probe_instance && error == ERROR_NO_DATA);
+}
+
+static int git_preinit_worker(void)
+{
+  char names[4][96];
+  const char *suffixes[4] = {"stdin", "stdout", "stderr", "exit-code"};
+  HANDLE pipes[4][2];
+  char frame[4096], result[64];
+  DWORD used = 0, n;
+  int i, j, count, pos, rc = 120, written, outfd, errfd;
+  const char *args[33] = {0};
+  DWORD pid = GetCurrentProcessId();
+  HANDLE token = NULL;
+  TOKEN_USER *token_user = NULL;
+  DWORD token_size = 0, acl_size;
+  ACL *acl = NULL;
+  SECURITY_DESCRIPTOR security_descriptor;
+  SECURITY_ATTRIBUTES security_attributes;
+
+  for (i = 0; i < 4; i++)
+    for (j = 0; j < 2; j++)
+      pipes[i][j] = INVALID_HANDLE_VALUE;
+
+  /*
+   * A pipe's default security descriptor gives Everyone and Anonymous
+   * read access. Restrict all four PID-addressed channels to the process
+   * owner before publishing their names in the READY handshake.
+   */
+  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+    goto cleanup;
+  GetTokenInformation(token, TokenUser, NULL, 0, &token_size);
+  if (!token_size || GetLastError() != ERROR_INSUFFICIENT_BUFFER)
+    goto cleanup;
+  token_user = malloc(token_size);
+  if (!token_user ||
+      !GetTokenInformation(token, TokenUser, token_user, token_size,
+                           &token_size))
+    goto cleanup;
+  acl_size = sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE) -
+             sizeof(DWORD) + GetLengthSid(token_user->User.Sid);
+  acl = malloc(acl_size);
+  if (!acl ||
+      !InitializeAcl(acl, acl_size, ACL_REVISION) ||
+      !AddAccessAllowedAce(acl, ACL_REVISION, GENERIC_ALL,
+                           token_user->User.Sid) ||
+      !InitializeSecurityDescriptor(&security_descriptor,
+                                    SECURITY_DESCRIPTOR_REVISION) ||
+      !SetSecurityDescriptorDacl(&security_descriptor, TRUE, acl, FALSE))
+    goto cleanup;
+  security_attributes.nLength = sizeof(security_attributes);
+  security_attributes.lpSecurityDescriptor = &security_descriptor;
+  security_attributes.bInheritHandle = FALSE;
+
+  for (i = 0; i < 4; i++) {
+    if (snprintf(names[i], sizeof(names[i]), "\\\\.\\pipe\\%lu-%s",
+                 (unsigned long)pid, suffixes[i]) >= sizeof(names[i]))
+      goto cleanup;
+    for (j = 0; j < 2; j++) {
+      pipes[i][j] = CreateNamedPipeA(names[i],
+        (i == 0 ? PIPE_ACCESS_INBOUND : PIPE_ACCESS_OUTBOUND) |
+          (j == 0 ? FILE_FLAG_FIRST_PIPE_INSTANCE : 0),
+        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+        2, 65536, 65536, 5000, &security_attributes);
+      if (pipes[i][j] == INVALID_HANDLE_VALUE) {
+        rc = 121;
+        goto cleanup;
+      }
+    }
+  }
+  /* READY is an initialization handshake, not Git command output. */
+  printf("READY %lu\n", (unsigned long)pid);
+  fflush(stdout);
+  /*
+   * Git Bash's initial open consumes a pipe instance without carrying data.
+   * Keep a second instance ready for each channel's actual redirection.
+   * Retain the original channel-open order.
+   */
+  {
+    const int order[4] = {1, 2, 3, 0};
+    for (i = 0; i < 4; i++) {
+      int channel = order[i];
+      if (!git_preinit_connect(pipes[channel][0], 1) ||
+          !git_preinit_connect(pipes[channel][1], 0)) {
+        rc = 122;
+        goto cleanup;
+      }
+      DisconnectNamedPipe(pipes[channel][0]);
+      CloseHandle(pipes[channel][0]);
+      pipes[channel][0] = INVALID_HANDLE_VALUE;
+    }
+  }
+  while (used < sizeof(frame)) {
+    if (!ReadFile(pipes[0][1], frame + used, sizeof(frame) - used, &n, NULL)) {
+      if (GetLastError() != ERROR_BROKEN_PIPE) {
+        rc = 123;
+        goto cleanup;
+      }
+      break;
+    }
+    if (!n)
+      break;
+    used += n;
+  }
+  if (used < 4) {
+    rc = 124;
+    goto cleanup;
+  }
+  count = (unsigned char)frame[0] | ((unsigned char)frame[1] << 8) |
+          ((unsigned char)frame[2] << 16) | ((unsigned char)frame[3] << 24);
+  if (count < 1 || count > 32) {
+    rc = 125;
+    goto cleanup;
+  }
+  pos = 4;
+  for (i = 0; i < count; i++) {
+    int start = pos;
+    if (pos >= used) {
+      rc = 126;
+      goto cleanup;
+    }
+    while (pos < used && frame[pos])
+      pos++;
+    if (pos == used || (pos > start &&
+        !MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+                             frame + start, pos - start, NULL, 0))) {
+      rc = 127;
+      goto cleanup;
+    }
+    args[i] = frame + start;
+    pos++;
+  }
+  if (pos != used || strcmp(args[0], "git")) {
+    rc = 128;
+    goto cleanup;
+  }
+  args[count] = NULL;
+  FlushFileBuffers(pipes[0][1]);
+  DisconnectNamedPipe(pipes[0][1]);
+  CloseHandle(pipes[0][1]);
+  pipes[0][1] = INVALID_HANDLE_VALUE;
+
+  /* Transfer output handles to CRT descriptors used by Git's main(). */
+  outfd = _open_osfhandle((intptr_t)pipes[1][1], _O_BINARY);
+  if (outfd < 0) {
+    rc = 129;
+    goto cleanup;
+  }
+  pipes[1][1] = INVALID_HANDLE_VALUE;
+  errfd = _open_osfhandle((intptr_t)pipes[2][1], _O_BINARY);
+  if (errfd < 0) {
+    _close(outfd);
+    rc = 130;
+    goto cleanup;
+  }
+  pipes[2][1] = INVALID_HANDLE_VALUE;
+  if (_dup2(outfd, _fileno(stdout)) < 0 ||
+      _dup2(errfd, _fileno(stderr)) < 0) {
+    _close(outfd);
+    _close(errfd);
+    rc = 131;
+    goto cleanup;
+  }
+  _close(outfd);
+  _close(errfd);
+  git_preinit_active = 1;
+  if (!setjmp(git_preinit_jump))
+    rc = main(count, args);
+  else
+    rc = git_preinit_exit_status;
+  git_preinit_active = 0;
+  fflush(stdout);
+  fflush(stderr);
+  /*
+   * Windows waits until readers consume all pipe bytes. Closing each
+   * descriptor then provides EOF. The client drains both concurrently.
+   */
+  FlushFileBuffers((HANDLE)_get_osfhandle(_fileno(stdout)));
+  FlushFileBuffers((HANDLE)_get_osfhandle(_fileno(stderr)));
+  _close(_fileno(stdout));
+  _close(_fileno(stderr));
+cleanup:
+  written = snprintf(result, sizeof(result), "EXIT %d\n", rc);
+  if (pipes[3][1] != INVALID_HANDLE_VALUE) {
+    if (written > 0 && written < sizeof(result) &&
+        WriteFile(pipes[3][1], result, written, &n, NULL))
+      FlushFileBuffers(pipes[3][1]);
+    DisconnectNamedPipe(pipes[3][1]);
+    CloseHandle(pipes[3][1]);
+    pipes[3][1] = INVALID_HANDLE_VALUE;
+  }
+  for (i = 0; i < 4; i++)
+    for (j = 0; j < 2; j++)
+      if (pipes[i][j] != INVALID_HANDLE_VALUE)
+        CloseHandle(pipes[i][j]);
+  free(acl);
+  free(token_user);
+  if (token)
+    CloseHandle(token);
+  return rc;
+}
 int wmain(int argc, const wchar_t **wargv)
 {
 	int i, exit_status;
@@ -3809,8 +4046,11 @@ int wmain(int argc, const wchar_t **wargv)
 	/* initialize Unicode console */
 	winansi_init();
 
-	/* invoke the real main() using our utf8 version of argv. */
-	exit_status = main(argc, argv);
+	/* Explicit Windows-only preinitialized worker mode. */
+	if (argc == 2 && !strcmp(argv[1], "--preinit"))
+		exit_status = git_preinit_worker();
+	else
+		exit_status = main(argc, argv);
 
 	for (i = 0; i < argc; i++)
 		free(save[i]);
