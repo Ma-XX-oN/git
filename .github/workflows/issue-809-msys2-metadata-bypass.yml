@@ -28,7 +28,10 @@ jobs:
           set -euxo pipefail
           export MSYSTEM=MSYS
           export PATH="/usr/bin:$PATH"
-          pacman -S --needed --noconfirm base-devel msys2-devel python
+          pacman -S --needed --noconfirm base-devel msys2-devel python mingw-w64-cross-mingw32-gcc
+          export PATH="/opt/bin:/usr/bin:$PATH"
+          command -v i686-w64-mingw32-gcc
+          command -v x86_64-w64-mingw32-gcc
           command -v makepkg
           # Use the 3.6.10-4 packaging recipe corresponding to the installed
           # Git-for-Windows SDK runtime. Do not update its production packages.
@@ -80,7 +83,7 @@ jobs:
         run: |
           set -euxo pipefail
           export MSYSTEM=MSYS
-          export PATH="/usr/bin:$PATH"
+          export PATH="/opt/bin:/usr/bin:$PATH"
           python3 -m py_compile experiments/issue-809/patch_msys2_test_pipe_attributes.py
           python3 experiments/issue-809/patch_msys2_test_pipe_attributes.py \
             /usr/src/MSYS2-packages/msys2-runtime/src/msys2-runtime/winsup/cygwin/path.cc
