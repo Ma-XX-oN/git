@@ -110,7 +110,7 @@ class Pool:
         p.stdout.close()
 
 def allocation_server(owner_pid:int,pool:Pool):
-  address=r"\\\\.\\pipe\\git809-allocate-"+str(owner_pid)
+  address=r"\\.\pipe\git809-allocate-"+str(owner_pid)
   # Native Bash builtin uses one Win32 connection, with no probe/open relay.
   h=K.CreateNamedPipeW(address,
     PIPE_ACCESS_DUPLEX|FILE_FLAG_FIRST_PIPE_INSTANCE,
@@ -125,10 +125,10 @@ def allocation_server(owner_pid:int,pool:Pool):
       try:
         buf=C.create_string_buffer(64)
         count=W.DWORD()
-        if K.ReadFile(h,buf,64,C.byref(count),None) and buf.raw[:count.value]==b"GET\\n":
+        if K.ReadFile(h,buf,64,C.byref(count),None) and buf.raw[:count.value]==b"GET\n":
           answer=pool.alloc().encode("ascii")
         else:
-          answer=b"INVALID\\n"
+          answer=b"INVALID\n"
         n=W.DWORD()
         if not K.WriteFile(h,answer,len(answer),C.byref(n),None) or n.value!=len(answer):
           raise OSError(C.get_last_error(),"WriteFile(allocation)")
