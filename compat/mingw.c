@@ -3798,7 +3798,7 @@ static int git_preinit_worker(void)
   HANDLE pipes[4][2];
   char frame[4096], result[64];
   DWORD used = 0, n;
-  int i, j, count, pos, rc = 120, written, outfd, errfd;
+  int i, j, count, pos, rc = 120, written, infd, outfd, errfd;
   const char *args[33] = {0};
   DWORD pid = GetCurrentProcessId();
   HANDLE token = NULL;
@@ -3871,7 +3871,7 @@ static int git_preinit_worker(void)
     for (i = 0; i < 4; i++) {
       int channel = order[i];
       if (!git_preinit_connect(pipes[channel][0], 1) ||
-          !git_preinit_connect(pipes[channel][1], 0)) {
+          !git_preinit_connect(pipes[channel][1], channel == 0)) {
         rc = 122;
         goto cleanup;
       }
@@ -3925,10 +3925,23 @@ static int git_preinit_worker(void)
     goto cleanup;
   }
   args[count] = NULL;
-  FlushFileBuffers(pipes[0][1]);
-  DisconnectNamedPipe(pipes[0][1]);
-  CloseHandle(pipes[0][1]);
+  /*
+   * The request writer has closed. Its bytes have already been read;
+   * retain the readable endpoint as Git's stdin, which now produces EOF.
+   * Do not flush or disconnect the input endpoint.
+   */
+  infd = _open_osfhandle((intptr_t)pipes[0][1], _O_BINARY);
+  if (infd < 0) {
+    rc = 132;
+    goto cleanup;
+  }
   pipes[0][1] = INVALID_HANDLE_VALUE;
+  if (_dup2(infd, 0) < 0) {
+    _close(infd);
+    rc = 133;
+    goto cleanup;
+  }
+  _close(infd);
 
   /* Transfer output handles to CRT descriptors used by Git's main(). */
   outfd = _open_osfhandle((intptr_t)pipes[1][1], _O_BINARY);
@@ -3953,6 +3966,12 @@ static int git_preinit_worker(void)
   }
   _close(outfd);
   _close(errfd);
+  if (!SetStdHandle(STD_INPUT_HANDLE, (HANDLE)_get_osfhandle(0)) ||
+      !SetStdHandle(STD_OUTPUT_HANDLE, (HANDLE)_get_osfhandle(1)) ||
+      !SetStdHandle(STD_ERROR_HANDLE, (HANDLE)_get_osfhandle(2))) {
+    rc = 134;
+    goto cleanup;
+  }
   git_preinit_active = 1;
   if (!setjmp(git_preinit_jump))
     rc = main(count, args);
@@ -3969,6 +3988,7 @@ static int git_preinit_worker(void)
   FlushFileBuffers((HANDLE)_get_osfhandle(_fileno(stderr)));
   _close(_fileno(stdout));
   _close(_fileno(stderr));
+  _close(0);
 cleanup:
   written = snprintf(result, sizeof(result), "EXIT %d\n", rc);
   if (pipes[3][1] != INVALID_HANDLE_VALUE) {
