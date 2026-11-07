@@ -110,7 +110,7 @@ class Pool:
         p.stdout.close()
 
 def allocation_server(owner_pid:int,pool:Pool):
-  address=r"\\.\pipe\git809-allocate-"+str(args.owner_winpid)
+  address=r"\\.\pipe\git809-allocate-"+str(owner_pid)
   first=True
   print("ALLOCATOR_START "+address,flush=True)
   while not pool.closing.is_set():
