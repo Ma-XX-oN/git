@@ -110,12 +110,12 @@ jobs:
           from pathlib import Path
           recipe = Path("PKGBUILD")
           source = recipe.read_text()
-          old = '  LC_ALL=C make\\n  LC_ALL=C make -j1 DESTDIR="${srcdir}"/dest install\\n'
+          old = '  LC_ALL=C make' + chr(10) + '  LC_ALL=C make -j1 DESTDIR="${srcdir}"/dest install' + chr(10)
           new = (
-            '  LC_ALL=C make -C x86_64-pc-cygwin/winsup/cygwin\\n'
-            '  mkdir -p "${srcdir}"/dest/usr/bin\\n'
-            '  cp x86_64-pc-cygwin/winsup/cygwin/new-msys-2.0.dll '
-            '"${srcdir}"/dest/usr/bin/msys-2.0.dll\\n'
+            '  LC_ALL=C make -C x86_64-pc-cygwin/winsup/cygwin' + chr(10)
+            + '  mkdir -p "${srcdir}"/dest/usr/bin' + chr(10)
+            + '  cp x86_64-pc-cygwin/winsup/cygwin/new-msys-2.0.dll '
+            + '"${srcdir}"/dest/usr/bin/msys-2.0.dll' + chr(10)
           )
           assert source.count(old) == 1, "historical build recipe changed"
           source = source.replace(old, new)
