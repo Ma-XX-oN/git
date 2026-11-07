@@ -32,8 +32,8 @@ jobs:
           # The runtime packaging recipe is dated September 2026, when MSYS
           # GCC 15.3.0-1 was current. Restore that signed historical compiler
           # package pair rather than adjusting C++ source or compiler flags.
-          pacman -U --noconfirm \\
-            https://repo.msys2.org/msys/x86_64/gcc-libs-15.3.0-1-x86_64.pkg.tar.zst \\
+          pacman -U --noconfirm \
+            https://repo.msys2.org/msys/x86_64/gcc-libs-15.3.0-1-x86_64.pkg.tar.zst \
             https://repo.msys2.org/msys/x86_64/gcc-15.3.0-1-x86_64.pkg.tar.zst
           test "$(pacman -Q gcc)" = "gcc 15.3.0-1"
           test "$(pacman -Q gcc-libs)" = "gcc-libs 15.3.0-1"
