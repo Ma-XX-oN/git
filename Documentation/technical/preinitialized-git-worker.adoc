@@ -9,6 +9,13 @@ before this behavior can be called production-ready.
 Launch and ownership
 --------------------
 
+The only valid invocation is `git --preinit`, with no additional
+options, commands or positional arguments. In particular,
+`git -C DIR --preinit`, `git --preinit status` and
+`git --preinit --workers 4` fail with exit status 129 without starting
+a worker. The external manager configures the worker count and lifecycle;
+`--preinit` starts exactly one worker.
+
 `git --preinit` (no other arguments) starts a *single-use* native Git
 worker. It writes `READY <native-win32-pid>\n` to the original launcher
 stdout after creating four native Windows named pipes, then waits for a
