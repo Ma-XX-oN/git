@@ -27,7 +27,7 @@ static void git809_unix_exit(int status)
   exit(status);
 }
 
-static int git809_unix_worker(const char *directory)
+int cmd_main(int argc, const char **argv);\n\nstatic int git809_unix_worker(const char *directory)
 {
   const char *names[] = {"stdout", "stderr", "exit-code", "stdin"};
   char paths[4][1024];
