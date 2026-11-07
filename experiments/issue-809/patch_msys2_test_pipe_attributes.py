@@ -8,11 +8,7 @@ The actual pipe open and Win32 connection path remain unchanged.
 from pathlib import Path
 import argparse
 
-ANCHOR = """      /* The EA given to NtCreateFile allows to get a handle to a symlink on
-         an NFS share, rather than getting a handle to the target of the
-         symlink (which would spoil the task of this method quite a bit).
-         Fortunately it's ignored on most other file systems so we don't have
-         to special case NFS too much. */"""
+ANCHOR = "      status = NtCreateFile (&h,\n\t\t\t     READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_READ_EA,"
 
 PATCH = r"""      /*
        * RWF #809 temporary experiment, deliberately restricted to the
