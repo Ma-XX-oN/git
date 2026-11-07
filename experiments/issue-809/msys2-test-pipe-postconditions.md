@@ -65,7 +65,14 @@ The isolated CI workflow `issue-809-msys2-metadata-bypass.yml` must:
 4. Verify that nonmatching prefixes and malformed hexadecimal names
    retain their original behavior (one instance fails, two succeed).
 5. Verify that normal-file redirection remains correct.
-6. Restore the unmodified runtime even if testing fails.
+6. Load the patched runtime only beside an isolated copy of Bash; leave the SDK runtime untouched throughout, including on failure.
+7. Verify the source patch's postconditions as release-active checks and preserve the cleared filesystem-info fallback for this synthetic endpoint.
 
 A successful patch application **is not** native acceptance. Do not
 modify a production MSYS2 or Git-for-Windows installation.
+
+## Native transport control
+
+Actions run `42380922356` verifies direct Win32 clients complete read and write with one named-pipe instance, whereas the stock Git Bash redirection uses two. The first Git Bash connection closes without transferring data; its second connection transfers the payload. The same test confirms the installed Git Bash reports `dynamic loading not available` for the loadable-builtin attempt. This does not establish whether the isolated pathname override succeeds.
+
+The historical MSYS2 build requires both `x86_64-w64-mingw32-gcc` and `i686-w64-mingw32-gcc`, in addition to the MSYS GCC. The i686 package is `mingw-w64-cross-mingw32-gcc` (tools under `/opt/bin`); its absence caused Actions run `42381679077` to fail during configuration, before compiling the override.
