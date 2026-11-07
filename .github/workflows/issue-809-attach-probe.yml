@@ -1,0 +1,55 @@
+name: Git 809 metadata-substitution attachment probe
+on:
+  push:
+    branches: [experiment-809-win32-native-bash-transport]
+    paths:
+      - experiments/issue-809/windows_bash_attach_probe.c
+      - experiments/issue-809/windows_pipe_open_trace.py
+      - .github/workflows/issue-809-attach-probe.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  metadata-bypass:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+        with:
+          flavor: full
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Build metadata-substitution Bash builtin
+        shell: bash
+        run: |
+          set -eux
+          export MSYSTEM=MSYS
+          export PATH="/usr/bin:$PATH"
+          pacman -S --needed --noconfirm gcc bash-devel
+          /usr/bin/gcc -O2 -Wall -Wextra -Werror -shared \
+            -I/usr/include/bash \
+            -o experiments/issue-809/git809attach.dll \
+            experiments/issue-809/windows_bash_attach_probe.c \
+            -L/usr/lib -lbash -lkernel32
+          test -s experiments/issue-809/git809attach.dll
+      - name: Compare direct native, Bash redirection and metadata-substituted Bash FD
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bash = 'D:\git-sdk-64-full\usr\bin\bash.exe'
+          if (-not (Test-Path $bash)) { throw "Full SDK Bash executable not found: $bash" }
+          $dll = (Resolve-Path 'experiments/issue-809/git809attach.dll').Path
+          python -m py_compile experiments/issue-809/windows_pipe_open_trace.py
+          foreach ($client in @('native','bash','attached')) {
+            foreach ($direction in @('read','write')) {
+              foreach ($count in @(1,2)) {
+                Write-Output "PIPE_CASE client=$client direction=$direction instances=$count"
+                python -u experiments/issue-809/windows_pipe_open_trace.py --client $client --instances $count --direction $direction --bash $bash --builtin-dll $dll
+                if ($LASTEXITCODE -ne 0) { throw "Trace case failed: $client $direction $count" }
+              }
+            }
+          }
