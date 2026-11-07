@@ -22,6 +22,8 @@ K = C.WinDLL("kernel32", use_last_error=True)
 K.CreateNamedPipeW.argtypes = [W.LPCWSTR, W.DWORD, W.DWORD, W.DWORD,
                                W.DWORD, W.DWORD, W.DWORD, W.LPVOID]
 K.CreateNamedPipeW.restype = W.HANDLE
+K.CreateFileW.argtypes = [W.LPCWSTR, W.DWORD, W.DWORD, W.LPVOID, W.DWORD, W.DWORD, W.HANDLE]
+K.CreateFileW.restype = W.HANDLE
 K.ConnectNamedPipe.argtypes = [W.HANDLE, W.LPVOID]
 K.ConnectNamedPipe.restype = W.BOOL
 K.WriteFile.argtypes = [W.HANDLE, W.LPCVOID, W.DWORD,
@@ -52,6 +54,7 @@ def main() -> int:
   parser.add_argument("--instances", required=True, type=int, choices=(1, 2))
   parser.add_argument("--direction", required=True, choices=("read", "write"))
   parser.add_argument("--bash", required=True)
+  parser.add_argument("--client", choices=("bash", "native"), default="bash")
   args = parser.parse_args()
   pipe_name = "\\\\.\\pipe\\git809-redirect-" + uuid.uuid4().hex
   handles = []
@@ -106,14 +109,31 @@ def main() -> int:
     code = 'exec 9<"$1" || exit 81; IFS= read -r line <&9 || exit 82; printf "CLIENT_DATA=%s\\n" "$line"; exec 9<&-'
   else:
     code = 'exec 9>>"$1" || exit 81; printf "CLIENT_WRITE\\n" >&9 || exit 82; exec 9>&-; printf "CLIENT_DONE\\n"'
-  record(f"START direction={args.direction} instances={args.instances} pipe={pipe_name}")
-  try:
-    child = subprocess.run([args.bash, "--noprofile", "--norc", "-c",
-                            code, "git809-probe", pipe_name],
-                           capture_output=True, timeout=7, check=False)
-    record(f"BASH_DONE rc={child.returncode} stdout={child.stdout!r} stderr={child.stderr!r}")
-  except subprocess.TimeoutExpired as exc:
-    record(f"BASH_TIMEOUT stdout={exc.stdout!r} stderr={exc.stderr!r}")
+  record(f"START direction={args.direction} instances={args.instances} client={args.client} pipe={pipe_name}")
+  if args.client == "native":
+    access = 0x80000000 if args.direction == "read" else 0x40000000
+    native = K.CreateFileW(pipe_name, access, 0, None, 3, 0, None)
+    if native == INVALID:
+      record(f"NATIVE_OPEN_FAILED error={C.get_last_error()}")
+    else:
+      n = W.DWORD()
+      if args.direction == "read":
+        buf = C.create_string_buffer(256)
+        success = K.ReadFile(native, buf, 256, C.byref(n), None)
+        record(f"NATIVE_READ success={int(success)} bytes={n.value} data={buf.raw[:n.value]!r}")
+      else:
+        payload = C.create_string_buffer(b"CLIENT_WRITE\n")
+        success = K.WriteFile(native, payload, 13, C.byref(n), None)
+        record(f"NATIVE_WRITE success={int(success)} bytes={n.value}")
+      K.CloseHandle(native)
+  else:
+    try:
+      child = subprocess.run([args.bash, "--noprofile", "--norc", "-c",
+                              code, "git809-probe", pipe_name],
+                             capture_output=True, timeout=7, check=False)
+      record(f"BASH_DONE rc={child.returncode} stdout={child.stdout!r} stderr={child.stderr!r}")
+    except subprocess.TimeoutExpired as exc:
+      record(f"BASH_TIMEOUT stdout={exc.stdout!r} stderr={exc.stderr!r}")
   for t in threads:
     t.join(timeout=0.3)
   record(f"SUMMARY connected={sum(' CONNECT ' in l for l in logs)} "
