@@ -30,6 +30,8 @@ K.WriteFile.restype = W.BOOL
 K.ReadFile.argtypes = [W.HANDLE, W.LPVOID, W.DWORD,
                        C.POINTER(W.DWORD), W.LPVOID]
 K.ReadFile.restype = W.BOOL
+K.FlushFileBuffers.argtypes = [W.HANDLE]
+K.FlushFileBuffers.restype = W.BOOL
 K.DisconnectNamedPipe.argtypes = [W.HANDLE]
 K.DisconnectNamedPipe.restype = W.BOOL
 K.CloseHandle.argtypes = [W.HANDLE]
@@ -85,6 +87,9 @@ def main() -> int:
       buf = C.create_string_buffer(payload)
       success = K.WriteFile(handle, buf, len(payload), C.byref(n), None)
       record(f"instance={index} write_success={int(success)} bytes={n.value} error={C.get_last_error() if not success else 0}")
+      if success:
+        flushed = K.FlushFileBuffers(handle)
+        record(f"instance={index} flushed={int(flushed)} flush_error={C.get_last_error() if not flushed else 0}")
     else:
       buf = C.create_string_buffer(256)
       success = K.ReadFile(handle, buf, 256, C.byref(n), None)
@@ -100,7 +105,7 @@ def main() -> int:
   if args.direction == "read":
     code = 'exec 9<"$1" || exit 81; IFS= read -r line <&9 || exit 82; printf "CLIENT_DATA=%s\\n" "$line"; exec 9<&-'
   else:
-    code = 'exec 9>"$1" || exit 81; printf "CLIENT_WRITE\\n" >&9 || exit 82; exec 9>&-; printf "CLIENT_DONE\\n"'
+    code = 'exec 9>>"$1" || exit 81; printf "CLIENT_WRITE\\n" >&9 || exit 82; exec 9>&-; printf "CLIENT_DONE\\n"'
   record(f"START direction={args.direction} instances={args.instances} pipe={pipe_name}")
   try:
     child = subprocess.run([args.bash, "--noprofile", "--norc", "-c",
