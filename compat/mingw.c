@@ -4052,11 +4052,29 @@ int wmain(int argc, const wchar_t **wargv)
 	/* initialize Unicode console */
 	winansi_init();
 
-	/* Explicit Windows-only preinitialized worker mode. */
-	if (argc == 2 && !strcmp(argv[1], "--preinit"))
-		exit_status = git_preinit_worker();
-	else
-		exit_status = main(argc, argv);
+	/*
+	 * --preinit is an exclusive process-startup mode, not a Git option
+	 * that can be combined with a command or other global options.
+	 * Stop at "--" so a command's literal path is not intercepted.
+	 */
+	{
+		int preinit = 0;
+
+		for (i = 1; i < argc && strcmp(argv[i], "--"); i++)
+			if (!strcmp(argv[i], "--preinit")) {
+				preinit = 1;
+				break;
+			}
+		if (preinit && argc != 2) {
+			fprintf(stderr,
+				"error: --preinit must be used without other arguments\n");
+			exit_status = 129;
+		} else if (preinit) {
+			exit_status = git_preinit_worker();
+		} else {
+			exit_status = main(argc, argv);
+		}
+	}
 
 	for (i = 0; i < argc; i++)
 		free(save[i]);
