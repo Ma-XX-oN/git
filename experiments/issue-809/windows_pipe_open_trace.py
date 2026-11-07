@@ -9,6 +9,7 @@ import argparse
 import ctypes as C
 from ctypes import wintypes as W
 import os
+from pathlib import Path
 import subprocess
 import sys
 import threading
@@ -56,6 +57,7 @@ def main() -> int:
   parser.add_argument("--bash", required=True)
   parser.add_argument("--client", choices=("bash", "native", "attached"), default="bash")
   parser.add_argument("--builtin-dll")
+  parser.add_argument("--strace", help="Windows Cygwin/MSYS strace.exe for runtime event logging")
   parser.add_argument("--expect", choices=("any", "success", "failure"), default="any")
   parser.add_argument("--name-kind", choices=("matched", "unmatched", "malformed"), default="matched")
   args = parser.parse_args()
@@ -145,9 +147,29 @@ def main() -> int:
       K.CloseHandle(native)
   else:
     try:
-      child = subprocess.run([args.bash, "--noprofile", "--norc", "-c",
-                              code, "git809-probe", pipe_name, args.builtin_dll or ""],
-                             capture_output=True, timeout=7, check=False)
+      command = [args.bash, "--noprofile", "--norc", "-c",
+                 code, "git809-probe", pipe_name, args.builtin_dll or ""]
+      trace_path = None
+      if args.strace:
+        trace_path = Path(os.environ.get("RUNNER_TEMP", os.getcwd())) / (
+          f"git809-runtime-{args.direction}-{args.name_kind}-{identifier}.strace")
+        command = [args.strace, "-m", "debug+syscall+flush+inherit",
+                   "-o", str(trace_path)] + command
+        record(f"TRACE_FILE={trace_path}")
+      child = subprocess.run(command, capture_output=True, timeout=12,
+                             check=False)
+      if trace_path:
+        if not trace_path.is_file():
+          raise RuntimeError(f"Runtime trace not produced: {trace_path}")
+        runtime_lines = [
+          line for line in trace_path.read_text(encoding="utf-8", errors="replace").splitlines()
+          if "GIT809_META" in line
+        ]
+        record(f"RUNTIME_MARKER_COUNT={len(runtime_lines)} trace_file={trace_path}")
+        for line in runtime_lines[-100:]:
+          record(f"RUNTIME {line}")
+        if not runtime_lines:
+          raise RuntimeError(f"No instrumented runtime events captured: {trace_path}")
       record(f"BASH_DONE rc={child.returncode} stdout={child.stdout!r} stderr={child.stderr!r}")
       if args.expect == "success":
         if child.returncode != 0:
