@@ -54,7 +54,8 @@ def main() -> int:
   parser.add_argument("--instances", required=True, type=int, choices=(1, 2))
   parser.add_argument("--direction", required=True, choices=("read", "write"))
   parser.add_argument("--bash", required=True)
-  parser.add_argument("--client", choices=("bash", "native"), default="bash")
+  parser.add_argument("--client", choices=("bash", "native", "attached"), default="bash")
+  parser.add_argument("--builtin-dll")
   args = parser.parse_args()
   pipe_name = "\\\\.\\pipe\\git809-redirect-" + uuid.uuid4().hex
   handles = []
@@ -109,6 +110,16 @@ def main() -> int:
     code = 'exec 9<"$1" || exit 81; IFS= read -r line <&9 || exit 82; printf "CLIENT_DATA=%s\\n" "$line"; exec 9<&-'
   else:
     code = 'exec 9>>"$1" || exit 81; printf "CLIENT_WRITE\\n" >&9 || exit 82; exec 9>&-; printf "CLIENT_DONE\\n"'
+  if args.client == "attached":
+    if not args.builtin_dll or not os.path.isfile(args.builtin_dll):
+      parser.error("attached client needs an existing --builtin-dll")
+    setup = ('enable -f "$(cygpath -u "$2")" git809attach || exit 80; '
+             'fake="/tmp/git809-metadata-$"; : > "$fake" || exit 79; '
+             f'git809attach "$1" "$fake" "{args.direction}" || exit 78; ')
+    if args.direction == "read":
+      code = setup + 'IFS= read -r line <&9 || exit 82; printf "CLIENT_DATA=%s\\n" "$line"; exec 9<&-'
+    else:
+      code = setup + 'printf "CLIENT_WRITE\\n" >&9 || exit 82; exec 9>&-; printf "CLIENT_DONE\\n"'
   record(f"START direction={args.direction} instances={args.instances} client={args.client} pipe={pipe_name}")
   if args.client == "native":
     access = 0x80000000 if args.direction == "read" else 0x40000000
@@ -129,7 +140,7 @@ def main() -> int:
   else:
     try:
       child = subprocess.run([args.bash, "--noprofile", "--norc", "-c",
-                              code, "git809-probe", pipe_name],
+                              code, "git809-probe", pipe_name, args.builtin_dll or ""],
                              capture_output=True, timeout=7, check=False)
       record(f"BASH_DONE rc={child.returncode} stdout={child.stdout!r} stderr={child.stderr!r}")
     except subprocess.TimeoutExpired as exc:
