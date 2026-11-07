@@ -92,9 +92,66 @@ void git809_worker_exit(int status)
  * Experimental one-shot preinitialized Git worker.  The PID identifies four
  * two instances per channel; the Python manager never forwards command bytes.
  */
-static int git809_direct_connect(HANDLE h)
+struct git809_conn {
+  HANDLE pipe;
+  HANDLE done;
+  LONG *first;
+  int index;
+  int ok;
+};
+
+static DWORD WINAPI git809_wait_connection(void *arg)
 {
-  return ConnectNamedPipe(h, NULL) || GetLastError() == ERROR_PIPE_CONNECTED;
+  struct git809_conn *c = (struct git809_conn *)arg;
+  c->ok = ConnectNamedPipe(c->pipe, NULL) ||
+          GetLastError() == ERROR_PIPE_CONNECTED;
+  if (c->ok)
+    InterlockedCompareExchange(c->first, c->index, -1);
+  SetEvent(c->done);
+  return 0;
+}
+
+/* Both pipe instances exist before either client connection. Threads wait
+ * independently so the first completed connection is discovered dynamically.
+ * All four channels retain exactly one probe and one data instance. */
+static int git809_accept_pair(HANDLE pair[2], int *probe, int *data)
+{
+  struct git809_conn c[2];
+  HANDLE threads[2] = { NULL, NULL };
+  HANDLE events[2];
+  LONG first = -1;
+  DWORD winner;
+  int j, ok = 0;
+  for (j = 0; j < 2; j++) {
+    c[j].pipe = pair[j];
+    c[j].done = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (!c[j].done)
+      goto finish;
+    c[j].first = &first;
+    c[j].index = j;
+    c[j].ok = 0;
+    threads[j] = CreateThread(NULL, 0, git809_wait_connection, &c[j], 0, NULL);
+    if (!threads[j])
+      goto finish;
+  }
+  events[0] = c[0].done;
+  events[1] = c[1].done;
+  winner = WaitForMultipleObjects(2, events, FALSE, INFINITE);
+  if (winner != WAIT_OBJECT_0 && winner != WAIT_OBJECT_0 + 1)
+    goto finish;
+  if (WaitForMultipleObjects(2, threads, TRUE, INFINITE) != WAIT_OBJECT_0)
+    goto finish;
+  if (!c[0].ok || !c[1].ok || (first != 0 && first != 1))
+    goto finish;
+  *probe = (int)first;
+  *data = 1 - *probe;
+  ok = 1;
+finish:
+  for (j = 0; j < 2; j++) {
+    if (threads[j]) CloseHandle(threads[j]);
+    if (c[j].done) CloseHandle(c[j].done);
+  }
+  return ok;
 }
 
 static int git809_direct_worker(void)
@@ -105,6 +162,7 @@ static int git809_direct_worker(void)
   char frame[4096], result[64];
   DWORD used = 0, n;
   int i, j, count, pos, rc = 120, written, outfd, errfd;
+  int data_index[4] = { -1, -1, -1, -1 };
   const char *args[33] = {0};
   DWORD pid = GetCurrentProcessId();
 
@@ -115,16 +173,15 @@ static int git809_direct_worker(void)
     if (snprintf(names[i], sizeof(names[i]), "\\\\.\\pipe\\%lu-%s",
                  (unsigned long)pid, suffixes[i]) >= sizeof(names[i]))
       goto cleanup;
-    /* Publish only the probe instance. The data instance must not
-     * exist until the probe has connected, because Windows does not
-     * reserve instance index 0 for the first client connection. */
-    pipes[i][0] = CreateNamedPipeA(names[i],
-      i == 0 ? PIPE_ACCESS_INBOUND : PIPE_ACCESS_OUTBOUND,
-      PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-      2, 65536, 65536, 5000, NULL);
-    if (pipes[i][0] == INVALID_HANDLE_VALUE) {
-      rc = 121;
-      goto cleanup;
+    for (j = 0; j < 2; j++) {
+      pipes[i][j] = CreateNamedPipeA(names[i],
+        i == 0 ? PIPE_ACCESS_INBOUND : PIPE_ACCESS_OUTBOUND,
+        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+        2, 65536, 65536, 5000, NULL);
+      if (pipes[i][j] == INVALID_HANDLE_VALUE) {
+        rc = 121;
+        goto cleanup;
+      }
     }
   }
   /* READY is an initialization handshake, not Git command output. */
@@ -139,26 +196,19 @@ static int git809_direct_worker(void)
     const int order[4] = {1, 2, 3, 0};
     for (i = 0; i < 4; i++) {
       int channel = order[i];
-      if (!git809_direct_connect(pipes[channel][0])) {
+      int probe, data;
+      if (!git809_accept_pair(pipes[channel], &probe, &data)) {
         rc = 122;
         goto cleanup;
       }
-      pipes[channel][1] = CreateNamedPipeA(names[channel],
-        channel == 0 ? PIPE_ACCESS_INBOUND : PIPE_ACCESS_OUTBOUND,
-        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-        2, 65536, 65536, 5000, NULL);
-      if (pipes[channel][1] == INVALID_HANDLE_VALUE ||
-          !git809_direct_connect(pipes[channel][1])) {
-        rc = 122;
-        goto cleanup;
-      }
-      DisconnectNamedPipe(pipes[channel][0]);
-      CloseHandle(pipes[channel][0]);
-      pipes[channel][0] = INVALID_HANDLE_VALUE;
+      data_index[channel] = data;
+      DisconnectNamedPipe(pipes[channel][probe]);
+      CloseHandle(pipes[channel][probe]);
+      pipes[channel][probe] = INVALID_HANDLE_VALUE;
     }
   }
   while (used < sizeof(frame)) {
-    if (!ReadFile(pipes[0][1], frame + used, sizeof(frame) - used, &n, NULL)) {
+    if (!ReadFile(pipes[0][data_index[0]], frame + used, sizeof(frame) - used, &n, NULL)) {
       if (GetLastError() != ERROR_BROKEN_PIPE) {
         rc = 123;
         goto cleanup;
@@ -202,25 +252,25 @@ static int git809_direct_worker(void)
     goto cleanup;
   }
   args[count] = NULL;
-  FlushFileBuffers(pipes[0][1]);
-  DisconnectNamedPipe(pipes[0][1]);
-  CloseHandle(pipes[0][1]);
-  pipes[0][1] = INVALID_HANDLE_VALUE;
+  FlushFileBuffers(pipes[0][data_index[0]]);
+  DisconnectNamedPipe(pipes[0][data_index[0]]);
+  CloseHandle(pipes[0][data_index[0]]);
+  pipes[0][data_index[0]] = INVALID_HANDLE_VALUE;
 
   /* Transfer output handles to CRT descriptors used by Git's main(). */
-  outfd = _open_osfhandle((intptr_t)pipes[1][1], _O_BINARY);
+  outfd = _open_osfhandle((intptr_t)pipes[1][data_index[1]], _O_BINARY);
   if (outfd < 0) {
     rc = 129;
     goto cleanup;
   }
-  pipes[1][1] = INVALID_HANDLE_VALUE;
-  errfd = _open_osfhandle((intptr_t)pipes[2][1], _O_BINARY);
+  pipes[1][data_index[1]] = INVALID_HANDLE_VALUE;
+  errfd = _open_osfhandle((intptr_t)pipes[2][data_index[2]], _O_BINARY);
   if (errfd < 0) {
     _close(outfd);
     rc = 130;
     goto cleanup;
   }
-  pipes[2][1] = INVALID_HANDLE_VALUE;
+  pipes[2][data_index[2]] = INVALID_HANDLE_VALUE;
   if (_dup2(outfd, _fileno(stdout)) < 0 ||
       _dup2(errfd, _fileno(stderr)) < 0) {
     _close(outfd);
@@ -248,13 +298,13 @@ static int git809_direct_worker(void)
   _close(_fileno(stderr));
 cleanup:
   written = snprintf(result, sizeof(result), "EXIT %d\n", rc);
-  if (pipes[3][1] != INVALID_HANDLE_VALUE) {
+  if (pipes[3][data_index[3]] != INVALID_HANDLE_VALUE) {
     if (written > 0 && written < sizeof(result) &&
-        WriteFile(pipes[3][1], result, written, &n, NULL))
-      FlushFileBuffers(pipes[3][1]);
-    DisconnectNamedPipe(pipes[3][1]);
-    CloseHandle(pipes[3][1]);
-    pipes[3][1] = INVALID_HANDLE_VALUE;
+        WriteFile(pipes[3][data_index[3]], result, written, &n, NULL))
+      FlushFileBuffers(pipes[3][data_index[3]]);
+    DisconnectNamedPipe(pipes[3][data_index[3]]);
+    CloseHandle(pipes[3][data_index[3]]);
+    pipes[3][data_index[3]] = INVALID_HANDLE_VALUE;
   }
   for (i = 0; i < 4; i++)
     for (j = 0; j < 2; j++)
