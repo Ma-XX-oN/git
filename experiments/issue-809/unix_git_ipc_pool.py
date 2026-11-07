@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Unix-only four-FIFO Git #809 worker pool; no Git command output relay."""
 import argparse
+import errno
 import json
 import os
 from pathlib import Path
@@ -113,7 +114,18 @@ def run(args):
         # writer per request lets Bash's next read attach to the previous
         # writer before it closes, causing a spurious EOF on macOS.
         # The shell opens its persistent reader after observing ready.json.
-        response_fd = os.open(response, os.O_WRONLY)
+        deadline = time.monotonic() + 5
+        while response_fd is None:
+            if not owner_alive(args.owner_pid):
+                raise RuntimeError("owner exited before reply FIFO connection")
+            try:
+                response_fd = os.open(response, os.O_WRONLY | os.O_NONBLOCK)
+            except OSError as exc:
+                if exc.errno != errno.ENXIO:
+                    raise
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("allocation reply FIFO connection timeout")
+                time.sleep(0.005)
         print("ALLOC_REPLY_SESSION_READY", flush=True)
         while owner_alive(args.owner_pid) and not pool.errors:
             readable, _, _ = select.select([req_fd], [], [], 0.25)
