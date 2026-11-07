@@ -49,6 +49,27 @@ PIPE_WAIT=0
 ERROR_PIPE_CONNECTED=535
 ERROR_NO_DATA=232
 POLL_SECONDS=10
+class PIPE_LOCAL(C.Structure):
+  _fields_=[("type",W.ULONG),("configuration",W.ULONG),
+            ("max_instances",W.ULONG),("instances",W.ULONG),
+            ("inbound_quota",W.ULONG),("read_available",W.ULONG),
+            ("outbound_quota",W.ULONG),("write_available",W.ULONG),
+            ("state",W.ULONG),("end",W.ULONG)]
+class IO_STATUS(C.Structure):
+  _fields_=[("status",C.c_ssize_t),("information",C.c_size_t)]
+NT=C.WinDLL("ntdll",use_last_error=True)
+NT.NtQueryInformationFile.argtypes=[W.HANDLE,C.POINTER(IO_STATUS),
+                                   C.POINTER(PIPE_LOCAL),W.ULONG,C.c_int]
+NT.NtQueryInformationFile.restype=C.c_long
+def pipe_state(handle):
+  info=PIPE_LOCAL()
+  io=IO_STATUS()
+  status=NT.NtQueryInformationFile(handle,C.byref(io),C.byref(info),
+                                   C.sizeof(info),24)
+  if status<0 or info.end!=1:
+    raise OSError(status,"NtQueryInformationFile(FilePipeLocalInformation)")
+  return info.state
+
 
 class Pool:
   def __init__(self, git:Path, target:int):
@@ -139,14 +160,21 @@ def allocation_server(owner_pid:int,pool:Pool):
       second_index,second_ok,second_error=connected.get(timeout=15)
       if not first_ok or not second_ok or first_index==second_index:
         raise OSError(first_error or second_error,"ConnectNamedPipe(allocation)")
-      if first_error==ERROR_NO_DATA and second_error==ERROR_NO_DATA:
-        raise RuntimeError("both allocation clients disconnected before data exchange")
-      if second_error==ERROR_NO_DATA and first_error!=ERROR_NO_DATA:
-        probe_index=second_index
-        data_index=first_index
+      # The first server thread to report completion did not necessarily
+      # accept the first client open. Use the independent kernel pipe states.
+      for _ in range(2000):
+        states=(pipe_state(handles[0]),pipe_state(handles[1]))
+        if states==(4,3):
+          probe_index,data_index=0,1
+          break
+        if states==(3,4):
+          probe_index,data_index=1,0
+          break
+        if any(state not in (3,4) for state in states):
+          raise RuntimeError(f"unexpected allocator pipe states: {states}")
+        time.sleep(.001)
       else:
-        probe_index=first_index
-        data_index=second_index
+        raise TimeoutError(f"allocation probe failed to close: states={states}")
       h=handles[data_index]
       print("ALLOCATOR_CONNECTED probe="+str(probe_index)+" data="+str(data_index)+
             " errors="+str((first_error,second_error)),flush=True)
