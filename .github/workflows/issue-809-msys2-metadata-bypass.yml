@@ -106,6 +106,9 @@ jobs:
           $isolated = Join-Path $env:RUNNER_TEMP 'git809-patched-bash'
           New-Item -ItemType Directory -Path $isolated -Force | Out-Null
           Copy-Item "$sdk\bash.exe" "$isolated\bash.exe" -Force
+          # Bash imports additional MSYS shared libraries. Keep the full
+          # dependency family beside it; replace only this isolated runtime.
+          Copy-Item "$sdk\msys-*.dll" $isolated -Force
           Copy-Item $win "$isolated\msys-2.0.dll" -Force
           $bash = "$isolated\bash.exe"
           if ((Get-FileHash "$sdk\msys-2.0.dll" -Algorithm SHA256).Hash -eq
