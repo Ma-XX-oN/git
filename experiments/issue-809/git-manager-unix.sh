@@ -32,6 +32,12 @@ _git809_unix_source() {
         printf 'GIT-IPC ERROR: Unix allocation reply channel open failed\n' >&2
         return 255
       }
+      if [[ ${GIT809_PERSISTENT_REQ:-} == 1 ]]; then
+        exec {_GIT809_UNIX_REQ_FD}> "$directory/allocate-req" || {
+          printf 'GIT-IPC ERROR: persistent allocation request channel open failed\n' >&2
+          return 255
+        }
+      fi
       _GIT809_UNIX_DIRECTORY=$directory
       _GIT809_UNIX_MANAGER_PID=$launched
       _GIT809_UNIX_MANAGER_LOG=$directory/manager.log
@@ -66,10 +72,21 @@ git-ipc() {
     printf 'GIT-IPC ERROR: Unix allocation reply channel unavailable\n' >&2
     return 255
   }
-  printf 'GET\n' > "$dir/allocate-req" || {
-    printf 'GIT-IPC ERROR: allocation request failed\n' >&2
-    return 255
-  }
+  if [[ ${GIT809_PERSISTENT_REQ:-} == 1 ]]; then
+    [[ -n ${_GIT809_UNIX_REQ_FD:-} ]] || {
+      printf 'GIT-IPC ERROR: persistent allocation descriptor missing\n' >&2
+      return 255
+    }
+    printf 'GET\n' >&"$_GIT809_UNIX_REQ_FD" || {
+      printf 'GIT-IPC ERROR: persistent allocation request failed\n' >&2
+      return 255
+    }
+  else
+    printf 'GET\n' > "$dir/allocate-req" || {
+      printf 'GIT-IPC ERROR: allocation request failed\n' >&2
+      return 255
+    }
+  fi
   IFS= read -r worker <&"$_GIT809_UNIX_REPLY_FD"
   rc=$?
   if (( rc != 0 )); then
@@ -138,8 +155,8 @@ git-ipc() {
   exec 6<&-
   if [[ ${GIT809_PROFILE_PHASES:-} == 1 ]]; then
     profile_exit=$EPOCHREALTIME
-    printf 'GIT809_PHASE start=%s allocated=%s opened=%s sent=%s drained=%s exited=%s\n' \
-      "$profile_start" "$profile_alloc" "$profile_open" "$profile_sent" "$profile_drained" "$profile_exit" >&2
+    printf 'GIT809_PHASE mode=%s start=%s allocated=%s opened=%s sent=%s drained=%s exited=%s\n' \
+      "${GIT809_PERSISTENT_REQ:-0}" "$profile_start" "$profile_alloc" "$profile_open" "$profile_sent" "$profile_drained" "$profile_exit" >&2
   fi
   if [[ $status =~ ^EXIT[[:space:]]([0-9]+)$ ]]; then
     return "${BASH_REMATCH[1]}"
