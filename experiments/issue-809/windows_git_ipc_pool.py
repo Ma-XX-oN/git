@@ -140,10 +140,10 @@ def allocation_server(owner_pid:int,pool:Pool):
           raise OSError(C.get_last_error(),"ConnectNamedPipe(allocation data)")
       buf=C.create_string_buffer(64)
       count=W.DWORD()
-      if K.ReadFile(h,buf,64,C.byref(count),None) and buf.raw[:count.value]==b"GET\\n":
+      if K.ReadFile(h,buf,64,C.byref(count),None) and buf.raw[:count.value]==b"GET\n":
         answer=pool.alloc().encode("ascii")
       else:
-        answer=b"INVALID\\n"
+        answer=b"INVALID\n"
       n=W.DWORD()
       if not K.WriteFile(h,answer,len(answer),C.byref(n),None):
         print("ALLOCATOR_WRITE_FAILED "+str(C.get_last_error()),flush=True)
