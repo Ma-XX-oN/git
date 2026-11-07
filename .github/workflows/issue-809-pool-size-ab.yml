@@ -1,0 +1,68 @@
+name: Git 809 controlled pool-size comparison
+on:
+  push:
+    branches: [experiment-809-one-versus-three-workers]
+    paths:
+      - experiments/issue-809/pool_size_ab_benchmark.py
+      - .github/workflows/issue-809-pool-size-ab.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-pool-ab:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Same-runner 1-vs-3 pool comparison
+        shell: bash
+        run: |
+          . /etc/profile
+          PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
+          export GIT809_MANAGER_PYTHON="$(cygpath -w "$PYTHON_EXE")"
+          bash -n experiments/issue-809/git-manager.sh
+          "$PYTHON_EXE" -m py_compile experiments/issue-809/pool_size_ab_benchmark.py experiments/issue-809/windows_real_git_worker_build.py experiments/issue-809/windows_git_ipc_pool.py
+          "$PYTHON_EXE" experiments/issue-809/pool_size_ab_benchmark.py
+      - name: Save raw samples
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-pool-size-ab-windows
+          path: git809-bash-pipe-results/pool-size-ab-*.json
+          if-no-files-found: warn
+  unix-pool-ab:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Modern Bash on macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          brew install bash
+          echo "$(brew --prefix bash)/bin" >> "$GITHUB_PATH"
+      - name: Same-runner 1-vs-3 pool comparison
+        shell: bash
+        run: |
+          bash -n experiments/issue-809/git-manager-unix.sh
+          python3 -m py_compile experiments/issue-809/pool_size_ab_benchmark.py experiments/issue-809/unix_git_worker_build.py experiments/issue-809/unix_git_ipc_pool.py
+          python3 experiments/issue-809/pool_size_ab_benchmark.py
+      - name: Save raw samples
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-pool-size-ab-${{ matrix.os }}
+          path: git809-bash-pipe-results/pool-size-ab-*.json
+          if-no-files-found: warn
