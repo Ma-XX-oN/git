@@ -49,8 +49,10 @@ jobs:
           export GIT809_TRACE_MANAGER=1
           # ABBA repeats both modes against the same Git build and Windows runner.
           # Keep timing diagnostics separate from the uninstrumented benchmark.
-          for mode in 0 1 1 0; do
-            export GIT809_PERSISTENT_REQ="$mode"
+          # Same-runner ABBA comparison. Only the Bash reply read mode varies.
+          export GIT809_PERSISTENT_REQ=0
+          for mode in blocking timed timed blocking; do
+            export GIT809_REPLY_READ_MODE="$mode"
             bash --noprofile --norc -c 'source experiments/issue-809/git-manager-unix.sh 3 || exit 1; for ((i=0;i<40;i++)); do git-ipc --version >/dev/null || exit 2; done; sleep .05; cat "$_GIT809_UNIX_MANAGER_LOG"'
           done
       - name: Preserve all raw measurements
