@@ -123,7 +123,12 @@ jobs:
               Write-Output "PIPE_METADATA_CASE mode=patched direction=$direction instances=2 name=unmatched"
               python -u experiments/issue-809/windows_pipe_open_trace.py --client bash --instances 2 --direction $direction --bash "$sdk\bash.exe" --expect success --name-kind unmatched
               if ($LASTEXITCODE -ne 0) { throw "Unmatched two-instance control failed: $direction" }
+              Write-Output "PIPE_METADATA_CASE mode=patched direction=$direction instances=1 name=malformed"
+              python -u experiments/issue-809/windows_pipe_open_trace.py --client bash --instances 1 --direction $direction --bash "$sdk\bash.exe" --expect failure --name-kind malformed
+              if ($LASTEXITCODE -ne 0) { throw "Malformed test-name negative control failed: $direction" }
             }
+            & "$sdk\bash.exe" --noprofile --norc -c 'f=$(mktemp) || exit 1; printf "normal_file_ok\n" > "$f" || exit 2; IFS= read -r payload < "$f" || exit 3; test "$payload" = normal_file_ok || exit 4; rm -f "$f"'
+            if ($LASTEXITCODE -ne 0) { throw "Ordinary file redirection regression" }
           }
           finally {
             Copy-Item $backup $runtime -Force
