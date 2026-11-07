@@ -28,7 +28,7 @@ int git809attach_builtin(WORD_LIST *list)
   regular_file = list->next->word->word;
   direction = list->next->next->word->word;
   if (!pipe_path || !regular_file || !direction ||
-      strncmp(pipe_path, "\\\\.\\pipe\\git809-redirect-", 23) != 0) {
+      strncmp(pipe_path, "\\\\.\\pipe\\git809-redirect-", 25) != 0) {
     fprintf(stderr, "GIT809_ATTACH_ERROR invalid named pipe or metadata path\n");
     return 2;
   }
