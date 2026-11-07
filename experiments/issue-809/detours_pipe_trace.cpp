@@ -69,16 +69,24 @@ static void emit(const char* op, NTSTATUS status, HANDLE handle, ACCESS_MASK acc
   reentrant = true;
   // Do not rely on CRT streams from DllMain. The reentrancy guard prevents the
   // logger's own Win32 file operation from becoming a watched NtCreateFile call.
-  char line[1200];
+  char path[600] = "(no-path)";
+  if (attrs && attrs->ObjectName && attrs->ObjectName->Buffer) {
+    int chars = attrs->ObjectName->Length / sizeof(WCHAR);
+    int count = WideCharToMultiByte(CP_UTF8, 0, attrs->ObjectName->Buffer,
+                                   chars, path, (int)sizeof(path)-1, nullptr, nullptr);
+    if (count > 0) path[count] = 0;
+    else path[0] = 0;
+  }
+  char line[1500];
   void* stack[8] = {};
   USHORT frames = CaptureStackBackTrace(1, 8, stack, nullptr);
   DWORD tid = GetCurrentThreadId();
   int length = _snprintf_s(line, sizeof(line), _TRUNCATE,
     "GIT809_DETOURS seq=%ld tick=%llu pid=%lu tid=%lu op=%s status=0x%08lx "
-    "handle=%p access=0x%08lx opts=0x%08lx root=%p stack=",
+    "handle=%p access=0x%08lx opts=0x%08lx root=%p path=%s stack=",
     InterlockedIncrement(&events), GetTickCount64(), GetCurrentProcessId(), tid,
     op, (unsigned long)status, handle, (unsigned long)access, (unsigned long)opts,
-    attrs ? attrs->RootDirectory : nullptr);
+    attrs ? attrs->RootDirectory : nullptr, path);
   if (length > 0) {
     for (USHORT i = 0; i < frames && length < (int)sizeof(line)-40; ++i) {
       int n = _snprintf_s(line+length, sizeof(line)-length, _TRUNCATE, "%p,", stack[i]);
