@@ -40,4 +40,5 @@ jobs:
           path: |
             git809-bash-pipe-results/pool-size-matched-1to5-windows.json
             git809-bash-pipe-results/two-instance-failure-round-*.log
+            git809-bash-pipe-results/two-instance-timeout-round-*.log
           if-no-files-found: warn
