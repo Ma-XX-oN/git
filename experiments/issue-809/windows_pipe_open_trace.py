@@ -167,6 +167,10 @@ def main() -> int:
           f"git809-detours-{args.direction}-{args.name_kind}-{identifier}.log")
         env["GIT809_PIPE_LEAF"] = prefix + identifier
         env["GIT809_DETOURS_LOG"] = str(injected_log)
+        # MSYS argument conversion under injected CreateProcess can rewrite
+        # native backslashes. Export the exact Unicode pipe path directly.
+        env["GIT809_PIPE_PATH"] = pipe_name
+        command[4] = code.replace('"$1"', '"$GIT809_PIPE_PATH"')
         command = [args.detours_launcher, args.detours_dll] + command
         record(f"DETOURS_LOG={injected_log} leaf={prefix + identifier}")
       child = subprocess.run(command, capture_output=True, timeout=15,
@@ -213,6 +217,9 @@ def main() -> int:
   connected = sum(' CONNECT ' in line for line in logs)
   record(f"SUMMARY connected={connected} instances={args.instances} "
          f"direction={args.direction} name_kind={args.name_kind}")
+  if args.detours_launcher and connected != args.instances:
+    raise RuntimeError(
+      f"Detours diagnostic invalid: {connected} server connections; expected {args.instances}")
   if args.expect == "success" and connected != args.instances:
     raise RuntimeError(f"Successful command consumed {connected} connections, expected {args.instances}")
   if args.expect == "success" and args.direction == "write" and not any(
