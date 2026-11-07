@@ -17,6 +17,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: git-for-windows/setup-git-for-windows-sdk@v2
+        with:
+          flavor: full
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
