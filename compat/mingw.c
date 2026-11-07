@@ -3756,6 +3756,11 @@ static volatile int git_preinit_exit_status;
  * The temporary benchmark build intercepts that dispatcher exit only, so
  * the one-shot worker can flush its native pipes and deliver the status.
  */
+/*
+ * Preserve Git's existing common_exit() tracing on the caller side.
+ * In this function call the actual CRT exit(), without tracing twice.
+ */
+#undef exit
 void git_preinit_worker_exit(int status)
 {
   if (git_preinit_active) {
@@ -3764,6 +3769,7 @@ void git_preinit_worker_exit(int status)
   }
   exit(status);
 }
+#define exit(code) exit(common_exit(__FILE__, __LINE__, (code)))
 /*
  * Experimental preinitialized Git worker.  The PID identifies four
  * two instances per channel; the Python manager never forwards command bytes.
