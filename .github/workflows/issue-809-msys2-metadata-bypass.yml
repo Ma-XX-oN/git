@@ -29,6 +29,13 @@ jobs:
           export MSYSTEM=MSYS
           export PATH="/usr/bin:$PATH"
           pacman -S --needed --noconfirm base-devel msys2-devel python mingw-w64-cross-mingw32-gcc
+          # Use the signed GCC package pair contemporary with the pinned
+          # September 2026 runtime recipe; do not modify compiler diagnostics.
+          pacman -U --noconfirm \\
+            https://repo.msys2.org/msys/x86_64/gcc-libs-15.3.0-1-x86_64.pkg.tar.zst \\
+            https://repo.msys2.org/msys/x86_64/gcc-15.3.0-1-x86_64.pkg.tar.zst
+          test "$(pacman -Q gcc)" = "gcc 15.3.0-1"
+          test "$(pacman -Q gcc-libs)" = "gcc-libs 15.3.0-1"
           export PATH="/opt/bin:/usr/bin:$PATH"
           command -v i686-w64-mingw32-gcc
           command -v x86_64-w64-mingw32-gcc
@@ -89,16 +96,6 @@ jobs:
             /usr/src/MSYS2-packages/msys2-runtime/src/msys2-runtime/winsup/cygwin/path.cc
           cd /usr/src/MSYS2-packages/msys2-runtime
           git -C src/msys2-runtime diff -- winsup/cygwin/path.cc
-          # Historical source with newer GCC: disable only this diagnosed
-          # warning-as-error; do not change dcrt0.cc or disable other errors.
-          python3 - <<'GIT809_COMPILER'
-          from pathlib import Path
-          p = Path("PKGBUILD")
-          source = p.read_text()
-          original = '  CXXFLAGS="$OPTIM -pipe -ggdb"'
-          assert source.count(original) == 1, "historical compiler contract drift"
-          p.write_text(source.replace(original, '  CXXFLAGS="$OPTIM -pipe -ggdb -Wno-error=volatile"'))
-          GIT809_COMPILER
           makepkg --noextract --noprepare --syncdeps --noconfirm --skipchecksums
           test -s src/dest/usr/bin/msys-2.0.dll
           workspace_posix=$(cygpath -u "$GITHUB_WORKSPACE")
