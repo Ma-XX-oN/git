@@ -318,10 +318,17 @@ static int git809_direct_worker(void)
                  (unsigned long)pid, suffixes[i]) >= sizeof(names[i]))
       goto cleanup;
     for (j = 0; j < 2; j++) {
+      DWORD error;
+      git809_trace_api("CreateNamedPipe", "ENTER", NULL, 0, 0,
+                       (DWORD)(i * 2 + j));
       pipes[i][j] = CreateNamedPipeA(names[i],
         i == 0 ? PIPE_ACCESS_INBOUND : PIPE_ACCESS_OUTBOUND,
         PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
         2, 65536, 65536, 5000, NULL);
+      error = pipes[i][j] == INVALID_HANDLE_VALUE ? GetLastError() : 0;
+      git809_trace_api("CreateNamedPipe", "RETURN", pipes[i][j],
+                       pipes[i][j] != INVALID_HANDLE_VALUE, error,
+                       (DWORD)(i * 2 + j));
       if (pipes[i][j] == INVALID_HANDLE_VALUE) {
         rc = 121;
         goto cleanup;
