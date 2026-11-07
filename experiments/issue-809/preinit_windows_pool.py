@@ -47,6 +47,59 @@ FILE_FLAG_FIRST_PIPE_INSTANCE=0x00080000
 PIPE_TYPE_BYTE=0
 PIPE_WAIT=0
 ERROR_PIPE_CONNECTED=535
+PIPE_REJECT_REMOTE_CLIENTS=0x00000008
+A=C.WinDLL("advapi32",use_last_error=True)
+
+class SECURITY_ATTRIBUTES(C.Structure):
+  _fields_=[("nLength",W.DWORD),("lpSecurityDescriptor",W.LPVOID),
+            ("bInheritHandle",W.BOOL)]
+
+class SID_AND_ATTRIBUTES(C.Structure):
+  _fields_=[("Sid",W.LPVOID),("Attributes",W.DWORD)]
+
+class TOKEN_USER(C.Structure):
+  _fields_=[("User",SID_AND_ATTRIBUTES)]
+
+K.GetCurrentProcess.restype=W.HANDLE
+K.LocalFree.argtypes=[W.HLOCAL]
+K.LocalFree.restype=W.HLOCAL
+A.OpenProcessToken.argtypes=[W.HANDLE,W.DWORD,C.POINTER(W.HANDLE)]
+A.OpenProcessToken.restype=W.BOOL
+A.GetTokenInformation.argtypes=[W.HANDLE,C.c_int,W.LPVOID,W.DWORD,C.POINTER(W.DWORD)]
+A.GetTokenInformation.restype=W.BOOL
+A.ConvertSidToStringSidW.argtypes=[W.LPVOID,C.POINTER(W.LPWSTR)]
+A.ConvertSidToStringSidW.restype=W.BOOL
+A.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes=[
+  W.LPCWSTR,W.DWORD,C.POINTER(W.LPVOID),C.POINTER(W.DWORD)]
+A.ConvertStringSecurityDescriptorToSecurityDescriptorW.restype=W.BOOL
+
+def private_pipe_security():
+  token=W.HANDLE()
+  sid_text=W.LPWSTR()
+  descriptor=W.LPVOID()
+  if not A.OpenProcessToken(K.GetCurrentProcess(),0x0008,C.byref(token)):
+    raise OSError(C.get_last_error(),"OpenProcessToken")
+  try:
+    needed=W.DWORD()
+    A.GetTokenInformation(token,1,None,0,C.byref(needed))
+    if not needed.value or C.get_last_error()!=122:
+      raise OSError(C.get_last_error(),"GetTokenInformation(size)")
+    storage=C.create_string_buffer(needed.value)
+    if not A.GetTokenInformation(token,1,storage,len(storage),C.byref(needed)):
+      raise OSError(C.get_last_error(),"GetTokenInformation")
+    sid=C.cast(storage,C.POINTER(TOKEN_USER)).contents.User.Sid
+    if not A.ConvertSidToStringSidW(sid,C.byref(sid_text)):
+      raise OSError(C.get_last_error(),"ConvertSidToStringSid")
+    if not A.ConvertStringSecurityDescriptorToSecurityDescriptorW(
+        "D:P(A;;GA;;;"+sid_text.value+")",1,C.byref(descriptor),None):
+      raise OSError(C.get_last_error(),"ConvertStringSecurityDescriptor")
+    attrs=SECURITY_ATTRIBUTES(C.sizeof(SECURITY_ATTRIBUTES),descriptor,False)
+    return attrs,descriptor
+  finally:
+    if sid_text:
+      K.LocalFree(C.cast(sid_text,W.HLOCAL))
+    K.CloseHandle(token)
+
 POLL_SECONDS=1
 # An allocated worker is single-use. The manager kills abandoned clients
 # after a finite period without inspecting or proxying command bytes.
@@ -130,18 +183,23 @@ class Pool:
 
 def allocation_server(owner_pid:int,pool:Pool):
   address=r"\\.\pipe\git809-allocate-"+str(owner_pid)
+  attrs,descriptor=private_pipe_security()
   # Git Bash's first open occupies one instance; the next carries GET.
   h_probe=K.CreateNamedPipeW(address,
     PIPE_ACCESS_DUPLEX|FILE_FLAG_FIRST_PIPE_INSTANCE,
-    PIPE_TYPE_BYTE|PIPE_WAIT,2,256,256,5000,None)
+    PIPE_TYPE_BYTE|PIPE_WAIT|PIPE_REJECT_REMOTE_CLIENTS,2,256,256,5000,C.byref(attrs))
   if h_probe==INVALID:
-    raise OSError(C.get_last_error(),"CreateNamedPipe(allocation probe)")
+    error=C.get_last_error()
+    K.LocalFree(descriptor)
+    raise OSError(error,"CreateNamedPipe(allocation probe)")
   h=K.CreateNamedPipeW(address,
     PIPE_ACCESS_DUPLEX,
-    PIPE_TYPE_BYTE|PIPE_WAIT,2,256,256,5000,None)
+    PIPE_TYPE_BYTE|PIPE_WAIT|PIPE_REJECT_REMOTE_CLIENTS,2,256,256,5000,C.byref(attrs))
   if h==INVALID:
+    error=C.get_last_error()
     K.CloseHandle(h_probe)
-    raise OSError(C.get_last_error(),"CreateNamedPipe(allocation data)")
+    K.LocalFree(descriptor)
+    raise OSError(error,"CreateNamedPipe(allocation data)")
   print("ALLOCATOR_READY "+address,flush=True)
   try:
     while not pool.closing.is_set():
@@ -173,6 +231,7 @@ def allocation_server(owner_pid:int,pool:Pool):
   finally:
     K.CloseHandle(h)
     K.CloseHandle(h_probe)
+    K.LocalFree(descriptor)
 
 def main():
   parser=argparse.ArgumentParser()
