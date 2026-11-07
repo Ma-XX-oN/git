@@ -333,8 +333,11 @@ static int git809_direct_worker(void)
       DWORD error;
       git809_trace_api("CreateNamedPipe", "ENTER", NULL, 0, 0,
                        (DWORD)(i * 2 + j));
+      /* Duplex grants FILE_READ_ATTRIBUTES for the kernel state query.
+       * The existing Git and Bash protocol still uses only its assigned
+       * data direction for each of the four logical channels. */
       pipes[i][j] = CreateNamedPipeA(names[i],
-        i == 0 ? PIPE_ACCESS_INBOUND : PIPE_ACCESS_OUTBOUND,
+        PIPE_ACCESS_DUPLEX,
         PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
         2, 65536, 65536, 5000, NULL);
       error = pipes[i][j] == INVALID_HANDLE_VALUE ? GetLastError() : 0;
