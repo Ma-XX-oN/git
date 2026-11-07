@@ -128,9 +128,19 @@ def main():
       env["GIT809_WORKER_GIT"]=git_native
       if not env.get("GIT809_MANAGER_PYTHON"):
         env["GIT809_MANAGER_PYTHON"]=sys.executable
-      proc=subprocess.run([bash,"--noprofile","--norc","-c",WIN_SCRIPT,
-        "benchmark",script,git_shell],capture_output=True,stdin=subprocess.DEVNULL,
-        timeout=180,env=env)
+      try:
+        proc=subprocess.run([bash,"--noprofile","--norc","-c",WIN_SCRIPT,
+          "benchmark",script,git_shell],capture_output=True,stdin=subprocess.DEVNULL,
+          timeout=180,env=env)
+      except subprocess.TimeoutExpired as exc:
+        report["stdout"]=(exc.stdout or b"").decode("utf-8","replace")
+        report["stderr"]=(exc.stderr or b"").decode("utf-8","replace")
+        done=[line for line in report["stdout"].splitlines()
+              if line.startswith("PAIR ")]
+        print("PREINIT_TIMEOUT completed_pairs="+str(len(done))+
+              " last_pair="+repr(done[-1] if done else None)+
+              " stderr_tail="+repr(report["stderr"][-4000:]),flush=True)
+        raise
     else:
       proc=subprocess.run([bash,"--noprofile","--norc","-c",UNIX_SCRIPT,
         "benchmark",git_shell],capture_output=True,stdin=subprocess.DEVNULL,timeout=90)
