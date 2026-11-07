@@ -41,10 +41,16 @@ All other names must execute the original function unchanged.
 | `ext_here` | preserve | Set by `suffix.has()` |
 | `h` | NULL, never acquired | Do not retain or close nonexisting handle |
 | `conv_hdl` | no newly acquired handle | `path_conv::check()` initialization closes earlier one |
-| `fs` | unchanged | `path_conv::check()` updates it at its `out:` path |
+| `fs` | retains cleared/unknown state for this test endpoint | Caller suppresses only the name-matched `fs_info::update` lookup, which otherwise performs another `NtOpenFile` on the test pipe |
 
 `mode()` is not required because `isdevice()` is false; the caller
-reads mode only for device paths. The real data open remains unchanged.
+reads mode only for device paths. The real data open remains unchanged. Importantly, the caller's
+`fs_info::update(get_nt_native_path(), NULL)` would otherwise open
+the same pipe pathname again (see `winsup/cygwin/mount.cc`, `fs_info::update`).
+The exception therefore guards this **second** metadata open as well.
+It uses the existing, explicitly supported "filesystem lookup unavailable"
+path; it does not fabricate volume flags. The original filesystem lookup
+remains in force for every nonmatching pathname.
 
 ## Native acceptance
 
