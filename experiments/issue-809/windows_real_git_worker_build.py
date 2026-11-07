@@ -98,13 +98,17 @@ struct git809_conn {
   LONG *first;
   int index;
   int ok;
+  int closed_before_accept;
 };
 
 static DWORD WINAPI git809_wait_connection(void *arg)
 {
   struct git809_conn *c = (struct git809_conn *)arg;
-  c->ok = ConnectNamedPipe(c->pipe, NULL) ||
-          GetLastError() == ERROR_PIPE_CONNECTED;
+  BOOL connected = ConnectNamedPipe(c->pipe, NULL);
+  DWORD error = connected ? ERROR_SUCCESS : GetLastError();
+  c->closed_before_accept = error == ERROR_NO_DATA;
+  c->ok = connected || error == ERROR_PIPE_CONNECTED ||
+          c->closed_before_accept;
   if (c->ok)
     InterlockedCompareExchange(c->first, c->index, -1);
   SetEvent(c->done);
@@ -132,6 +136,7 @@ static int git809_accept_pair(HANDLE pair[2], int *probe, int *data)
     c[j].first = &first;
     c[j].index = j;
     c[j].ok = 0;
+    c[j].closed_before_accept = 0;
     threads[j] = CreateThread(NULL, 0, git809_wait_connection, &c[j], 0, NULL);
     if (!threads[j])
       goto finish;
@@ -145,7 +150,15 @@ static int git809_accept_pair(HANDLE pair[2], int *probe, int *data)
     goto finish;
   if (!c[0].ok || !c[1].ok || (first != 0 && first != 1))
     goto finish;
-  *probe = (int)first;
+  /* ERROR_NO_DATA means that this client already disconnected.
+   * That is stronger evidence of Bash's metadata probe than scheduling
+   * order between the two server-side connection threads. */
+  if (c[0].closed_before_accept && c[1].closed_before_accept)
+    goto finish;
+  if (c[0].closed_before_accept || c[1].closed_before_accept)
+    *probe = c[0].closed_before_accept ? 0 : 1;
+  else
+    *probe = (int)first;
   *data = 1 - *probe;
   ok = 1;
 finish:
