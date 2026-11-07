@@ -30,6 +30,21 @@ SHELL = r"""
   manager_script=$2
   gitbin=$3
   source "$manager_script" "$count" || exit 31
+  _pool_ab_diagnostics() {
+    local exit_code=$?
+    if (( exit_code != 0 )); then
+      printf 'POOL_AB_FAILURE workers=%s rc=%s bash_pid=%s\\n' "$count" "$exit_code" "$BASHPID" >&2
+      if [[ $GIT809_PLATFORM == windows ]]; then
+        [[ -n ${_GIT809_MANAGER_LOG:-} && -f $_GIT809_MANAGER_LOG ]] && cat "$_GIT809_MANAGER_LOG" >&2
+      else
+        [[ -n ${_GIT809_UNIX_MANAGER_LOG:-} && -f $_GIT809_UNIX_MANAGER_LOG ]] && cat "$_GIT809_UNIX_MANAGER_LOG" >&2
+        [[ -n ${_GIT809_UNIX_MANAGER_PID:-} ]] &&
+          kill -0 "$_GIT809_UNIX_MANAGER_PID" 2>/dev/null &&
+          printf 'POOL_AB_MANAGER_ALIVE pid=%s\\n' "$_GIT809_UNIX_MANAGER_PID" >&2
+      fi
+    fi
+  }
+  trap _pool_ab_diagnostics EXIT
   if [[ $GIT809_PLATFORM == windows ]]; then
     [[ ${_GIT809_MANAGER_WORKERS:-} == "$count" ]] || exit 32
     export GIT809_DRAIN_MODE=chunk100
