@@ -1,70 +1,45 @@
-name: Git 809 matched runner pool sizes 1 through 5
+name: Git 809 Windows POSIX FIFO experiment
 on:
   push:
-    branches: [experiment-809-pool-1-to-5-same-runner]
+    branches: [experiment-809-windows-posix-fifo]
     paths:
-      - experiments/issue-809/pool_size_ab_benchmark.py
-      - experiments/issue-809/unix_git_ipc_pool.py
-      - experiments/issue-809/git-manager-unix.sh
+      - experiments/issue-809/**
       - .github/workflows/issue-809-pool-size-ab.yml
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  windows-pool-ab:
+  windows-posix-fifo:
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - uses: git-for-windows/setup-git-for-windows-sdk@v2
-      - uses: actions/setup-python@v5
+      - name: Set up Git for Windows MSYS2 SDK
+        uses: git-for-windows/setup-git-for-windows-sdk@v2
         with:
-          python-version: '3.13'
-      - name: Same-runner pool sizes 1 through 5
+          flavor: full
+      - name: Verify POSIX toolchain and run shared Unix FIFO worker
         shell: bash
         run: |
           . /etc/profile
-          PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
-          export GIT809_MANAGER_PYTHON="$(cygpath -w "$PYTHON_EXE")"
-          bash -n experiments/issue-809/git-manager.sh
-          "$PYTHON_EXE" -m py_compile experiments/issue-809/pool_size_ab_benchmark.py experiments/issue-809/windows_real_git_worker_build.py experiments/issue-809/windows_git_ipc_pool.py
-          "$PYTHON_EXE" experiments/issue-809/pool_size_ab_benchmark.py
-      - name: Save raw samples
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: git809-pool-size-matched-1to5-windows
-          path: git809-bash-pipe-results/pool-size-matched-1to5-*.json
-          if-no-files-found: warn
-  unix-pool-ab:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - name: Modern Bash on macOS
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          brew install bash
-          echo "$(brew --prefix bash)/bin" >> "$GITHUB_PATH"
-      - name: Same-runner pool sizes 1 through 5
-        shell: bash
-        run: |
+          export MSYSTEM=MSYS
+          export PATH="/usr/bin:$PATH"
+          pacman -S --needed --noconfirm gcc python
+          command -v gcc
+          command -v python3
+          command -v mkfifo
+          test "$(command -v gcc)" = /usr/bin/gcc
+          test "$(command -v python3)" = /usr/bin/python3
+          python3 -c 'import os; assert os.name == "posix"; assert hasattr(os,"mkfifo")'
           bash -n experiments/issue-809/git-manager-unix.sh
-          python3 -m py_compile experiments/issue-809/pool_size_ab_benchmark.py experiments/issue-809/unix_git_worker_build.py experiments/issue-809/unix_git_ipc_pool.py
+          python3 -m py_compile experiments/issue-809/unix_git_worker_build.py experiments/issue-809/unix_git_ipc_pool.py experiments/issue-809/pool_size_ab_benchmark.py
           python3 experiments/issue-809/pool_size_ab_benchmark.py
-      - name: Save raw samples
+      - name: Preserve all raw measurements
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: git809-pool-size-matched-1to5-${{ matrix.os }}
-          path: git809-bash-pipe-results/pool-size-matched-1to5-*.json
+          name: git809-windows-posix-fifo
+          path: git809-bash-pipe-results/pool-size-matched-1to5-windows.json
           if-no-files-found: warn
