@@ -89,11 +89,29 @@ jobs:
             /usr/src/MSYS2-packages/msys2-runtime/src/msys2-runtime/winsup/cygwin/path.cc
           cd /usr/src/MSYS2-packages/msys2-runtime
           git -C src/msys2-runtime diff -- winsup/cygwin/path.cc
+          # Historical source with newer GCC: disable only this diagnosed
+          # warning-as-error; do not change dcrt0.cc or disable other errors.
+          python3 - <<'GIT809_COMPILER'
+          from pathlib import Path
+          p = Path("PKGBUILD")
+          source = p.read_text()
+          original = '  CXXFLAGS="$OPTIM -pipe -ggdb"'
+          assert source.count(original) == 1, "historical compiler contract drift"
+          p.write_text(source.replace(original, '  CXXFLAGS="$OPTIM -pipe -ggdb -Wno-error=volatile"'))
+          GIT809_COMPILER
           makepkg --noextract --noprepare --syncdeps --noconfirm --skipchecksums
           test -s src/dest/usr/bin/msys-2.0.dll
           workspace_posix=$(cygpath -u "$GITHUB_WORKSPACE")
           printf '%s\n' "$PWD/src/dest/usr/bin/msys-2.0.dll" > "$workspace_posix/experiments/issue-809/patched-runtime-path.txt"
           sha256sum src/dest/usr/bin/msys-2.0.dll
+      - name: Run existing upstream pathname regression tests against newly built runtime
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export MSYSTEM=MSYS
+          export PATH="/opt/bin:/usr/bin:$PATH"
+          cd /usr/src/MSYS2-packages/msys2-runtime/src/build-x86_64-pc-cygwin/winsup/testsuite
+          make check TESTS="winsup.api/ltp/open02 winsup.api/ltp/open03 winsup.api/ltp/stat01 winsup.api/ltp/stat02 winsup.api/ltp/stat03 winsup.api/ltp/lstat02 winsup.api/ltp/readlink01 winsup.api/ltp/readlink02 winsup.api/ltp/symlink01 winsup.api/ltp/symlink02"
       - name: Compare pristine Git Bash and isolated patched runtime
         shell: pwsh
         run: |
