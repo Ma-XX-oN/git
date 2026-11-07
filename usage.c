@@ -15,7 +15,7 @@
  * through git.c's builtin dispatcher. The worker must still drain its
  * output and deliver the genuine failure status.
  */
-extern void git_preinit_worker_exit(int status);
+extern NORETURN void git_preinit_worker_exit(int status);
 #undef exit
 #define exit(status) git_preinit_worker_exit(common_exit(__FILE__, __LINE__, (status)))
 #endif
