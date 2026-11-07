@@ -114,6 +114,8 @@ jobs:
           new = (
             '  LC_ALL=C make configure-target-winsup' + chr(10)
             + '  test -f x86_64-pc-cygwin/winsup/cygwin/Makefile' + chr(10)
+            + '  LC_ALL=C make -C x86_64-pc-cygwin/winsup/cygwin '
+            + 'child_info_magic.h shared_info_magic.h globals.h localtime.patched.c' + chr(10)
             + '  LC_ALL=C make -C x86_64-pc-cygwin/winsup/cygwin new-msys-2.0.dll' + chr(10)
             + '  mkdir -p "${srcdir}"/dest/usr/bin' + chr(10)
             + '  cp x86_64-pc-cygwin/winsup/cygwin/new-msys-2.0.dll '
