@@ -103,6 +103,26 @@ jobs:
             /usr/src/MSYS2-packages/msys2-runtime/src/msys2-runtime/winsup/cygwin/path.cc
           cd /usr/src/MSYS2-packages/msys2-runtime
           git -C src/msys2-runtime diff -- winsup/cygwin/path.cc
+          # Build only the MSYS runtime DLL required by the pipe experiment.
+          # The full package also compiles unrelated cygcheck utilities whose
+          # historical declarations are rejected by the current SDK headers.
+          python3 - <<'GIT809_DLL_ONLY'
+          from pathlib import Path
+          recipe = Path("PKGBUILD")
+          source = recipe.read_text()
+          old = '  LC_ALL=C make\\n  LC_ALL=C make -j1 DESTDIR="${srcdir}"/dest install\\n'
+          new = (
+            '  LC_ALL=C make -C x86_64-pc-cygwin/winsup/cygwin\\n'
+            '  mkdir -p "${srcdir}"/dest/usr/bin\\n'
+            '  cp x86_64-pc-cygwin/winsup/cygwin/new-msys-2.0.dll '
+            '"${srcdir}"/dest/usr/bin/msys-2.0.dll\\n'
+          )
+          assert source.count(old) == 1, "historical build recipe changed"
+          source = source.replace(old, new)
+          # Packaging is unnecessary: retain the original source and flags,
+          # but stage the unstripped DLL for the isolated executable test.
+          recipe.write_text(source)
+          GIT809_DLL_ONLY
           makepkg --noextract --noprepare --syncdeps --noconfirm --skipchecksums
           test -s src/dest/usr/bin/msys-2.0.dll
           workspace_posix=$(cygpath -u "$GITHUB_WORKSPACE")
