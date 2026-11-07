@@ -122,6 +122,8 @@ static int git809_accept_pair(HANDLE pair[2], int *probe, int *data)
   LONG first = -1;
   DWORD winner;
   int j, ok = 0;
+  c[0].done = NULL;
+  c[1].done = NULL;
   for (j = 0; j < 2; j++) {
     c[j].pipe = pair[j];
     c[j].done = CreateEventW(NULL, TRUE, FALSE, NULL);
