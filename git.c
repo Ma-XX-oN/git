@@ -18,6 +18,13 @@
 #include "trace.h"
 #include "trace2.h"
 
+#ifdef GIT_WINDOWS_NATIVE
+/* The Windows --preinit worker needs to capture builtin dispatch exit. */
+extern void git_preinit_worker_exit(int status);
+#undef exit
+#define exit(status) git_preinit_worker_exit(status)
+#endif
+
 #define RUN_SETUP		(1<<0)
 #define RUN_SETUP_GENTLY	(1<<1)
 #define USE_PAGER		(1<<2)
