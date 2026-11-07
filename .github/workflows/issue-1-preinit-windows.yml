@@ -8,6 +8,7 @@ on:
       - experiments/issue-809/preinit_windows_pool.py
       - experiments/issue-809/git-preinit.sh
       - experiments/issue-809/preinit_windows_benchmark.py
+      - experiments/issue-809/preinit_native_protocol_test.py
       - .github/workflows/issue-1-preinit-windows.yml
   workflow_dispatch:
 permissions:
@@ -32,7 +33,9 @@ jobs:
           export GIT809_MANAGER_PYTHON="$(cygpath -w "$PYTHON_EXE")"
           bash -n experiments/issue-809/git-preinit.sh
           "$PYTHON_EXE" -m py_compile experiments/issue-809/preinit_windows_pool.py experiments/issue-809/preinit_windows_benchmark.py
+          "$PYTHON_EXE" -m py_compile experiments/issue-809/preinit_native_protocol_test.py
           "$PYTHON_EXE" experiments/issue-809/preinit_windows_benchmark.py
+          "$PYTHON_EXE" experiments/issue-809/preinit_native_protocol_test.py
       - name: Save exact results
         if: always()
         uses: actions/upload-artifact@v4
