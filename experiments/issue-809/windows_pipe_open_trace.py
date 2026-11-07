@@ -56,6 +56,7 @@ def main() -> int:
   parser.add_argument("--bash", required=True)
   parser.add_argument("--client", choices=("bash", "native", "attached"), default="bash")
   parser.add_argument("--builtin-dll")
+  parser.add_argument("--expect", choices=("any", "success", "failure"), default="any")
   args = parser.parse_args()
   pipe_name = "\\\\.\\pipe\\git809-redirect-" + uuid.uuid4().hex
   handles = []
@@ -143,8 +144,14 @@ def main() -> int:
                               code, "git809-probe", pipe_name, args.builtin_dll or ""],
                              capture_output=True, timeout=7, check=False)
       record(f"BASH_DONE rc={child.returncode} stdout={child.stdout!r} stderr={child.stderr!r}")
+      if args.expect == "success" and child.returncode != 0:
+        raise RuntimeError(f"Bash redirection expected success, rc={child.returncode}")
+      if args.expect == "failure" and child.returncode == 0:
+        raise RuntimeError("Bash redirection unexpectedly succeeded")
     except subprocess.TimeoutExpired as exc:
       record(f"BASH_TIMEOUT stdout={exc.stdout!r} stderr={exc.stderr!r}")
+      if args.expect != "any":
+        raise RuntimeError("Bash redirection timed out") from exc
   for t in threads:
     t.join(timeout=0.3)
   record(f"SUMMARY connected={sum(' CONNECT ' in l for l in logs)} "
