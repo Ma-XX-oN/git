@@ -5,6 +5,7 @@ on:
     paths:
       - experiments/issue-809/detours_*
       - experiments/issue-809/windows_pipe_open_trace.py
+      - experiments/issue-809/resolve_detours_symbols.py
       - .github/workflows/issue-809-detours-handle-trace.yml
   workflow_dispatch:
 permissions:
@@ -72,6 +73,21 @@ jobs:
             if ($LASTEXITCODE -ne 0) { $failures += $direction }
           }
           if ($failures.Count) { throw "Detours trace failed: $($failures -join ',')" }
+      - name: Resolve native handle stacks with matching MSYS2 runtime debug symbols
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sdk = 'D:\git-sdk-64-full\usr\bin'
+          $dll = Join-Path $sdk 'msys-2.0.dll'
+          $dbg = Join-Path $sdk 'msys-2.0.dbg'
+          $addr = Join-Path $sdk 'addr2line.exe'
+          foreach ($item in @($dll,$dbg,$addr)) {
+            if (-not (Test-Path $item)) { throw "Missing required matching runtime binary/debug tooling: $item" }
+          }
+          Get-FileHash $dll -Algorithm SHA256
+          Get-FileHash $dbg -Algorithm SHA256
+          python -u experiments/issue-809/resolve_detours_symbols.py --trace-dir "$env:RUNNER_TEMP" --dll $dll --debug-file $dbg --addr2line $addr
+          if ($LASTEXITCODE -ne 0) { throw 'Native source symbol resolution failed' }
       - name: Upload full filtered handle traces
         if: always()
         uses: actions/upload-artifact@v4
