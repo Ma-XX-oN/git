@@ -3768,9 +3768,21 @@ void git_preinit_worker_exit(int status)
  * Experimental preinitialized Git worker.  The PID identifies four
  * two instances per channel; the Python manager never forwards command bytes.
  */
-static int git_preinit_connect(HANDLE h)
+static int git_preinit_connect(HANDLE h, int probe_instance)
 {
-  return ConnectNamedPipe(h, NULL) || GetLastError() == ERROR_PIPE_CONNECTED;
+  DWORD error;
+
+  if (ConnectNamedPipe(h, NULL))
+    return 1;
+  error = GetLastError();
+  /*
+   * Git Bash can close its first (probe) pipe connection before the
+   * server has called ConnectNamedPipe(). ERROR_NO_DATA means that
+   * client has already disconnected. This is acceptable for the
+   * deliberately unused probe instance, NEVER the data instance.
+   */
+  return error == ERROR_PIPE_CONNECTED ||
+         (probe_instance && error == ERROR_NO_DATA);
 }
 
 static int git_preinit_worker(void)
@@ -3852,8 +3864,8 @@ static int git_preinit_worker(void)
     const int order[4] = {1, 2, 3, 0};
     for (i = 0; i < 4; i++) {
       int channel = order[i];
-      if (!git_preinit_connect(pipes[channel][0]) ||
-          !git_preinit_connect(pipes[channel][1])) {
+      if (!git_preinit_connect(pipes[channel][0], 1) ||
+          !git_preinit_connect(pipes[channel][1], 0)) {
         rc = 122;
         goto cleanup;
       }
