@@ -31,12 +31,23 @@ def main() -> int:
   assert len(traces) >= 2, f"Expected read/write Detours traces, got {traces}"
   observations = 0
   resolved = 0
+  categories = set()
   for f in traces:
     content = f.read_text(encoding="utf-8", errors="strict").splitlines()
     assert any("op=HOOK_READY" in line for line in content)
     for line in content:
       if "op=NtCreateFile_END" not in line and "op=NtClose_END" not in line:
         continue
+      status = re.search(r"status=0x([0-9a-fA-F]+)", line)
+      assert status, f"Missing native result status: {line}"
+      operation = "NtClose" if "op=NtClose_END" in line else "NtCreateFile"
+      result = int(status.group(1), 16)
+      kind = ("metadata-open" if operation == "NtCreateFile" and result == 0
+              else "transport-open-busy" if operation == "NtCreateFile" and result == 0xC00000AC
+              else "metadata-close" if operation == "NtClose" and result == 0
+              else "other")
+      if kind != "other":
+        categories.add((f.name.split("-")[2], kind))
       base = re.search(r"imagebase=(0x[0-9a-fA-F]+|[0-9a-fA-F]+)", line)
       stack = re.search(r"stack=([0-9a-fA-Fx,]+)", line)
       if not base or not stack:
@@ -56,12 +67,16 @@ def main() -> int:
                                  f"0x{canonical:x}"], capture_output=True,
                                 text=True, encoding="utf-8", check=True)
         fn, _, location = result.stdout.partition("\n")
-        print(f"GIT809_SYMBOL file={f.name} op={line.split('op=')[1].split()[0]} "
-              f"base=0x{imagebase:x} address=0x{addr:x} preferred=0x{canonical:x} function={fn} source={location.strip()}",
-              flush=True)
+        print(f"GIT809_SYMBOL file={f.name} kind={kind} op={operation} "
+              f"status=0x{result:08x} base=0x{imagebase:x} "
+              f"address=0x{addr:x} preferred=0x{canonical:x} "
+              f"function={fn} source={location.strip()}", flush=True)
         observations += 1
-        if fn != "??" and location.strip() != "??:0":
+        if fn != "??" and not location.strip().startswith("??:"):
           resolved += 1
+  for direction in ("read","write"):
+    for kind in ("metadata-open","metadata-close","transport-open-busy"):
+      assert (direction,kind) in categories, f"Missing {direction} {kind} event"
   assert observations > 0, "No MSYS2 runtime frames captured"
   assert resolved > 0, "No MSYS2 runtime frames resolve to source"
   print(f"GIT809_SYMBOL_SUMMARY frames={observations} with_source={resolved}")
