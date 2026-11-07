@@ -1,0 +1,251 @@
+name: Git 809 isolated MSYS2 -O0 symbols and Detours native stack
+on:
+  push:
+    branches: [experiment-809-msys2-symbols-o0]
+    paths:
+      - .github/workflows/issue-809-msys2-symbolized-detours.yml
+      - experiments/issue-809/detours_*
+      - experiments/issue-809/resolve_detours_symbols.py
+      - experiments/issue-809/windows_pipe_open_trace.py
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  isolated-symbolized-runtime:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+        with:
+          flavor: full
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64
+      - name: Build disposable SDK runtime source
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export MSYSTEM=MSYS
+          export PATH="/usr/bin:$PATH"
+          pacman -S --needed --noconfirm base-devel msys2-devel python mingw-w64-cross-mingw32-gcc
+          # The runtime packaging recipe is dated September 2026, when MSYS
+          # GCC 15.3.0-1 was current. Restore that signed historical compiler
+          # package pair rather than adjusting C++ source or compiler flags.
+          pacman -U --noconfirm \
+            https://repo.msys2.org/msys/x86_64/gcc-libs-15.3.0-1-x86_64.pkg.tar.zst \
+            https://repo.msys2.org/msys/x86_64/gcc-15.3.0-1-x86_64.pkg.tar.zst
+          test "$(pacman -Q gcc)" = "gcc 15.3.0-1"
+          test "$(pacman -Q gcc-libs)" = "gcc-libs 15.3.0-1"
+          # The MSYS MinGW cross-compiler is independent of host GCC.
+          # GCC 16.2 rejects preexisting C++ utility declarations in this
+          # 3.6.10 source. Use the archived pre-GCC-16 cross compiler.
+          pacman -U --noconfirm https://repo.msys2.org/msys/x86_64/mingw-w64-cross-mingw32-gcc-15.2.0-1-x86_64.pkg.tar.zst
+          test "$(pacman -Q mingw-w64-cross-mingw32-gcc)" = "mingw-w64-cross-mingw32-gcc 15.2.0-1"
+          gcc --version | head -n 1
+          export PATH="/opt/bin:/usr/bin:$PATH"
+          command -v i686-w64-mingw32-gcc
+          command -v x86_64-w64-mingw32-gcc
+          command -v makepkg
+          # Use the 3.6.10-4 packaging recipe corresponding to the installed
+          # Git-for-Windows SDK runtime. Do not update its production packages.
+          mkdir -p /usr/src/MSYS2-packages
+          git -C /usr/src/MSYS2-packages init
+          git -C /usr/src/MSYS2-packages remote add origin https://github.com/msys2/MSYS2-packages.git
+          git -C /usr/src/MSYS2-packages fetch --depth=1 origin af487d629edc364cac6388e3e072b70d652236a3
+          git -C /usr/src/MSYS2-packages checkout --detach FETCH_HEAD
+          cd /usr/src/MSYS2-packages/msys2-runtime
+          # Package metadata predates the current VCS archive checksum.
+          # Independently pin the signed upstream Cygwin 3.6.10 tag; only
+          # the archive digest may be reconciled, never the patch checksums.
+          makepkg -g > /tmp/git809-source-hashes.txt
+          tag_commit=$(git --git-dir=msys2-runtime rev-parse 'refs/tags/cygwin-3.6.10^{commit}')
+          printf 'GIT809_SOURCE_TAG_COMMIT=%s\\n' "$tag_commit"
+          test "$tag_commit" = b11613e477c006b2ce0332463ed07f1118260e79
+          python3 - <<'GIT809_HASH'
+          import re
+          from pathlib import Path
+          recipe = Path("PKGBUILD")
+          original = recipe.read_text()
+          updated = Path("/tmp/git809-source-hashes.txt").read_text()
+          pattern = r"'([0-9a-f]{64}|SKIP)'"
+          old_block = original.split("sha256sums=(", 1)[1].split(")", 1)[0]
+          new_block = updated.split("sha256sums=(", 1)[1].split(")", 1)[0]
+          old_hashes = re.findall(pattern, old_block)
+          new_hashes = re.findall(pattern, new_block)
+          assert len(old_hashes) == len(new_hashes) > 40, "hash-count mismatch"
+          assert old_hashes[1:] == new_hashes[1:], "non-VCS source checksum changed"
+          assert old_hashes[0] != new_hashes[0], "unexpected unchanged VCS checksum"
+          head, tail = original.split("sha256sums=(", 1)
+          assert tail.count(old_hashes[0]) == 1, "VCS checksum not unique"
+          recipe.write_text(head + "sha256sums=(" + tail.replace(old_hashes[0], new_hashes[0], 1))
+          print(f"GIT809_VCS_DIGEST expected={old_hashes[0]} actual={new_hashes[0]}")
+          GIT809_HASH
+          # The historical source archive has a checksum mismatch; verify the
+          # extracted upstream commit instead of trusting that archive.
+          makepkg --nobuild --syncdeps --noconfirm --skipchecksums
+          test -f src/msys2-runtime/winsup/cygwin/path.cc
+          # PKGBUILD fetches the upstream Cygwin 3.6.10 tag and applies
+          # MSYS2 patches; the fork commit is NOT the source HEAD here.
+          upstream=$(git -C src/msys2-runtime rev-parse "refs/tags/cygwin-3.6.10^{commit}")
+          actual_source=$(git -C src/msys2-runtime rev-parse HEAD)
+          test "$actual_source" = "$upstream"
+          printf "GIT809_RUNTIME_UPSTREAM_SHA=%s\n" "$actual_source"
+          sha256sum /usr/bin/msys-2.0.dll
+      - name: Build isolated unoptimized debug MSYS2 runtime
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export MSYSTEM=MSYS
+          export PATH="/opt/bin:/usr/bin:$PATH"
+          cd /usr/src/MSYS2-packages/msys2-runtime
+          # Existing PKGBUILD check_option "debug" uses -O0 -ggdb and
+          # --enable-debugging. Enable that makepkg option on this runner.
+          python3 - <<'GIT809_DEBUG_OPTION'
+          from pathlib import Path
+          import re
+          config=Path('/etc/makepkg.conf').read_text()
+          matches=list(re.finditer(r'(?m)^OPTIONS=\([^\n]*\)', config))
+          assert len(matches)==1, 'unexpected makepkg options definition'
+          old=matches[0].group(0)
+          assert '!debug' in old, 'unexpected preconfigured debug option'
+          changed=old.replace('!debug', 'debug')
+          Path('/tmp/git809-makepkg-debug.conf').write_text(
+            config[:matches[0].start()]+changed+config[matches[0].end():])
+          print('GIT809_MAKEPKG_OPTIONS='+changed, flush=True)
+          GIT809_DEBUG_OPTION
+          # Build only the MSYS runtime DLL required by the pipe experiment.
+          # The full package also compiles unrelated cygcheck utilities whose
+          # historical declarations are rejected by the current SDK headers.
+          python3 - <<'GIT809_DLL_ONLY'
+          from pathlib import Path
+          recipe = Path("PKGBUILD")
+          source = recipe.read_text()
+          old = '  LC_ALL=C make' + chr(10) + '  LC_ALL=C make -j1 DESTDIR="${srcdir}"/dest install' + chr(10)
+          new = (
+            '  LC_ALL=C make configure-target-winsup' + chr(10)
+            + '  test -f x86_64-pc-cygwin/winsup/cygwin/Makefile' + chr(10)
+            + '  LC_ALL=C make -C x86_64-pc-cygwin/winsup/cygwin '
+            + 'child_info_magic.h shared_info_magic.h globals.h localtime.patched.c' + chr(10)
+            + '  LC_ALL=C make -C x86_64-pc-cygwin/winsup/cygwin all' + chr(10)
+            + '  mkdir -p "${srcdir}"/dest/usr/bin' + chr(10)
+            + '  cp x86_64-pc-cygwin/winsup/cygwin/new-msys-2.0.dll '
+            + '"${srcdir}"/dest/usr/bin/msys-2.0.dll' + chr(10)
+          )
+          assert source.count(old) == 1, "historical build recipe changed"
+          source = source.replace(old, new)
+          # Packaging is unnecessary: retain the original source and flags,
+          # but stage the unstripped DLL for the isolated executable test.
+          # Preserve the original build(), but package only the DLL needed
+          # for this disposable experiment, not unbuilt auxiliary programs.
+          assert source.count("package_msys2-runtime() {") == 1
+          assert source.count("pkgname=(\'msys2-runtime\' \'msys2-runtime-devel\')") == 1
+          source = source.replace(
+            "pkgname=(\'msys2-runtime\' \'msys2-runtime-devel\')",
+            "pkgname=(\'msys2-runtime\')", 1)
+          source = source.split("package_msys2-runtime() {", 1)[0]
+          source += (
+            'package_msys2-runtime() {' + chr(10)
+            + '  install -Dm755 "${srcdir}/dest/usr/bin/msys-2.0.dll" '
+            + '"${pkgdir}/usr/bin/msys-2.0.dll"' + chr(10)
+            + '}' + chr(10)
+          )
+          recipe.write_text(source)
+          GIT809_DLL_ONLY
+          makepkg --config /tmp/git809-makepkg-debug.conf --noextract --noprepare --syncdeps --noconfirm --skipchecksums
+          test -s src/dest/usr/bin/msys-2.0.dll
+          workspace_posix=$(cygpath -u "$GITHUB_WORKSPACE")
+          printf '%s\n' "$PWD/src/dest/usr/bin/msys-2.0.dll" > "$workspace_posix/experiments/issue-809/patched-runtime-path.txt"
+          sha256sum src/dest/usr/bin/msys-2.0.dll
+          objcopy --only-keep-debug src/dest/usr/bin/msys-2.0.dll src/dest/usr/bin/msys-2.0.dbg
+          test -s src/dest/usr/bin/msys-2.0.dbg
+          objdump --dwarf=info src/dest/usr/bin/msys-2.0.dbg > /tmp/git809-dwarf.txt
+          grep -q DW_TAG_subprogram /tmp/git809-dwarf.txt
+          printf '%s\n' "$PWD/src/dest/usr/bin/msys-2.0.dbg" > "$workspace_posix/experiments/issue-809/debug-runtime-symbols-path.txt"
+          printf 'GIT809_DEBUG_RUNTIME_HAS_DWARF=1\n'
+          sha256sum src/dest/usr/bin/msys-2.0.dbg
+      - name: Build pinned Microsoft Detours and standalone tracer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Git-for-Windows adds /usr/bin/link (GNU coreutils) ahead of MSVC.
+          # Ensure nmake resolves the actual Visual Studio linker.
+          $cl = (Get-Command cl.exe -CommandType Application).Source
+          $msvcBin = Split-Path $cl -Parent
+          $link = Join-Path $msvcBin 'link.exe'
+          if (-not (Test-Path $link)) { throw "Missing MSVC link.exe beside cl.exe: $cl" }
+          $env:PATH = "$msvcBin;$env:PATH"
+          Write-Output "GIT809_MSVC_LINKER=$((Get-Command link.exe -CommandType Application).Source)"
+          git clone --quiet --no-checkout https://github.com/microsoft/Detours.git "$env:RUNNER_TEMP\detours"
+          if ($LASTEXITCODE -ne 0) { throw 'Detours checkout failed' }
+          git -C "$env:RUNNER_TEMP\detours" checkout --detach e4bfd6b03e50de46b47abfbd1e46b384f0c5f833
+          if ($LASTEXITCODE -ne 0) { throw 'Detours pin checkout failed' }
+          Push-Location "$env:RUNNER_TEMP\detours\src"
+          try {
+            nmake /nologo
+            if ($LASTEXITCODE -ne 0) { throw 'Microsoft Detours library compilation failed' }
+          } finally { Pop-Location }
+          $include = "$env:RUNNER_TEMP\detours\src"
+          $library = "$env:RUNNER_TEMP\detours\lib.X64\detours.lib"
+          if (-not (Test-Path $library)) { throw "Missing compiled Detours library: $library" }
+          $src = "experiments\issue-809"
+          cl /nologo /std:c++17 /EHsc /W4 /WX /MT /LD "/I$include" "$src\detours_pipe_trace.cpp" /link "/OUT:$env:RUNNER_TEMP\git809_detours_trace.dll" "/DEF:$src\detours_pipe_trace.def" $library
+          if ($LASTEXITCODE -ne 0) { throw 'Pipe tracing DLL compilation failed' }
+          cl /nologo /std:c++17 /EHsc /W4 /WX /MT "/I$include" "$src\detours_launcher.cpp" /link "/OUT:$env:RUNNER_TEMP\git809_detours_launcher.exe" $library
+          if ($LASTEXITCODE -ne 0) { throw 'Detours launcher compilation failed' }
+          Get-FileHash "$env:RUNNER_TEMP\git809_detours_trace.dll" -Algorithm SHA256
+          Get-FileHash "$env:RUNNER_TEMP\git809_detours_launcher.exe" -Algorithm SHA256
+      - name: Trace isolated unoptimized debug MSYS2 with Detours
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sdk = 'D:\git-sdk-64-full\usr\bin'
+          $runtimePosix = (Get-Content experiments/issue-809/patched-runtime-path.txt -Raw).Trim()
+          $runtimeWin = (& "$sdk\cygpath.exe" -w $runtimePosix).Trim()
+          if (-not (Test-Path $runtimeWin)) { throw "Unoptimized runtime absent: $runtimeWin" }
+          $isolated = Join-Path $env:RUNNER_TEMP 'git809-symbolized-bash'
+          New-Item -ItemType Directory -Force -Path $isolated | Out-Null
+          Copy-Item "$sdk\bash.exe" "$isolated\bash.exe" -Force
+          Copy-Item "$sdk\msys-*.dll" $isolated -Force
+          Copy-Item $runtimeWin "$isolated\msys-2.0.dll" -Force
+          $bash = Join-Path $isolated 'bash.exe'
+          & $bash --noprofile --norc -c 'printf "DEBUG_BASH_START_OK\n"'
+          if ($LASTEXITCODE -ne 0) { throw 'Debug runtime failed Bash startup' }
+          Get-FileHash "$isolated\msys-2.0.dll" -Algorithm SHA256
+          $launcher = "$env:RUNNER_TEMP\git809_detours_launcher.exe"
+          $dll = "$env:RUNNER_TEMP\git809_detours_trace.dll"
+          $failures = @()
+          foreach ($direction in @('read','write')) {
+            Write-Output "GIT809_DETOURS_CASE direction=$direction instances=1"
+            python -u experiments/issue-809/windows_pipe_open_trace.py --client bash --instances 1 --direction $direction --bash $bash --detours-launcher $launcher --detours-dll $dll --expect failure
+            if ($LASTEXITCODE -ne 0) { $failures += $direction }
+          }
+          if ($failures.Count) { throw "Detours trace failed: $($failures -join ',')" }
+      - name: Resolve native handle stacks with matching MSYS2 runtime debug symbols
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sdk = 'D:\git-sdk-64-full\usr\bin'
+          $dll = Join-Path $env:RUNNER_TEMP 'git809-symbolized-bash\msys-2.0.dll'
+          $symbolPosix = (Get-Content experiments/issue-809/debug-runtime-symbols-path.txt -Raw).Trim()
+          $dbg = (& "$sdk\cygpath.exe" -w $symbolPosix).Trim()
+          $addr = Join-Path $sdk 'addr2line.exe'
+          foreach ($item in @($dll,$dbg,$addr)) {
+            if (-not (Test-Path $item)) { throw "Missing required matching runtime binary/debug tooling: $item" }
+          }
+          Get-FileHash $dll -Algorithm SHA256
+          Get-FileHash $dbg -Algorithm SHA256
+          python -u experiments/issue-809/resolve_detours_symbols.py --trace-dir "$env:RUNNER_TEMP" --dll $dll --debug-file $dbg --addr2line $addr
+          if ($LASTEXITCODE -ne 0) { throw 'Native source symbol resolution failed' }
+      - name: Upload full filtered handle traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-809-detours-handle-lifecycle
+          path: ${{ runner.temp }}/git809-detours-*.log
+          if-no-files-found: error
