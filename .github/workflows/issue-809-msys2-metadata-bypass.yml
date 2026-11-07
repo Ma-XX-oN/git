@@ -29,10 +29,18 @@ jobs:
           export MSYSTEM=MSYS
           export PATH="/usr/bin:$PATH"
           pacman -S --needed --noconfirm base-devel msys2-devel python
-          command -v sdk
-          sdk build msys2-runtime
-          test -f /usr/src/MSYS2-packages/msys2-runtime/src/msys2-runtime/winsup/cygwin/path.cc
-          git -C /usr/src/MSYS2-packages/msys2-runtime/src/msys2-runtime rev-parse HEAD
+          command -v makepkg
+          # Use the 3.6.10-4 packaging recipe corresponding to the installed
+          # Git-for-Windows SDK runtime. Do not update its production packages.
+          mkdir -p /usr/src/MSYS2-packages
+          git -C /usr/src/MSYS2-packages init
+          git -C /usr/src/MSYS2-packages remote add origin https://github.com/msys2/MSYS2-packages.git
+          git -C /usr/src/MSYS2-packages fetch --depth=1 origin af487d629edc364cac6388e3e072b70d652236a3
+          git -C /usr/src/MSYS2-packages checkout --detach FETCH_HEAD
+          cd /usr/src/MSYS2-packages/msys2-runtime
+          makepkg --nobuild --syncdeps --noconfirm
+          test -f src/msys2-runtime/winsup/cygwin/path.cc
+          git -C src/msys2-runtime rev-parse HEAD
           sha256sum /usr/bin/msys-2.0.dll
       - name: Apply exact name-restricted source test and rebuild runtime
         shell: bash
@@ -42,17 +50,13 @@ jobs:
           export PATH="/usr/bin:$PATH"
           python3 experiments/issue-809/patch_msys2_test_pipe_attributes.py \
             /usr/src/MSYS2-packages/msys2-runtime/src/msys2-runtime/winsup/cygwin/path.cc
-          cd /usr/src/MSYS2-packages/msys2-runtime/src
-          git -C msys2-runtime diff -- winsup/cygwin/path.cc || true
-          build_dir=$(find . -type d -path '*/winsup/cygwin' -name cygwin \
-            | grep '/build-.*-pc-msys/' | head -n 1)
-          test -n "$build_dir"
-          cd "$build_dir"
-          make -j4
-          test -s msys0.dll
+          cd /usr/src/MSYS2-packages/msys2-runtime
+          git -C src/msys2-runtime diff -- winsup/cygwin/path.cc
+          makepkg --noextract --noprepare --syncdeps --noconfirm
+          test -s src/dest/usr/bin/msys-2.0.dll
           workspace_posix=$(cygpath -u "$GITHUB_WORKSPACE")
-          printf '%s\n' "$PWD/msys0.dll" > "$workspace_posix/experiments/issue-809/patched-runtime-path.txt"
-          sha256sum msys0.dll
+          printf '%s\n' "$PWD/src/dest/usr/bin/msys-2.0.dll" > "$workspace_posix/experiments/issue-809/patched-runtime-path.txt"
+          sha256sum src/dest/usr/bin/msys-2.0.dll
       - name: Compare pristine Git Bash and isolated patched runtime
         shell: pwsh
         run: |
