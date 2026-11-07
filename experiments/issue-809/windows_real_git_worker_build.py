@@ -204,6 +204,98 @@ finish:
   return ok;
 }
 
+
+/* Diagnostic-only logging. The wrappers preserve the API result and
+ * GetLastError; the production transport and connection algorithm are
+ * unchanged. Every ENTER record is flushed before the blocking call. */
+static void git809_trace_api(const char *op, const char *phase,
+                            HANDLE h, DWORD result, DWORD error, DWORD aux)
+{
+  char directory[1024], filename[1160], line[512];
+  DWORD len = GetEnvironmentVariableA("GIT809_NATIVE_TRACE_DIR",
+                                      directory, sizeof(directory));
+  DWORD pid = GetCurrentProcessId();
+  HANDLE file;
+  int chars;
+  DWORD written;
+  DWORD old_error = GetLastError();
+  if (!len || len >= sizeof(directory))
+    return;
+  chars = snprintf(filename, sizeof(filename), "%s\\worker-%lu.log",
+                   directory, (unsigned long)pid);
+  if (chars < 1 || chars >= sizeof(filename))
+    return;
+  file = CreateFileA(filename, FILE_APPEND_DATA,
+                     FILE_SHARE_READ | FILE_SHARE_WRITE,
+                     NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+  if (file != INVALID_HANDLE_VALUE) {
+    chars = snprintf(line, sizeof(line),
+      "t=%llu pid=%lu tid=%lu phase=%s op=%s handle=%p result=%lu error=%lu aux=%lu\n",
+      (unsigned long long)GetTickCount64(), (unsigned long)pid,
+      (unsigned long)GetCurrentThreadId(), phase, op, h,
+      (unsigned long)result, (unsigned long)error, (unsigned long)aux);
+    if (chars > 0 && chars < sizeof(line))
+      WriteFile(file, line, (DWORD)chars, &written, NULL);
+    CloseHandle(file);
+  }
+  SetLastError(old_error);
+}
+static BOOL git809_traced_connect(HANDLE h, LPOVERLAPPED ov)
+{
+  BOOL ok; DWORD error;
+  git809_trace_api("ConnectNamedPipe", "ENTER", h, 0, 0, 0);
+  ok = ConnectNamedPipe(h, ov);
+  error = ok ? ERROR_SUCCESS : GetLastError();
+  git809_trace_api("ConnectNamedPipe", "RETURN", h, ok, error, 0);
+  SetLastError(error);
+  return ok;
+}
+static BOOL git809_traced_read(HANDLE h, LPVOID b, DWORD n, LPDWORD used, LPOVERLAPPED ov)
+{
+  BOOL ok; DWORD error;
+  git809_trace_api("ReadFile", "ENTER", h, 0, 0, n);
+  ok = ReadFile(h, b, n, used, ov);
+  error = ok ? ERROR_SUCCESS : GetLastError();
+  git809_trace_api("ReadFile", "RETURN", h, ok, error, ok && used ? *used : 0);
+  SetLastError(error);
+  return ok;
+}
+static BOOL git809_traced_write(HANDLE h, LPCVOID b, DWORD n, LPDWORD used, LPOVERLAPPED ov)
+{
+  BOOL ok; DWORD error;
+  git809_trace_api("WriteFile", "ENTER", h, 0, 0, n);
+  ok = WriteFile(h, b, n, used, ov);
+  error = ok ? ERROR_SUCCESS : GetLastError();
+  git809_trace_api("WriteFile", "RETURN", h, ok, error, ok && used ? *used : 0);
+  SetLastError(error);
+  return ok;
+}
+static BOOL git809_traced_flush(HANDLE h)
+{
+  BOOL ok; DWORD error;
+  git809_trace_api("FlushFileBuffers", "ENTER", h, 0, 0, 0);
+  ok = FlushFileBuffers(h);
+  error = ok ? ERROR_SUCCESS : GetLastError();
+  git809_trace_api("FlushFileBuffers", "RETURN", h, ok, error, 0);
+  SetLastError(error);
+  return ok;
+}
+static BOOL git809_traced_disconnect(HANDLE h)
+{
+  BOOL ok; DWORD error;
+  git809_trace_api("DisconnectNamedPipe", "ENTER", h, 0, 0, 0);
+  ok = DisconnectNamedPipe(h);
+  error = ok ? ERROR_SUCCESS : GetLastError();
+  git809_trace_api("DisconnectNamedPipe", "RETURN", h, ok, error, 0);
+  SetLastError(error);
+  return ok;
+}
+#define ConnectNamedPipe git809_traced_connect
+#define ReadFile git809_traced_read
+#define WriteFile git809_traced_write
+#define FlushFileBuffers git809_traced_flush
+#define DisconnectNamedPipe git809_traced_disconnect
+
 static int git809_direct_worker(void)
 {
   char names[4][96];
@@ -235,6 +327,7 @@ static int git809_direct_worker(void)
     }
   }
   /* READY is an initialization handshake, not Git command output. */
+  git809_trace_api("worker-ready", "EVENT", NULL, 0, 0, 0);
   printf("READY %lu\n", (unsigned long)pid);
   fflush(stdout);
   /*
@@ -247,10 +340,12 @@ static int git809_direct_worker(void)
     for (i = 0; i < 4; i++) {
       int channel = order[i];
       int probe, data;
+      git809_trace_api(suffixes[channel], "ACCEPT_ENTER", pipes[channel][0], 0, 0, channel);
       if (!git809_accept_pair(pipes[channel], &probe, &data)) {
         rc = 122;
         goto cleanup;
       }
+      git809_trace_api(suffixes[channel], "ACCEPT_RETURN", pipes[channel][data], 1, 0, probe);
       data_index[channel] = data;
       DisconnectNamedPipe(pipes[channel][probe]);
       CloseHandle(pipes[channel][probe]);
@@ -330,12 +425,14 @@ static int git809_direct_worker(void)
   }
   _close(outfd);
   _close(errfd);
+  git809_trace_api("git-main", "ENTER", NULL, 0, 0, count);
   git809_direct_active = 1;
   if (!setjmp(git809_direct_jump))
     rc = main(count, args);
   else
     rc = git809_direct_exit_status;
   git809_direct_active = 0;
+  git809_trace_api("git-main", "RETURN", NULL, (DWORD)rc, 0, 0);
   fflush(stdout);
   fflush(stderr);
   /*
@@ -361,6 +458,7 @@ cleanup:
     for (j = 0; j < 2; j++)
       if (pipes[i][j] != INVALID_HANDLE_VALUE)
         CloseHandle(pipes[i][j]);
+  git809_trace_api("worker-exit", "EVENT", NULL, (DWORD)rc, 0, 0);
   return rc;
 }
 #endif
