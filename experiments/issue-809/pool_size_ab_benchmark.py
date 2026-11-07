@@ -21,7 +21,7 @@ import sys
 import time
 
 N = 120
-RUN_ORDER = (1, 2, 3, 4, 5, 5, 4, 3, 2, 1)
+RUN_ORDER = (2,)
 OUT = Path("git809-bash-pipe-results")
 
 SHELL = r"""
@@ -56,18 +56,25 @@ SHELL = r"""
   actual=$(git-ipc --version) || exit 34
   [[ $actual == "$expected" ]] || exit 35
   printf 'READY_CHECK %s\n' "$count"
+  if [[ $GIT809_PLATFORM == windows ]]; then
+    printf 'MANAGER_LOG_NATIVE %s\n' "$(cygpath -w "$manager_log")"
+  fi
   for ((i=0;i<120;i++)); do
     if (( i % 2 == 0 )); then
+      printf 'PHASE iteration=%s command=direct\n' "$i" >&2
       a=$EPOCHREALTIME
       "$gitbin" --version >/dev/null || exit 41
       b=$EPOCHREALTIME
+      printf 'PHASE iteration=%s command=ipc\n' "$i" >&2
       c=$EPOCHREALTIME
       git-ipc --version >/dev/null || exit 42
       d=$EPOCHREALTIME
     else
+      printf 'PHASE iteration=%s command=ipc\n' "$i" >&2
       c=$EPOCHREALTIME
       git-ipc --version >/dev/null || exit 43
       d=$EPOCHREALTIME
+      printf 'PHASE iteration=%s command=direct\n' "$i" >&2
       a=$EPOCHREALTIME
       "$gitbin" --version >/dev/null || exit 44
       b=$EPOCHREALTIME
@@ -112,10 +119,18 @@ def run_case(bash, script, git_shell, environment, workers, round_index, windows
         stdout = (exc.stdout or b"").decode("utf-8", "replace")
         stderr = (exc.stderr or b"").decode("utf-8", "replace")
         complete = [row for row in stdout.splitlines() if row.startswith("PAIR ")]
+        manager_logs = []
+        for line in stdout.splitlines():
+            if line.startswith("MANAGER_LOG_NATIVE "):
+                path = Path(line.partition(" ")[2])
+                try:
+                    manager_logs.append(path.read_text(encoding="utf-8")[-10000:])
+                except OSError as error:
+                    manager_logs.append("manager log unavailable: " + repr(error))
         raise AssertionError(
             f"pool={workers} round={round_index} timeout; "
             f"pairs={len(complete)} last={complete[-1] if complete else None}; "
-            f"stderr={stderr[-1200:]}") from exc
+            f"stderr={stderr[-3000:]} manager_logs={manager_logs}") from exc
     elapsed = time.perf_counter() - started
     output = result.stdout.decode("utf-8", "strict")
     errors = result.stderr.decode("utf-8", "strict")
@@ -187,7 +202,7 @@ def main():
         "samples_per_case": N,
         "round_order": RUN_ORDER,
         "reader_timeout_ms": 100,
-        "pool_sizes": (1, 2, 3, 4, 5),
+        "pool_sizes": (2,),
         "manager_present_in_both_configurations": True,
         "results": [],
     }
