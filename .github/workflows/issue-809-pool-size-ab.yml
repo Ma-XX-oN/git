@@ -1,7 +1,7 @@
-name: Git 809 controlled pool-size comparison
+name: Git 809 missing pool sizes 2 4 5
 on:
   push:
-    branches: [experiment-809-one-versus-three-workers]
+    branches: [experiment-809-pool-2-4-5]
     paths:
       - experiments/issue-809/pool_size_ab_benchmark.py
       - .github/workflows/issue-809-pool-size-ab.yml
@@ -33,8 +33,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: git809-pool-size-ab-windows
-          path: git809-bash-pipe-results/pool-size-ab-*.json
+          name: git809-pool-size-245-windows
+          path: git809-bash-pipe-results/pool-size-245-*.json
           if-no-files-found: warn
   unix-pool-ab:
     strategy:
@@ -63,6 +63,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: git809-pool-size-ab-${{ matrix.os }}
-          path: git809-bash-pipe-results/pool-size-ab-*.json
+          name: git809-pool-size-245-${{ matrix.os }}
+          path: git809-bash-pipe-results/pool-size-245-*.json
           if-no-files-found: warn
