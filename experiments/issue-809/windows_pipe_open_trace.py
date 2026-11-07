@@ -114,7 +114,7 @@ def main() -> int:
     if not args.builtin_dll or not os.path.isfile(args.builtin_dll):
       parser.error("attached client needs an existing --builtin-dll")
     setup = ('enable -f "$(cygpath -u "$2")" git809attach || exit 80; '
-             'fake="/tmp/git809-metadata-$"; : > "$fake" || exit 79; '
+             'fake="/tmp/git809-attach-metadata-probe"; : > "$fake" || exit 79; '
              f'git809attach "$1" "$fake" "{args.direction}" || exit 78; ')
     if args.direction == "read":
       code = setup + 'IFS= read -r line <&9 || exit 82; printf "CLIENT_DATA=%s\\n" "$line"; exec 9<&-'
