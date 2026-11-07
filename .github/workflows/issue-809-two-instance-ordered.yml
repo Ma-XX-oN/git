@@ -1,0 +1,40 @@
+name: Git 809 ordered two-instance pipe Windows regression
+on:
+  push:
+    branches: [experiment-809-two-instance-ordered-accept]
+    paths:
+      - experiments/issue-809/windows_real_git_worker_build.py
+      - experiments/issue-809/windows_git_ipc_pool.py
+      - experiments/issue-809/git-manager.sh
+      - .github/workflows/issue-809-two-instance-ordered.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-ordered-pipe:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Existing same-runner worker-pool benchmark with ordered two-instance pipes
+        shell: bash
+        run: |
+          . /etc/profile
+          PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
+          export GIT809_MANAGER_PYTHON="$(cygpath -w "$PYTHON_EXE")"
+          bash -n experiments/issue-809/git-manager.sh
+          "$PYTHON_EXE" -m py_compile experiments/issue-809/pool_size_ab_benchmark.py experiments/issue-809/windows_real_git_worker_build.py experiments/issue-809/windows_git_ipc_pool.py
+          "$PYTHON_EXE" experiments/issue-809/pool_size_ab_benchmark.py
+      - name: Preserve raw benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-809-ordered-two-instance-windows
+          path: git809-bash-pipe-results/pool-size-matched-1to5-windows.json
+          if-no-files-found: warn
