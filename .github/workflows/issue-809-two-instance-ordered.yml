@@ -28,6 +28,7 @@ jobs:
           . /etc/profile
           PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
           export GIT809_MANAGER_PYTHON="$(cygpath -w "$PYTHON_EXE")"
+          export GIT809_TRACE=1
           bash -n experiments/issue-809/git-manager.sh
           "$PYTHON_EXE" -m py_compile experiments/issue-809/pool_size_ab_benchmark.py experiments/issue-809/windows_real_git_worker_build.py experiments/issue-809/windows_git_ipc_pool.py
           "$PYTHON_EXE" experiments/issue-809/pool_size_ab_benchmark.py
