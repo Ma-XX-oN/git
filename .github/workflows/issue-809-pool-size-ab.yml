@@ -75,6 +75,38 @@ jobs:
             printf("GIT809_NATIVE_WAIT requested=1ms samples=%d median_ms=%.4f p95_ms=%.4f min_ms=%.4f max_ms=%.4f above10ms=%d mean_ms=%.4f\n",
               SAMPLES, (samples[99] + samples[100])/2, samples[189], samples[0],
               samples[SAMPLES-1], above10, total/SAMPLES);
+            {
+              typedef LONG (WINAPI *create_timer_fn)(HANDLE *, ACCESS_MASK, void *, int);
+              typedef LONG (WINAPI *set_timer_fn)(HANDLE, LARGE_INTEGER *, void *, void *, BOOLEAN, LONG, BOOLEAN *);
+              HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+              create_timer_fn create_timer;
+              set_timer_fn set_timer;
+              HANDLE timer = NULL;
+              double nt_samples[SAMPLES], nt_total = 0;
+              int nt_above10 = 0;
+              if (!ntdll) return 5;
+              create_timer = (create_timer_fn)(void *)GetProcAddress(ntdll, "NtCreateTimer");
+              set_timer = (set_timer_fn)(void *)GetProcAddress(ntdll, "NtSetTimer");
+              if (!create_timer || !set_timer) return 6;
+              if (create_timer(&timer, TIMER_ALL_ACCESS, NULL, 0) < 0 || !timer) return 7;
+              for (i = 0; i < SAMPLES; i++) {
+                LARGE_INTEGER begin, end, due;
+                DWORD wait_result;
+                due.QuadPart = -10000LL; /* Relative one millisecond, in 100 ns units. */
+                if (!QueryPerformanceCounter(&begin)) return 8;
+                if (set_timer(timer, &due, NULL, NULL, FALSE, 0, NULL) < 0) return 9;
+                wait_result = WaitForMultipleObjects(1, &timer, FALSE, INFINITE);
+                if (!QueryPerformanceCounter(&end) || wait_result != WAIT_OBJECT_0) return 10;
+                nt_samples[i] = 1000.0 * (double)(end.QuadPart - begin.QuadPart) / (double)frequency.QuadPart;
+                nt_total += nt_samples[i];
+                if (nt_samples[i] >= 10.0) nt_above10++;
+              }
+              qsort(nt_samples, SAMPLES, sizeof(nt_samples[0]), compare);
+              printf("GIT809_NT_TIMER_WAIT requested=1ms samples=%d median_ms=%.4f p95_ms=%.4f min_ms=%.4f max_ms=%.4f above10ms=%d mean_ms=%.4f\\n",
+                SAMPLES, (nt_samples[99] + nt_samples[100])/2, nt_samples[189], nt_samples[0],
+                nt_samples[SAMPLES-1], nt_above10, nt_total/SAMPLES);
+              CloseHandle(timer);
+            }
             CloseHandle(event);
             return 0;
           }
