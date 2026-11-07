@@ -102,7 +102,7 @@ jobs:
                 if (nt_samples[i] >= 10.0) nt_above10++;
               }
               qsort(nt_samples, SAMPLES, sizeof(nt_samples[0]), compare);
-              printf("GIT809_NT_TIMER_WAIT requested=1ms samples=%d median_ms=%.4f p95_ms=%.4f min_ms=%.4f max_ms=%.4f above10ms=%d mean_ms=%.4f\\n",
+              printf("GIT809_NT_TIMER_WAIT requested=1ms samples=%d median_ms=%.4f p95_ms=%.4f min_ms=%.4f max_ms=%.4f above10ms=%d mean_ms=%.4f\n",
                 SAMPLES, (nt_samples[99] + nt_samples[100])/2, nt_samples[189], nt_samples[0],
                 nt_samples[SAMPLES-1], nt_above10, nt_total/SAMPLES);
               CloseHandle(timer);
