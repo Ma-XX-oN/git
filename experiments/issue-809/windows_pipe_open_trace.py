@@ -152,8 +152,10 @@ def main() -> int:
       if args.expect == "success":
         if child.returncode != 0:
           raise RuntimeError(f"Bash redirection expected success, rc={child.returncode}")
-        if args.direction == "read" and child.stdout != b"CLIENT_DATA=INSTANCE_0\n":
-          raise RuntimeError(f"Bash read payload mismatch: {child.stdout!r}")
+        if args.direction == "read":
+          possible = [f"CLIENT_DATA=INSTANCE_{i}\n".encode("ascii") for i in range(args.instances)]
+          if child.stdout not in possible:
+            raise RuntimeError(f"Bash read payload mismatch: {child.stdout!r}")
         if args.direction == "write" and child.stdout != b"CLIENT_DONE\n":
           raise RuntimeError(f"Bash write completion mismatch: {child.stdout!r}")
       if args.expect == "failure" and child.returncode == 0:
@@ -167,8 +169,8 @@ def main() -> int:
   connected = sum(' CONNECT ' in line for line in logs)
   record(f"SUMMARY connected={connected} instances={args.instances} "
          f"direction={args.direction} name_kind={args.name_kind}")
-  if args.expect == "success" and args.instances == 1 and connected != 1:
-    raise RuntimeError(f"Successful command consumed {connected} connections, not one")
+  if args.expect == "success" and connected != args.instances:
+    raise RuntimeError(f"Successful command consumed {connected} connections, expected {args.instances}")
   if args.expect == "success" and args.direction == "write" and not any(
     "read_success=1 bytes=13 data=b'CLIENT_WRITE\\n'" in line for line in logs
   ):
