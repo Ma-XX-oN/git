@@ -60,7 +60,7 @@ def main() -> int:
   parser.add_argument("--name-kind", choices=("matched", "unmatched"), default="matched")
   args = parser.parse_args()
   prefix = "git809-redirect-" if args.name_kind == "matched" else "git809-unmatched-"
-  pipe_name = "\\.\pipe\\" + prefix + uuid.uuid4().hex
+  pipe_name = "\\\\.\\pipe\\" + prefix + uuid.uuid4().hex
   handles = []
   logs = []
   lock = threading.Lock()
