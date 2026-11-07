@@ -170,5 +170,7 @@ def build(root: Path):
            "NO_GETTEXT=YesPlease", "CFLAGS_APPEND=-DGIT809_UNIX_WORKER", "git"]
     subprocess.run(cmd, cwd=root, check=True, timeout=1800,
                    stdout=subprocess.DEVNULL)
-    exe = (root / "git").resolve(strict=True)
+    # MSYS2 emits git.exe, while native Linux/macOS builds emit git.
+    binary = root / ("git.exe" if (root / "git.exe").is_file() else "git")
+    exe = binary.resolve(strict=True)
     return exe, cmd
