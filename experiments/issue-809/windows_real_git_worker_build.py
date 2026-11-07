@@ -101,10 +101,12 @@ struct git809_conn {
   int closed_before_accept;
 };
 
+static BOOL git809_traced_connect(HANDLE h, LPOVERLAPPED ov);
+
 static DWORD WINAPI git809_wait_connection(void *arg)
 {
   struct git809_conn *c = (struct git809_conn *)arg;
-  BOOL connected = ConnectNamedPipe(c->pipe, NULL);
+  BOOL connected = git809_traced_connect(c->pipe, NULL);
   DWORD error = connected ? ERROR_SUCCESS : GetLastError();
   c->closed_before_accept = error == ERROR_NO_DATA;
   c->ok = connected || error == ERROR_PIPE_CONNECTED ||
