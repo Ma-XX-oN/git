@@ -23,7 +23,7 @@ jobs:
       - name: Verify POSIX toolchain and run shared Unix FIFO worker
         shell: bash
         run: |
-          . /etc/profile
+          set -x
           export MSYSTEM=MSYS
           export PATH="/usr/bin:$PATH"
           pacman -S --needed --noconfirm gcc python
