@@ -38,6 +38,32 @@ jobs:
           git -C /usr/src/MSYS2-packages fetch --depth=1 origin af487d629edc364cac6388e3e072b70d652236a3
           git -C /usr/src/MSYS2-packages checkout --detach FETCH_HEAD
           cd /usr/src/MSYS2-packages/msys2-runtime
+          # Package metadata predates the current VCS archive checksum.
+          # Independently pin the signed upstream Cygwin 3.6.10 tag; only
+          # the archive digest may be reconciled, never the patch checksums.
+          makepkg -g > /tmp/git809-source-hashes.txt
+          tag_commit=$(git --git-dir=msys2-runtime rev-parse 'refs/tags/cygwin-3.6.10^{commit}')
+          printf 'GIT809_SOURCE_TAG_COMMIT=%s\\n' "$tag_commit"
+          test "$tag_commit" = b11613e477c006b2ce0332463ed07f1118260e79
+          python3 - <<'GIT809_HASH'
+          import re
+          from pathlib import Path
+          recipe = Path("PKGBUILD")
+          original = recipe.read_text()
+          updated = Path("/tmp/git809-source-hashes.txt").read_text()
+          pattern = r"'([0-9a-f]{64}|SKIP)'"
+          old_block = original.split("sha256sums=(", 1)[1].split(")", 1)[0]
+          new_block = updated.split("sha256sums=(", 1)[1].split(")", 1)[0]
+          old_hashes = re.findall(pattern, old_block)
+          new_hashes = re.findall(pattern, new_block)
+          assert len(old_hashes) == len(new_hashes) > 40, "hash-count mismatch"
+          assert old_hashes[1:] == new_hashes[1:], "non-VCS source checksum changed"
+          assert old_hashes[0] != new_hashes[0], "unexpected unchanged VCS checksum"
+          head, tail = original.split("sha256sums=(", 1)
+          assert tail.count(old_hashes[0]) == 1, "VCS checksum not unique"
+          recipe.write_text(head + "sha256sums=(" + tail.replace(old_hashes[0], new_hashes[0], 1))
+          print(f"GIT809_VCS_DIGEST expected={old_hashes[0]} actual={new_hashes[0]}")
+          GIT809_HASH
           makepkg --nobuild --syncdeps --noconfirm
           test -f src/msys2-runtime/winsup/cygwin/path.cc
           git -C src/msys2-runtime rev-parse HEAD
