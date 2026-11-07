@@ -90,7 +90,7 @@ void git809_worker_exit(int status)
 }
 /*
  * Experimental one-shot preinitialized Git worker.  The PID identifies four
- * two instances per channel; the Python manager never forwards command bytes.
+ * one instance per channel; the Python manager never forwards command bytes.
  */
 static int git809_direct_connect(HANDLE h)
 {
@@ -101,55 +101,43 @@ static int git809_direct_worker(void)
 {
   char names[4][96];
   const char *suffixes[4] = {"stdin", "stdout", "stderr", "exit-code"};
-  HANDLE pipes[4][2];
+  HANDLE pipes[4];
   char frame[4096], result[64];
   DWORD used = 0, n;
-  int i, j, count, pos, rc = 120, written, outfd, errfd;
+  int i, count, pos, rc = 120, written, outfd, errfd;
   const char *args[33] = {0};
   DWORD pid = GetCurrentProcessId();
 
   for (i = 0; i < 4; i++)
-    for (j = 0; j < 2; j++)
-      pipes[i][j] = INVALID_HANDLE_VALUE;
+    pipes[i] = INVALID_HANDLE_VALUE;
   for (i = 0; i < 4; i++) {
     if (snprintf(names[i], sizeof(names[i]), "\\\\.\\pipe\\%lu-%s",
                  (unsigned long)pid, suffixes[i]) >= sizeof(names[i]))
       goto cleanup;
-    for (j = 0; j < 2; j++) {
-      pipes[i][j] = CreateNamedPipeA(names[i],
-        i == 0 ? PIPE_ACCESS_INBOUND : PIPE_ACCESS_OUTBOUND,
-        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-        2, 65536, 65536, 5000, NULL);
-      if (pipes[i][j] == INVALID_HANDLE_VALUE) {
-        rc = 121;
-        goto cleanup;
-      }
+    pipes[i] = CreateNamedPipeA(names[i],
+      i == 0 ? PIPE_ACCESS_INBOUND : PIPE_ACCESS_OUTBOUND,
+      PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+      1, 65536, 65536, 5000, NULL);
+    if (pipes[i] == INVALID_HANDLE_VALUE) {
+      rc = 121;
+      goto cleanup;
     }
   }
   /* READY is an initialization handshake, not Git command output. */
   printf("READY %lu\n", (unsigned long)pid);
   fflush(stdout);
-  /*
-   * Git Bash's initial open consumes a pipe instance without carrying data.
-   * Keep a second instance ready for each channel's actual redirection.
-   * Retain the original channel-open order.
-   */
+  /* Native Bash builtin opens exactly one connection per channel. */
   {
     const int order[4] = {1, 2, 3, 0};
     for (i = 0; i < 4; i++) {
-      int channel = order[i];
-      if (!git809_direct_connect(pipes[channel][0]) ||
-          !git809_direct_connect(pipes[channel][1])) {
+      if (!git809_direct_connect(pipes[order[i]])) {
         rc = 122;
         goto cleanup;
       }
-      DisconnectNamedPipe(pipes[channel][0]);
-      CloseHandle(pipes[channel][0]);
-      pipes[channel][0] = INVALID_HANDLE_VALUE;
     }
   }
   while (used < sizeof(frame)) {
-    if (!ReadFile(pipes[0][1], frame + used, sizeof(frame) - used, &n, NULL)) {
+    if (!ReadFile(pipes[0], frame + used, sizeof(frame) - used, &n, NULL)) {
       if (GetLastError() != ERROR_BROKEN_PIPE) {
         rc = 123;
         goto cleanup;
@@ -193,25 +181,25 @@ static int git809_direct_worker(void)
     goto cleanup;
   }
   args[count] = NULL;
-  FlushFileBuffers(pipes[0][1]);
-  DisconnectNamedPipe(pipes[0][1]);
-  CloseHandle(pipes[0][1]);
-  pipes[0][1] = INVALID_HANDLE_VALUE;
+  FlushFileBuffers(pipes[0]);
+  DisconnectNamedPipe(pipes[0]);
+  CloseHandle(pipes[0]);
+  pipes[0] = INVALID_HANDLE_VALUE;
 
   /* Transfer output handles to CRT descriptors used by Git's main(). */
-  outfd = _open_osfhandle((intptr_t)pipes[1][1], _O_BINARY);
+  outfd = _open_osfhandle((intptr_t)pipes[1], _O_BINARY);
   if (outfd < 0) {
     rc = 129;
     goto cleanup;
   }
-  pipes[1][1] = INVALID_HANDLE_VALUE;
-  errfd = _open_osfhandle((intptr_t)pipes[2][1], _O_BINARY);
+  pipes[1] = INVALID_HANDLE_VALUE;
+  errfd = _open_osfhandle((intptr_t)pipes[2], _O_BINARY);
   if (errfd < 0) {
     _close(outfd);
     rc = 130;
     goto cleanup;
   }
-  pipes[2][1] = INVALID_HANDLE_VALUE;
+  pipes[2] = INVALID_HANDLE_VALUE;
   if (_dup2(outfd, _fileno(stdout)) < 0 ||
       _dup2(errfd, _fileno(stderr)) < 0) {
     _close(outfd);
@@ -239,18 +227,17 @@ static int git809_direct_worker(void)
   _close(_fileno(stderr));
 cleanup:
   written = snprintf(result, sizeof(result), "EXIT %d\n", rc);
-  if (pipes[3][1] != INVALID_HANDLE_VALUE) {
+  if (pipes[3] != INVALID_HANDLE_VALUE) {
     if (written > 0 && written < sizeof(result) &&
-        WriteFile(pipes[3][1], result, written, &n, NULL))
-      FlushFileBuffers(pipes[3][1]);
-    DisconnectNamedPipe(pipes[3][1]);
-    CloseHandle(pipes[3][1]);
-    pipes[3][1] = INVALID_HANDLE_VALUE;
+        WriteFile(pipes[3], result, written, &n, NULL))
+      FlushFileBuffers(pipes[3]);
+    DisconnectNamedPipe(pipes[3]);
+    CloseHandle(pipes[3]);
+    pipes[3] = INVALID_HANDLE_VALUE;
   }
   for (i = 0; i < 4; i++)
-    for (j = 0; j < 2; j++)
-      if (pipes[i][j] != INVALID_HANDLE_VALUE)
-        CloseHandle(pipes[i][j]);
+    if (pipes[i] != INVALID_HANDLE_VALUE)
+      CloseHandle(pipes[i]);
   return rc;
 }
 #endif
