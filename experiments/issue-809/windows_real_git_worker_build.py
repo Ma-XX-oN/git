@@ -210,7 +210,7 @@ static int git809_accept_pair(HANDLE pair[2], int *probe, int *data)
   }
 finish:
   git809_trace_api("accept-pair", "FINISH", pair[0], ok, (DWORD)first,
-                   *data == 0 || *data == 1 ? (DWORD)*data : 0xffffffffu);
+                   ok ? (DWORD)*data : 0xffffffffu);
   for (j = 0; j < 2; j++) {
     if (threads[j]) CloseHandle(threads[j]);
     if (c[j].done) CloseHandle(c[j].done);
