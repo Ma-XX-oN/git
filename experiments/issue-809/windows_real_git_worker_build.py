@@ -115,6 +115,33 @@ static DWORD WINAPI git809_wait_connection(void *arg)
   return 0;
 }
 
+/* Query kernel pipe state after both client connections complete.
+ * Thread wake order is not the order in which clients opened the pipe.
+ * The short-lived metadata probe reaches CLOSING (4), while Bash retains
+ * the actual transport connection in CONNECTED (3). */
+struct git809_pipe_local {
+  ULONG type, configuration, max_instances, instances;
+  ULONG inbound_quota, read_available, outbound_quota, write_available;
+  ULONG state, end;
+};
+typedef LONG (NTAPI *git809_query_fn)(HANDLE, PVOID, PVOID, ULONG, int);
+static int git809_pipe_state(HANDLE pipe, ULONG *state)
+{
+  static git809_query_fn query;
+  struct { union { LONG status; PVOID pointer; }; ULONG_PTR information; } io;
+  struct git809_pipe_local local = {0};
+  LONG status;
+  if (!query) {
+    HMODULE dll = GetModuleHandleA("ntdll.dll");
+    query = dll ? (git809_query_fn)GetProcAddress(dll, "NtQueryInformationFile") : NULL;
+  }
+  if (!query) return 0;
+  status = query(pipe, &io, &local, sizeof(local), 24);
+  if (status < 0 || local.end != 1) return 0;
+  *state = local.state;
+  return 1;
+}
+
 /* Both pipe instances exist before either client connection. Threads wait
  * independently so the first completed connection is discovered dynamically.
  * All four channels retain exactly one probe and one data instance. */
@@ -150,17 +177,25 @@ static int git809_accept_pair(HANDLE pair[2], int *probe, int *data)
     goto finish;
   if (!c[0].ok || !c[1].ok || (first != 0 && first != 1))
     goto finish;
-  /* ERROR_NO_DATA means that this client already disconnected.
-   * That is stronger evidence of Bash's metadata probe than scheduling
-   * order between the two server-side connection threads. */
-  if (c[0].closed_before_accept && c[1].closed_before_accept)
-    goto finish;
-  if (c[0].closed_before_accept || c[1].closed_before_accept)
-    *probe = c[0].closed_before_accept ? 0 : 1;
-  else
-    *probe = (int)first;
-  *data = 1 - *probe;
-  ok = 1;
+  /* Do not use the scheduler's winner index to classify the pipes.
+   * Query the independent kernel connection state until the metadata
+   * client closes. This preserves synchronous handles for Git stdout. */
+  for (j = 0; j < 2000; j++) {
+    ULONG state0, state1;
+    if (!git809_pipe_state(pair[0], &state0) ||
+        !git809_pipe_state(pair[1], &state1))
+      goto finish;
+    if (state0 == 4 && state1 == 3) {
+      *probe = 0; *data = 1; ok = 1; break;
+    }
+    if (state1 == 4 && state0 == 3) {
+      *probe = 1; *data = 0; ok = 1; break;
+    }
+    if ((state0 != 3 && state0 != 4) ||
+        (state1 != 3 && state1 != 4))
+      goto finish;
+    Sleep(1);
+  }
 finish:
   for (j = 0; j < 2; j++) {
     if (threads[j]) CloseHandle(threads[j]);
