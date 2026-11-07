@@ -45,7 +45,7 @@ static int git809_unix_worker(const char *directory)
                  directory, names[i]) >= sizeof(paths[i]))
       return 121;
 
-  printf("READY %ld\\n", (long)getpid());
+  printf("READY %ld\n", (long)getpid());
   fflush(stdout);
 
   /* Match the Bash client's descriptor-open order exactly. */
@@ -131,7 +131,7 @@ static int git809_unix_worker(const char *directory)
   close(STDOUT_FILENO);
   close(STDERR_FILENO);
 cleanup:
-  n = snprintf(result, sizeof(result), "EXIT %d\\n", rc);
+  n = snprintf(result, sizeof(result), "EXIT %d\n", rc);
   if (fd[2] >= 0) {
     if (n > 0 && (size_t)n < sizeof(result))
       (void)write(fd[2], result, (size_t)n);
@@ -151,17 +151,17 @@ cleanup:
 def build(root: Path):
     source_path = root / "git.c"
     source = source_path.read_text(encoding="utf-8")
-    anchor = "#define RUN_SETUP\\t\\t(1<<0)"
+    anchor = "#define RUN_SETUP\t\t(1<<0)"
     if source.count(anchor) != 1:
         raise RuntimeError("Git builtin-dispatch anchor changed")
-    source = source.replace(anchor, HOOK + "\\n" + anchor, 1)
-    entry = "int cmd_main(int argc, const char **argv)\\n{"
+    source = source.replace(anchor, HOOK + "\n" + anchor, 1)
+    entry = "int cmd_main(int argc, const char **argv)\n{"
     if source.count(entry) != 1:
         raise RuntimeError("Git cmd_main entry changed")
     source = source.replace(entry,
-        entry + '\\n#ifdef GIT809_UNIX_WORKER\\n'
-        '  if (argc == 3 && !strcmp(argv[1], "--git809-unix-worker"))\\n'
-        '    return git809_unix_worker(argv[2]);\\n'
+        entry + '\n#ifdef GIT809_UNIX_WORKER\n'
+        '  if (argc == 3 && !strcmp(argv[1], "--git809-unix-worker"))\n'
+        '    return git809_unix_worker(argv[2]);\n'
         '#endif', 1)
     source_path.write_text(source, encoding="utf-8")
     cmd = ["make", "-j4", "NO_RUST=YesPlease", "NO_CURL=YesPlease",
