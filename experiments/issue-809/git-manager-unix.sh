@@ -60,6 +60,8 @@ git-ipc() {
     return 255
   fi
   local dir=$_GIT809_UNIX_DIRECTORY worker count header arg chunk rc status
+  local profile_start profile_alloc profile_open profile_sent profile_drained profile_exit
+  if [[ ${GIT809_PROFILE_PHASES:-} == 1 ]]; then profile_start=$EPOCHREALTIME; fi
   [[ -n ${_GIT809_UNIX_REPLY_FD:-} ]] || {
     printf 'GIT-IPC ERROR: Unix allocation reply channel unavailable\n' >&2
     return 255
@@ -79,11 +81,13 @@ git-ipc() {
     return 255
   fi
 
+  if [[ ${GIT809_PROFILE_PHASES:-} == 1 ]]; then profile_alloc=$EPOCHREALTIME; fi
   exec 4<"$worker/stdout" || { printf 'GIT-IPC ERROR: stdout open failed\n' >&2; return 255; }
   exec 5<"$worker/stderr" || { exec 4<&-; printf 'GIT-IPC ERROR: stderr open failed\n' >&2; return 255; }
   exec 6<"$worker/exit-code" || { exec 4<&- 5<&-; printf 'GIT-IPC ERROR: exit-code open failed\n' >&2; return 255; }
   exec 7>"$worker/stdin" || { exec 4<&- 5<&- 6<&-; printf 'GIT-IPC ERROR: stdin open failed\n' >&2; return 255; }
 
+  if [[ ${GIT809_PROFILE_PHASES:-} == 1 ]]; then profile_open=$EPOCHREALTIME; fi
   count=$(( $# + 1 ))
   printf -v header '\\x%02x\\x00\\x00\\x00' "$count"
   printf '%b' "$header" >&7 || { printf 'GIT-IPC ERROR: request header write failed\n' >&2; return 255; }
@@ -92,6 +96,7 @@ git-ipc() {
     printf '%s\x00' "$arg" >&7 || { printf 'GIT-IPC ERROR: argument write failed\n' >&2; return 255; }
   done
   exec 7>&-
+  if [[ ${GIT809_PROFILE_PHASES:-} == 1 ]]; then profile_sent=$EPOCHREALTIME; fi
 
   local stdout_open=1 stderr_open=1
   while (( stdout_open || stderr_open )); do
@@ -124,12 +129,18 @@ git-ipc() {
       fi
     fi
   done
+  if [[ ${GIT809_PROFILE_PHASES:-} == 1 ]]; then profile_drained=$EPOCHREALTIME; fi
   IFS= read -r status <&6 || {
     exec 6<&-
     printf 'GIT-IPC ERROR: exit-code read failed\n' >&2
     return 255
   }
   exec 6<&-
+  if [[ ${GIT809_PROFILE_PHASES:-} == 1 ]]; then
+    profile_exit=$EPOCHREALTIME
+    printf 'GIT809_PHASE start=%s allocated=%s opened=%s sent=%s drained=%s exited=%s\n' \
+      "$profile_start" "$profile_alloc" "$profile_open" "$profile_sent" "$profile_drained" "$profile_exit" >&2
+  fi
   if [[ $status =~ ^EXIT[[:space:]]([0-9]+)$ ]]; then
     return "${BASH_REMATCH[1]}"
   fi
