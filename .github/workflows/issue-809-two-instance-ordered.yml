@@ -6,6 +6,7 @@ on:
       - experiments/issue-809/windows_real_git_worker_build.py
       - experiments/issue-809/windows_git_ipc_pool.py
       - experiments/issue-809/git-manager.sh
+      - experiments/issue-809/pool_size_ab_benchmark.py
       - .github/workflows/issue-809-two-instance-ordered.yml
   workflow_dispatch:
 permissions:
@@ -37,5 +38,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: issue-809-ordered-two-instance-windows
-          path: git809-bash-pipe-results/pool-size-matched-1to5-windows.json
+          path: |
+            git809-bash-pipe-results/pool-size-matched-1to5-windows.json
+            git809-bash-pipe-results/latest-timeout-manager.log
           if-no-files-found: warn
