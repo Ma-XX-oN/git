@@ -9,6 +9,7 @@ import argparse
 import ctypes as C
 from ctypes import wintypes as W
 import os
+from pathlib import Path
 import subprocess
 import sys
 import threading
@@ -56,6 +57,9 @@ def main() -> int:
   parser.add_argument("--bash", required=True)
   parser.add_argument("--client", choices=("bash", "native", "attached"), default="bash")
   parser.add_argument("--builtin-dll")
+  parser.add_argument("--strace", help="Windows Cygwin/MSYS strace.exe for runtime event logging")
+  parser.add_argument("--detours-launcher", help="Detours injector exe")
+  parser.add_argument("--detours-dll", help="Detours Nt API hook DLL")
   parser.add_argument("--expect", choices=("any", "success", "failure"), default="any")
   parser.add_argument("--name-kind", choices=("matched", "unmatched", "malformed"), default="matched")
   args = parser.parse_args()
@@ -145,9 +149,53 @@ def main() -> int:
       K.CloseHandle(native)
   else:
     try:
-      child = subprocess.run([args.bash, "--noprofile", "--norc", "-c",
-                              code, "git809-probe", pipe_name, args.builtin_dll or ""],
-                             capture_output=True, timeout=7, check=False)
+      command = [args.bash, "--noprofile", "--norc", "-c",
+                 code, "git809-probe", pipe_name, args.builtin_dll or ""]
+      trace_path = None
+      if args.strace:
+        trace_path = Path(os.environ.get("RUNNER_TEMP", os.getcwd())) / (
+          f"git809-runtime-{args.direction}-{args.name_kind}-{identifier}.strace")
+        command = [args.strace, "-m", "debug+syscall+flush+inherit",
+                   "-o", str(trace_path)] + command
+        record(f"TRACE_FILE={trace_path}")
+      injected_log = None
+      env = os.environ.copy()
+      if args.detours_launcher:
+        if not args.detours_dll or not os.path.isfile(args.detours_dll):
+          parser.error("--detours-launcher requires existing --detours-dll")
+        injected_log = Path(os.environ.get("RUNNER_TEMP", os.getcwd())) / (
+          f"git809-detours-{args.direction}-{args.name_kind}-{identifier}.log")
+        env["GIT809_PIPE_LEAF"] = prefix + identifier
+        env["GIT809_DETOURS_LOG"] = str(injected_log)
+        # MSYS argument conversion under injected CreateProcess can rewrite
+        # native backslashes. Export the exact Unicode pipe path directly.
+        env["GIT809_PIPE_PATH"] = pipe_name
+        command[4] = code.replace('"$1"', '"$GIT809_PIPE_PATH"')
+        command = [args.detours_launcher, args.detours_dll] + command
+        record(f"DETOURS_LOG={injected_log} leaf={prefix + identifier}")
+      child = subprocess.run(command, capture_output=True, timeout=15,
+                             check=False, env=env)
+      if injected_log:
+        if not injected_log.exists():
+          raise RuntimeError(f"No Detours native log produced: {injected_log}; stderr={child.stderr!r}")
+        native_lines = injected_log.read_text(encoding="utf-8",errors="replace").splitlines()
+        record(f"DETOURS_NATIVE_COUNT={len(native_lines)} trace_file={injected_log}")
+        for line in native_lines[-100:]:
+          record(f"NATIVE {line}")
+        if not any("op=HOOK_READY" in x for x in native_lines):
+          raise RuntimeError(f"Detours did not confirm hook installation: {injected_log}")
+      if trace_path:
+        if not trace_path.is_file():
+          raise RuntimeError(f"Runtime trace not produced: {trace_path}")
+        runtime_lines = [
+          line for line in trace_path.read_text(encoding="utf-8", errors="replace").splitlines()
+          if "GIT809_META" in line
+        ]
+        record(f"RUNTIME_MARKER_COUNT={len(runtime_lines)} trace_file={trace_path}")
+        for line in runtime_lines[-100:]:
+          record(f"RUNTIME {line}")
+        if not runtime_lines:
+          raise RuntimeError(f"No instrumented runtime events captured: {trace_path}")
       record(f"BASH_DONE rc={child.returncode} stdout={child.stdout!r} stderr={child.stderr!r}")
       if args.expect == "success":
         if child.returncode != 0:
@@ -169,6 +217,9 @@ def main() -> int:
   connected = sum(' CONNECT ' in line for line in logs)
   record(f"SUMMARY connected={connected} instances={args.instances} "
          f"direction={args.direction} name_kind={args.name_kind}")
+  if args.detours_launcher and connected != args.instances:
+    raise RuntimeError(
+      f"Detours diagnostic invalid: {connected} server connections; expected {args.instances}")
   if args.expect == "success" and connected != args.instances:
     raise RuntimeError(f"Successful command consumed {connected} connections, expected {args.instances}")
   if args.expect == "success" and args.direction == "write" and not any(
