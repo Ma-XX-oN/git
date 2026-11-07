@@ -26,7 +26,7 @@ jobs:
           set -x
           export MSYSTEM=MSYS
           export PATH="/usr/bin:$PATH"
-          pacman -S --needed --noconfirm gcc python openssl-devel zlib-devel
+          pacman -S --needed --noconfirm gcc python openssl-devel zlib-devel libiconv-devel
           test -f /usr/include/openssl/ssl.h
           test -f /usr/include/zlib.h
           command -v gcc
@@ -37,6 +37,10 @@ jobs:
           python3 -c 'import os; assert os.name == "posix"; assert hasattr(os,"mkfifo")'
           bash -n experiments/issue-809/git-manager-unix.sh
           python3 -m py_compile experiments/issue-809/unix_git_worker_build.py experiments/issue-809/unix_git_ipc_pool.py experiments/issue-809/pool_size_ab_benchmark.py
+          # Git-for-Windows sources include the Cygwin path helper declarations,
+          # but their MSYS GCC target does not automatically link the helper.
+          # Keep these compatibility additions local to this temporary checkout.
+          printf '%s\n' 'COMPAT_OBJS += compat/win32/path-utils.o' 'NEEDS_LIBICONV = YesPlease' >> config.mak
           python3 experiments/issue-809/pool_size_ab_benchmark.py
       - name: Preserve all raw measurements
         if: always()
