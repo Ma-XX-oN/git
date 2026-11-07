@@ -1,0 +1,44 @@
+name: Git 809 experimental Unix native IPC comparison
+on:
+  push:
+    branches: [investigation-809-git-startup]
+    paths:
+      - experiments/issue-809/unix_git_worker_build.py
+      - experiments/issue-809/unix_git_ipc_pool.py
+      - experiments/issue-809/git-manager-unix.sh
+      - experiments/issue-809/unix_ipc_benchmark.py
+      - .github/workflows/issue-809-unix-ipc.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  unix-ipc:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install modern Bash on macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          brew install bash
+          echo "$(brew --prefix bash)/bin" >> "$GITHUB_PATH"
+      - name: Build and benchmark native Unix Git IPC
+        shell: bash
+        run: |
+          bash -n experiments/issue-809/git-manager-unix.sh
+          python3 -m py_compile experiments/issue-809/unix_git_worker_build.py experiments/issue-809/unix_git_ipc_pool.py experiments/issue-809/unix_ipc_benchmark.py
+          python3 experiments/issue-809/unix_ipc_benchmark.py
+      - name: Persist exact benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-unix-ipc-${{ matrix.os }}
+          path: git809-bash-pipe-results/unix-ipc-*.json
+          if-no-files-found: warn
