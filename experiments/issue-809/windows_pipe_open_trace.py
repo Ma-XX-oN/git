@@ -146,8 +146,13 @@ def main() -> int:
                               code, "git809-probe", pipe_name, args.builtin_dll or ""],
                              capture_output=True, timeout=7, check=False)
       record(f"BASH_DONE rc={child.returncode} stdout={child.stdout!r} stderr={child.stderr!r}")
-      if args.expect == "success" and child.returncode != 0:
-        raise RuntimeError(f"Bash redirection expected success, rc={child.returncode}")
+      if args.expect == "success":
+        if child.returncode != 0:
+          raise RuntimeError(f"Bash redirection expected success, rc={child.returncode}")
+        if args.direction == "read" and child.stdout != b"CLIENT_DATA=INSTANCE_0\n":
+          raise RuntimeError(f"Bash read payload mismatch: {child.stdout!r}")
+        if args.direction == "write" and child.stdout != b"CLIENT_DONE\n":
+          raise RuntimeError(f"Bash write completion mismatch: {child.stdout!r}")
       if args.expect == "failure" and child.returncode == 0:
         raise RuntimeError("Bash redirection unexpectedly succeeded")
     except subprocess.TimeoutExpired as exc:
@@ -156,8 +161,15 @@ def main() -> int:
         raise RuntimeError("Bash redirection timed out") from exc
   for t in threads:
     t.join(timeout=0.3)
-  record(f"SUMMARY connected={sum(' CONNECT ' in l for l in logs)} "
-         f"instances={args.instances} direction={args.direction}")
+  connected = sum(' CONNECT ' in line for line in logs)
+  record(f"SUMMARY connected={connected} instances={args.instances} "
+         f"direction={args.direction} name_kind={args.name_kind}")
+  if args.expect == "success" and args.instances == 1 and connected != 1:
+    raise RuntimeError(f"Successful command consumed {connected} connections, not one")
+  if args.expect == "success" and args.direction == "write" and not any(
+    "read_success=1 bytes=13 data=b'CLIENT_WRITE\\n'" in line for line in logs
+  ):
+    raise RuntimeError("Native server did not receive expected write payload")
   # A probe is diagnostic, not a pass/fail assertion: each combination
   # is expected to expose its actual behavior, including timeouts.
   return 0
