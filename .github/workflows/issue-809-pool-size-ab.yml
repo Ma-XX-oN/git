@@ -26,7 +26,9 @@ jobs:
           set -x
           export MSYSTEM=MSYS
           export PATH="/usr/bin:$PATH"
-          pacman -S --needed --noconfirm gcc python
+          pacman -S --needed --noconfirm gcc python openssl-devel zlib-devel
+          test -f /usr/include/openssl/ssl.h
+          test -f /usr/include/zlib.h
           command -v gcc
           command -v python3
           command -v mkfifo
