@@ -135,7 +135,13 @@ def pipe_call(git: Path, argv, *, slow_reader=False):
                 threads[name] = t
         for name, t in threads.items():
             t.join(timeout=15)
-            assert not t.is_alive(), "output channel did not reach EOF: " + name
+            if t.is_alive():
+                print("PREINIT_OUTPUT_STUCK argv=" + repr(argv) +
+                      " channel=" + name + " pid=" + str(p.pid) +
+                      " process_exit=" + repr(p.poll()) +
+                      " completed_channels=" + repr(list(results)),
+                      flush=True)
+                raise AssertionError("output channel did not reach EOF: " + name)
         status_data = read_all(fds.pop("exit-code"))
         match = re.fullmatch(rb"EXIT ([0-9]+)\n", status_data)
         assert match, ("malformed exit status", status_data)
