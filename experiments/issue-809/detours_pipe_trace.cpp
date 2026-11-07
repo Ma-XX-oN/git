@@ -11,7 +11,16 @@ using NtCreateFileFn = NTSTATUS (NTAPI *)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUT
   PIO_STATUS_BLOCK, PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);
 using NtOpenFileFn = NTSTATUS (NTAPI *)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES,
   PIO_STATUS_BLOCK, ULONG, ULONG);
-using NtQueryAttributesFileFn = NTSTATUS (NTAPI *)(POBJECT_ATTRIBUTES, PFILE_BASIC_INFORMATION);
+// Windows SDK winternl.h does not provide a PFILE_BASIC_INFORMATION alias.
+struct Git809BasicInfo {
+  LARGE_INTEGER CreationTime;
+  LARGE_INTEGER LastAccessTime;
+  LARGE_INTEGER LastWriteTime;
+  LARGE_INTEGER ChangeTime;
+  ULONG FileAttributes;
+};
+static_assert(sizeof(Git809BasicInfo) == 40, "NT basic information layout changed");
+using NtQueryAttributesFileFn = NTSTATUS (NTAPI *)(POBJECT_ATTRIBUTES, Git809BasicInfo*);
 using NtCloseFn = NTSTATUS (NTAPI *)(HANDLE);
 
 static NtCreateFileFn real_create = nullptr;
@@ -116,7 +125,7 @@ static NTSTATUS NTAPI hook_open(PHANDLE out, ACCESS_MASK access, POBJECT_ATTRIBU
   }
   return status;
 }
-static NTSTATUS NTAPI hook_query(POBJECT_ATTRIBUTES a, PFILE_BASIC_INFORMATION info) {
+static NTSTATUS NTAPI hook_query(POBJECT_ATTRIBUTES a, Git809BasicInfo* info) {
   if (reentrant) return real_query(a,info);
   const bool hit = matches(a);
   if (hit) emit("NtQueryAttributesFile_BEGIN",0,nullptr,0,0,a);
