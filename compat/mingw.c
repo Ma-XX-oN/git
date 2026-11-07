@@ -3746,8 +3746,6 @@ static BOOL WINAPI handle_ctrl_c(DWORD ctrl_type)
  * To be more compatible with the core git code, we convert
  * argv into UTF8 and pass them directly to main().
  */
-'
-#ifdef GIT PREINIT_WORKER_PROBE
 #include <setjmp.h>
 static jmp_buf git_preinit_jump;
 static volatile int git_preinit_active;
