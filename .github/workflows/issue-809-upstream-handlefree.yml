@@ -37,6 +37,11 @@ jobs:
             https://repo.msys2.org/msys/x86_64/gcc-15.3.0-1-x86_64.pkg.tar.zst
           test "$(pacman -Q gcc)" = "gcc 15.3.0-1"
           test "$(pacman -Q gcc-libs)" = "gcc-libs 15.3.0-1"
+          # The MSYS MinGW cross-compiler is independent of host GCC.
+          # GCC 16.2 rejects preexisting C++ utility declarations in this
+          # 3.6.10 source. Use the archived pre-GCC-16 cross compiler.
+          pacman -U --noconfirm https://repo.msys2.org/msys/x86_64/mingw-w64-cross-mingw32-gcc-15.2.0-1-x86_64.pkg.tar.zst
+          test "$(pacman -Q mingw-w64-cross-mingw32-gcc)" = "mingw-w64-cross-mingw32-gcc 15.2.0-1"
           gcc --version | head -n 1
           export PATH="/opt/bin:/usr/bin:$PATH"
           command -v i686-w64-mingw32-gcc
