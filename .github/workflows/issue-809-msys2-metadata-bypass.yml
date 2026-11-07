@@ -64,9 +64,13 @@ jobs:
           recipe.write_text(head + "sha256sums=(" + tail.replace(old_hashes[0], new_hashes[0], 1))
           print(f"GIT809_VCS_DIGEST expected={old_hashes[0]} actual={new_hashes[0]}")
           GIT809_HASH
-          makepkg --nobuild --syncdeps --noconfirm
+          # The historical source archive has a checksum mismatch; verify the
+          # extracted upstream commit instead of trusting that archive.
+          makepkg --nobuild --syncdeps --noconfirm --skipchecksums
           test -f src/msys2-runtime/winsup/cygwin/path.cc
-          git -C src/msys2-runtime rev-parse HEAD
+          actual_source=$(git -C src/msys2-runtime rev-parse HEAD)
+          test "$actual_source" = da84778cbc92590c1996c02c68c5a3d3c49e00af
+          printf "GIT809_RUNTIME_SOURCE_SHA=%s\n" "$actual_source"
           sha256sum /usr/bin/msys-2.0.dll
       - name: Apply exact name-restricted source test and rebuild runtime
         shell: bash
@@ -78,7 +82,7 @@ jobs:
             /usr/src/MSYS2-packages/msys2-runtime/src/msys2-runtime/winsup/cygwin/path.cc
           cd /usr/src/MSYS2-packages/msys2-runtime
           git -C src/msys2-runtime diff -- winsup/cygwin/path.cc
-          makepkg --noextract --noprepare --syncdeps --noconfirm
+          makepkg --noextract --noprepare --syncdeps --noconfirm --skipchecksums
           test -s src/dest/usr/bin/msys-2.0.dll
           workspace_posix=$(cygpath -u "$GITHUB_WORKSPACE")
           printf '%s\n' "$PWD/src/dest/usr/bin/msys-2.0.dll" > "$workspace_posix/experiments/issue-809/patched-runtime-path.txt"
