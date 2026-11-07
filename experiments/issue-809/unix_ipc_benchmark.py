@@ -37,17 +37,17 @@ SCRIPT = r'''
       "$gitbin" --version >/dev/null || exit 44
       b=$EPOCHREALTIME
     fi
-    printf 'PAIR %s %s %s %s %s\\n' "$i" "$a" "$b" "$c" "$d"
+    printf 'PAIR %s %s %s %s %s\n' "$i" "$a" "$b" "$c" "$d"
   done
   expected=$("$gitbin" help -a) || exit 45
   actual=$(git-ipc help -a) || exit 46
   [[ $actual == "$expected" ]] || exit 47
   shopt -s expand_aliases
   eval 'git --version' || exit 48
-  printf 'ALIAS_PASS\\n'
-  printf 'MANAGER_BEGIN\\n'
+  printf 'ALIAS_PASS\n'
+  printf 'MANAGER_BEGIN\n'
   cat "$_GIT809_UNIX_MANAGER_LOG"
-  printf 'MANAGER_END\\n'
+  printf 'MANAGER_END\n'
 '''
 
 def stats(values):
