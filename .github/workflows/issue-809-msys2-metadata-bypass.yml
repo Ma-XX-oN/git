@@ -1,0 +1,74 @@
+name: Git 809 isolated MSYS2 metadata-bypass test
+on:
+  push:
+    branches: [experiment-809-win32-native-bash-transport]
+    paths:
+      - experiments/issue-809/patch_msys2_test_pipe_attributes.py
+      - .github/workflows/issue-809-msys2-metadata-bypass.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  isolated-msys2-runtime:
+    runs-on: windows-latest
+    timeout-minutes: 85
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+        with:
+          flavor: full
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Build disposable SDK runtime source
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export MSYSTEM=MSYS
+          export PATH="/usr/bin:$PATH"
+          pacman -S --needed --noconfirm base-devel msys2-devel python
+          command -v sdk
+          sdk build msys2-runtime
+          test -f /usr/src/MSYS2-packages/msys2-runtime/src/msys2-runtime/winsup/cygwin/path.cc
+      - name: Apply exact name-restricted source test and rebuild runtime
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export MSYSTEM=MSYS
+          export PATH="/usr/bin:$PATH"
+          python3 experiments/issue-809/patch_msys2_test_pipe_attributes.py \
+            /usr/src/MSYS2-packages/msys2-runtime/src/msys2-runtime/winsup/cygwin/path.cc
+          cd /usr/src/MSYS2-packages/msys2-runtime/src
+          git -C msys2-runtime diff -- winsup/cygwin/path.cc || true
+          build_dir=$(find . -type d -path '*/winsup/cygwin' -name cygwin \
+            | grep '/build-.*-pc-msys/' | head -n 1)
+          test -n "$build_dir"
+          cd "$build_dir"
+          make -j4
+          test -s msys0.dll
+          printf '%s\n' "$PWD/msys0.dll" > "$GITHUB_WORKSPACE/experiments/issue-809/patched-runtime-path.txt"
+      - name: Compare pristine Git Bash and isolated patched runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sdk = 'D:\git-sdk-64-full\usr\bin'
+          if (-not (Test-Path "$sdk\bash.exe")) { throw 'SDK Bash missing' }
+          $location = Get-Content experiments/issue-809/patched-runtime-path.txt -Raw
+          $location = $location.Trim()
+          $win = (& "$sdk\cygpath.exe" -w "$location").Trim()
+          if (-not (Test-Path $win)) { throw "Patched DLL not found: $win" }
+          $isolated = Join-Path $env:RUNNER_TEMP 'git809-isolated-msys2'
+          New-Item -ItemType Directory -Path $isolated -Force | Out-Null
+          Copy-Item "$sdk\bash.exe" "$isolated\bash.exe"
+          Copy-Item $win "$isolated\msys-2.0.dll"
+          $bash = "$isolated\bash.exe"
+          foreach ($mode in @('original','patched')) {
+            $exe = if ($mode -eq 'original') { "$sdk\bash.exe" } else { $bash }
+            foreach ($direction in @('read','write')) {
+              Write-Output "PIPE_METADATA_CASE mode=$mode direction=$direction instances=1"
+              python -u experiments/issue-809/windows_pipe_open_trace.py --client bash --instances 1 --direction $direction --bash $exe
+              if ($LASTEXITCODE -ne 0) { throw "Probe failed: $mode $direction" }
+            }
+          }
