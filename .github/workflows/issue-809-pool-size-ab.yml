@@ -4,12 +4,15 @@ on:
     branches: [experiment-809-pool-2-4-5]
     paths:
       - experiments/issue-809/pool_size_ab_benchmark.py
+      - experiments/issue-809/unix_git_ipc_pool.py
+      - experiments/issue-809/git-manager-unix.sh
       - .github/workflows/issue-809-pool-size-ab.yml
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   windows-pool-ab:
+    if: false # Already accepted: only rerun macOS failure
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -20,7 +23,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Same-runner 1-vs-3 pool comparison
+      - name: Same-runner pool sizes 2 4 5 — macOS failure diagnostic
         shell: bash
         run: |
           . /etc/profile
@@ -40,7 +43,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [macos-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
@@ -53,7 +56,7 @@ jobs:
         run: |
           brew install bash
           echo "$(brew --prefix bash)/bin" >> "$GITHUB_PATH"
-      - name: Same-runner 1-vs-3 pool comparison
+      - name: Same-runner pool sizes 2 4 5 — macOS failure diagnostic
         shell: bash
         run: |
           bash -n experiments/issue-809/git-manager-unix.sh
