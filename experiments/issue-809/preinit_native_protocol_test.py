@@ -158,6 +158,10 @@ def pipe_call(git: Path, argv, *, slow_reader=False):
 
 
 def main():
+    # Native Windows Python defaults to cp1252 on these runners; explicitly
+    # encode protocol test diagnostics as UTF-8 without changing Git output.
+    sys.stdout.reconfigure(encoding="utf-8", errors="strict")
+    sys.stderr.reconfigure(encoding="utf-8", errors="strict")
     if sys.platform != "win32":
         raise RuntimeError("Windows native test only")
     root = Path.cwd()
