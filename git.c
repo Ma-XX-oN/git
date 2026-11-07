@@ -20,7 +20,7 @@
 
 #ifdef GIT_WINDOWS_NATIVE
 /* The Windows --preinit worker needs to capture builtin dispatch exit. */
-extern void git_preinit_worker_exit(int status);
+extern NORETURN void git_preinit_worker_exit(int status);
 #undef exit
 #define exit(status) git_preinit_worker_exit(common_exit(__FILE__, __LINE__, (status)))
 #endif
