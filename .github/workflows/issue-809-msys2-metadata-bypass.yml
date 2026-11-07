@@ -66,9 +66,10 @@ jobs:
           $bash = "$isolated\bash.exe"
           foreach ($mode in @('original','patched')) {
             $exe = if ($mode -eq 'original') { "$sdk\bash.exe" } else { $bash }
+            $expect = if ($mode -eq 'original') { 'failure' } else { 'success' }
             foreach ($direction in @('read','write')) {
               Write-Output "PIPE_METADATA_CASE mode=$mode direction=$direction instances=1"
-              python -u experiments/issue-809/windows_pipe_open_trace.py --client bash --instances 1 --direction $direction --bash $exe
+              python -u experiments/issue-809/windows_pipe_open_trace.py --client bash --instances 1 --direction $direction --bash $exe --expect $expect
               if ($LASTEXITCODE -ne 0) { throw "Probe failed: $mode $direction" }
             }
           }
