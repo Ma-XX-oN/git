@@ -61,10 +61,16 @@ PROBE = r"""      /*
        * or special-file attributes require handle-based processing, fall
        * through to the original metadata open and symlink/reparse logic.
        */
-      if (is_native_named_pipe_path (&upath))
+      const bool git809_native_pipe = is_native_named_pipe_path (&upath);
+      debug_printf ("GIT809_META classify native=%d path=%S",
+                    git809_native_pipe, &upath);
+      if (git809_native_pipe)
         {
           FILE_BASIC_INFORMATION basic;
           NTSTATUS query_status = NtQueryAttributesFile (&attr, &basic);
+          debug_printf ("GIT809_META query status=%y attributes=%08x",
+                        query_status,
+                        NT_SUCCESS (query_status) ? basic.FileAttributes : 0);
           if (NT_SUCCESS (query_status)
               && !(basic.FileAttributes
                    & (FILE_ATTRIBUTE_DIRECTORY
@@ -73,10 +79,14 @@ PROBE = r"""      /*
             {
               fileattr (basic.FileAttributes);
               ext_tacked_on (!!*ext_here);
-              debug_printf ("named pipe metadata without open: %S", &upath);
+              debug_printf ("GIT809_META HANDLE_FREE path=%S", &upath);
               goto file_not_symlink;
             }
+          debug_printf ("GIT809_META query FALLBACK status=%y path=%S",
+                        query_status, &upath);
         }
+      debug_printf ("GIT809_META NtCreateFile_BEGIN native=%d path=%S",
+                    git809_native_pipe, &upath);
 """
 
 FS_REPLACEMENT = r"""if (fs.inited ()
