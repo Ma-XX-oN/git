@@ -186,10 +186,14 @@ int git809pipe_builtin(WORD_LIST *list)
   buffer[length] = '\0';
   {
     char extra;
-    if (!length || buffer[length-1] != '\n' ||
-        sscanf(buffer, "EXIT %d%c", &rc, &extra) != 1 ||
-        rc < 0 || rc > 255)
+    if (!length || buffer[length-1] != '\n') {
       rc = 255;
+    } else {
+      buffer[length-1] = '\0';
+      if (sscanf(buffer, "EXIT %d%c", &rc, &extra) != 1 ||
+          rc < 0 || rc > 255)
+        rc = 255;
+    }
   }
 cleanup:
   if (rc == 255)
