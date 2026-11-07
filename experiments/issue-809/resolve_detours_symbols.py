@@ -12,7 +12,7 @@ import re
 import subprocess
 
 def pe_property(text: str, name: str) -> int:
-  found = re.search(r"^\\s*" + re.escape(name) + r"\\s+([0-9a-fA-F]+)\\b",
+  found = re.search(r"^\s*" + re.escape(name) + r"\s+([0-9a-fA-F]+)\b",
                     text, flags=re.MULTILINE)
   if not found:
     raise RuntimeError(f"PE header missing {name}")
@@ -41,9 +41,9 @@ def main() -> None:
     for row in trace.read_text(encoding="utf-8", errors="replace").splitlines():
       if not row.startswith("GIT809_DETOURS ") or "op=" not in row:
         continue
-      base = re.search(r"\\bruntime_base=([0-9A-Fa-f]+)", row)
-      event = re.search(r"\\bop=([A-Za-z_]+)", row)
-      stack = re.search(r"\\bstack=([0-9A-Fa-fx,]+)", row)
+      base = re.search(r"\bruntime_base=([0-9A-Fa-f]+)", row)
+      event = re.search(r"\bop=([A-Za-z_]+)", row)
+      stack = re.search(r"\bstack=([0-9A-Fa-fx,]+)", row)
       if not base or not event or not stack:
         raise RuntimeError(f"Incomplete runtime base / stack in {trace}: {row[:180]}")
       loaded = int(base.group(1), 16)
@@ -67,8 +67,8 @@ def main() -> None:
           if symbol[1] not in ("??:0", "??:?") and not symbol[1].startswith("??:"):
             resolved += 1
   report.append(f"GIT809_SYMBOL_SUMMARY runtime_frames={events} source_locations={resolved}")
-  args.output.write_text("\\n".join(report) + "\\n", encoding="utf-8")
-  print("\\n".join(report), flush=True)
+  args.output.write_text("\n".join(report) + "\n", encoding="utf-8")
+  print("\n".join(report), flush=True)
   if events == 0 or resolved == 0:
     raise RuntimeError("No exact-DLL runtime frames resolved to source locations")
 
