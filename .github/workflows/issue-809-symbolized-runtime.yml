@@ -99,6 +99,8 @@ jobs:
           set -euxo pipefail
           export MSYSTEM=MSYS
           export PATH="/opt/bin:/usr/bin:$PATH"
+          cd /usr/src/MSYS2-packages/msys2-runtime
+          test -f PKGBUILD
           # Build only the MSYS runtime DLL required by the pipe experiment.
           # The full package also compiles unrelated cygcheck utilities whose
           # historical declarations are rejected by the current SDK headers.
