@@ -110,50 +110,51 @@ class Pool:
         p.stdout.close()
 
 def allocation_server(owner_pid:int,pool:Pool):
-  address=r"\\.\pipe\git809-allocate-"+str(owner_pid)
-  # Git Bash's first open occupies one instance; the next carries GET.
-  h_probe=K.CreateNamedPipeW(address,
-    PIPE_ACCESS_DUPLEX|FILE_FLAG_FIRST_PIPE_INSTANCE,
-    PIPE_TYPE_BYTE|PIPE_WAIT,2,256,256,5000,None)
-  if h_probe==INVALID:
-    raise OSError(C.get_last_error(),"CreateNamedPipe(allocation probe)")
-  h=K.CreateNamedPipeW(address,
-    PIPE_ACCESS_DUPLEX,
-    PIPE_TYPE_BYTE|PIPE_WAIT,2,256,256,5000,None)
-  if h==INVALID:
-    K.CloseHandle(h_probe)
-    raise OSError(C.get_last_error(),"CreateNamedPipe(allocation data)")
-  print("ALLOCATOR_READY "+address,flush=True)
-  try:
-    while not pool.closing.is_set():
+  address=r"\\\\.\\pipe\\git809-allocate-"+str(owner_pid)
+  first=True
+  print("ALLOCATOR_START "+address,flush=True)
+  while not pool.closing.is_set():
+    # Recreate the pair for EVERY allocation. Leaving both disconnected
+    # instances available across calls would reintroduce unordered assignment.
+    h_probe=K.CreateNamedPipeW(address,
+      PIPE_ACCESS_DUPLEX|(FILE_FLAG_FIRST_PIPE_INSTANCE if first else 0),
+      PIPE_TYPE_BYTE|PIPE_WAIT,2,256,256,5000,None)
+    if h_probe==INVALID:
+      raise OSError(C.get_last_error(),"CreateNamedPipe(allocation probe)")
+    first=False
+    h=INVALID
+    try:
       if not K.ConnectNamedPipe(h_probe,None):
         if C.get_last_error()!=ERROR_PIPE_CONNECTED:
           if pool.closing.is_set():
             return
           raise OSError(C.get_last_error(),"ConnectNamedPipe(allocation probe)")
-      try:
-        if not K.ConnectNamedPipe(h,None):
-          if C.get_last_error()!=ERROR_PIPE_CONNECTED:
-            if pool.closing.is_set():
-              return
-            raise OSError(C.get_last_error(),"ConnectNamedPipe(allocation data)")
-        buf=C.create_string_buffer(64)
-        count=W.DWORD()
-        if K.ReadFile(h,buf,64,C.byref(count),None) and buf.raw[:count.value]==b"GET\n":
-          answer=pool.alloc().encode("ascii")
-        else:
-          answer=b"INVALID\n"
-        n=W.DWORD()
-        if not K.WriteFile(h,answer,len(answer),C.byref(n),None):
-          print("ALLOCATOR_WRITE_FAILED "+str(C.get_last_error()),flush=True)
-        else:
-          K.FlushFileBuffers(h)
-      finally:
+      # Only now publish the data instance. The probe connection cannot
+      # accidentally attach to the data handle that did not yet exist.
+      h=K.CreateNamedPipeW(address,PIPE_ACCESS_DUPLEX,
+        PIPE_TYPE_BYTE|PIPE_WAIT,2,256,256,5000,None)
+      if h==INVALID:
+        raise OSError(C.get_last_error(),"CreateNamedPipe(allocation data)")
+      if not K.ConnectNamedPipe(h,None):
+        if C.get_last_error()!=ERROR_PIPE_CONNECTED:
+          raise OSError(C.get_last_error(),"ConnectNamedPipe(allocation data)")
+      buf=C.create_string_buffer(64)
+      count=W.DWORD()
+      if K.ReadFile(h,buf,64,C.byref(count),None) and buf.raw[:count.value]==b"GET\\n":
+        answer=pool.alloc().encode("ascii")
+      else:
+        answer=b"INVALID\\n"
+      n=W.DWORD()
+      if not K.WriteFile(h,answer,len(answer),C.byref(n),None):
+        print("ALLOCATOR_WRITE_FAILED "+str(C.get_last_error()),flush=True)
+      else:
+        K.FlushFileBuffers(h)
+    finally:
+      if h!=INVALID:
         K.DisconnectNamedPipe(h)
-        K.DisconnectNamedPipe(h_probe)
-  finally:
-    K.CloseHandle(h)
-    K.CloseHandle(h_probe)
+        K.CloseHandle(h)
+      K.DisconnectNamedPipe(h_probe)
+      K.CloseHandle(h_probe)
 
 def main():
   parser=argparse.ArgumentParser()
