@@ -142,7 +142,9 @@ def run_case(bash, script, git_shell, environment, workers, round_index, windows
                   "Format-Table -AutoSize | Out-String -Width 200 } }")
             try:
                 snap = subprocess.run(
-                    ["powershell.exe", "-NoProfile", "-NonInteractive",
+                    [str(Path(os.environ.get("SystemRoot", r"C:\Windows")) /
+                         "System32" / "WindowsPowerShell" / "v1.0" /
+                         "powershell.exe"), "-NoProfile", "-NonInteractive",
                      "-Command", ps], capture_output=True, timeout=15,
                     check=False)
                 snapshot = snap.stdout.decode("utf-8", "replace") + (
