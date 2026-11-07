@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Issue 809 pool-size A/B: identical Git build, same native runner, 1 vs 3.
+"""Issue 809 pool-size completion: same Git build, same runner, only 2, 4, 5.
 
 This changes only the configured number of preinitialized workers. Every
 configuration runs 120 sequential paired direct and IPC --version commands.
-Round order 1,3,3,1 reduces time-order bias without cross-runner comparisons.
+Round order 2,4,5,5,4,2 reduces time-order bias. Historical pool sizes 1 and 3 are not repeated.
 Startup, manager creation and initial worker preparation are excluded from
 per-command timings but reported separately.
 """
@@ -21,7 +21,7 @@ import sys
 import time
 
 N = 120
-RUN_ORDER = (1, 3, 3, 1)
+RUN_ORDER = (2, 4, 5, 5, 4, 2)
 OUT = Path("git809-bash-pipe-results")
 
 SHELL = r"""
@@ -187,11 +187,11 @@ def main():
         "samples_per_case": N,
         "round_order": RUN_ORDER,
         "reader_timeout_ms": 100,
-        "pool_sizes": (1, 3),
+        "pool_sizes": (2, 4, 5),
         "manager_present_in_both_configurations": True,
         "results": [],
     }
-    output_path = OUT / ("pool-size-ab-" + report["os"].lower() + ".json")
+    output_path = OUT / ("pool-size-245-" + report["os"].lower() + ".json")
     try:
         for round_index, workers in enumerate(RUN_ORDER, 1):
             result = run_case(bash, script, git_shell, env, workers, round_index, windows)
