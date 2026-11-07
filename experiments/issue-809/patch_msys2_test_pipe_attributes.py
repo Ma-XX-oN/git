@@ -10,6 +10,33 @@ import argparse
 
 ANCHOR = "      /* The EA given to NtCreateFile allows to get a handle to a symlink on\n"
 
+HELPER_ANCHOR = "class symlink_info\n{\n"
+FS_ANCHOR = "if (fs.inited ()|| fs.update (get_nt_native_path (), NULL))"
+
+HELPER = r"""/* RWF #809: exact-match test endpoint; all other paths are untouched. */
+static bool
+git809_is_test_pipe_path (const char *candidate)
+{
+  const char *prefix = "\\\\.\\pipe\\git809-redirect-";
+  const size_t prefix_len = strlen (prefix);
+  if (!candidate || strlen (candidate) != prefix_len + 32
+      || strncmp (candidate, prefix, prefix_len))
+    return false;
+  const char *p = candidate + prefix_len;
+  for (int n = 0; n < 32; ++n)
+    if (!((p[n] >= '0' && p[n] <= '9')
+          || (p[n] >= 'a' && p[n] <= 'f')))
+      return false;
+  return true;
+}
+
+"""
+
+FS_REPLACEMENT = r"""if (fs.inited ()
+	      || (!((opt & PC_KEEP_HANDLE)
+		    && git809_is_test_pipe_path (get_win32 ()))
+		  && fs.update (get_nt_native_path (), NULL)))"""
+
 PATCH = r"""      /*
        * RWF #809 isolated test: the test-pipe endpoint is a non-symlink,
        * non-directory, non-device.  Skip only the speculative metadata
@@ -22,21 +49,8 @@ PATCH = r"""      /*
        * flags, original path length, and no owned metadata handle.
        */
       {
-        const char *prefix = "\\\\.\\pipe\\git809-redirect-";
-        const size_t prefix_len = strlen (prefix);
-        const char *candidate = suffix.path;
-        bool test_pipe = (pc_flags () & PC_KEEP_HANDLE)
-                         && strlen (candidate) == prefix_len + 32
-                         && strncmp (candidate, prefix, prefix_len) == 0;
-        if (test_pipe)
-          {
-            const char *p = candidate + prefix_len;
-            for (int n = 0; n < 32; ++n)
-              if (!((p[n] >= '0' && p[n] <= '9')
-                    || (p[n] >= 'a' && p[n] <= 'f')))
-                test_pipe = false;
-          }
-        if (test_pipe)
+        if ((pc_flags () & PC_KEEP_HANDLE)
+            && git809_is_test_pipe_path (suffix.path))
           {
             /* reset() and suffix.has() ran above; suffix.next() is
              * already active.  Keep mount_flags and path_len intact. */
@@ -65,12 +79,16 @@ def main():
   target = args.path
   source = target.read_text(encoding="utf-8")
   assert source.count(ANCHOR) == 1, "unexpected MSYS2 symlink-info source"
+  assert source.count(HELPER_ANCHOR) == 1, "unexpected source class declaration"
+  assert source.count(FS_ANCHOR) == 1, "unexpected filesystem fallback"
   assert source.count("      reset ();") >= 1, "missing reset prerequisite"
   assert source.count("      if (h)\n\t{\n\t  NtClose (h);") >= 1, "missing loop cleanup prerequisite"
   assert "      while (suffix.next ())" in source, "suffix initialization changed"
   assert source.index("      while (suffix.next ())") < source.index(ANCHOR), "insertion outside candidate loop"
   assert "RWF #809 isolated test" not in source, "already patched"
-  patched = source.replace(ANCHOR, PATCH + ANCHOR, 1)
+  patched = source.replace(HELPER_ANCHOR, HELPER + HELPER_ANCHOR, 1)
+  patched = patched.replace(ANCHOR, PATCH + ANCHOR, 1)
+  patched = patched.replace(FS_ANCHOR, FS_REPLACEMENT, 1)
   target.write_text(patched, encoding="utf-8")
   print("GIT809_METADATA_PATCH_APPLIED", target)
 
