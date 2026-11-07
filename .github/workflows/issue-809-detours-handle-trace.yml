@@ -1,0 +1,73 @@
+name: Git 809 Detours native named-pipe handle trace
+on:
+  push:
+    branches: [experiment-809-detours-handle-trace]
+    paths:
+      - experiments/issue-809/detours_*
+      - experiments/issue-809/windows_pipe_open_trace.py
+      - .github/workflows/issue-809-detours-handle-trace.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-handle-lifecycle:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+        with:
+          flavor: full
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64
+      - name: Build pinned Microsoft Detours and standalone tracer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git clone --quiet --no-checkout https://github.com/microsoft/Detours.git "$env:RUNNER_TEMP\detours"
+          if ($LASTEXITCODE -ne 0) { throw 'Detours checkout failed' }
+          git -C "$env:RUNNER_TEMP\detours" checkout --detach e4bfd6b03e50de46b47abfbd1e46b384f0c5f833
+          if ($LASTEXITCODE -ne 0) { throw 'Detours pin checkout failed' }
+          Push-Location "$env:RUNNER_TEMP\detours\src"
+          try {
+            nmake /nologo
+            if ($LASTEXITCODE -ne 0) { throw 'Microsoft Detours library compilation failed' }
+          } finally { Pop-Location }
+          $include = "$env:RUNNER_TEMP\detours\src"
+          $library = "$env:RUNNER_TEMP\detours\lib.X64\detours.lib"
+          if (-not (Test-Path $library)) { throw "Missing compiled Detours library: $library" }
+          $src = "experiments\issue-809"
+          cl /nologo /std:c++17 /EHsc /W4 /WX /MT /LD "/I$include" "$src\detours_pipe_trace.cpp" /link "/OUT:$env:RUNNER_TEMP\git809_detours_trace.dll" "/DEF:$src\detours_pipe_trace.def" $library
+          if ($LASTEXITCODE -ne 0) { throw 'Pipe tracing DLL compilation failed' }
+          cl /nologo /std:c++17 /EHsc /W4 /WX /MT "/I$include" "$src\detours_launcher.cpp" /link "/OUT:$env:RUNNER_TEMP\git809_detours_launcher.exe" $library
+          if ($LASTEXITCODE -ne 0) { throw 'Detours launcher compilation failed' }
+          Get-FileHash "$env:RUNNER_TEMP\git809_detours_trace.dll" -Algorithm SHA256
+          Get-FileHash "$env:RUNNER_TEMP\git809_detours_launcher.exe" -Algorithm SHA256
+      - name: Trace original Git Bash with one native pipe instance
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bash = 'D:\git-sdk-64-full\usr\bin\bash.exe'
+          if (-not (Test-Path $bash)) { throw "Original SDK Bash missing: $bash" }
+          $launcher = "$env:RUNNER_TEMP\git809_detours_launcher.exe"
+          $dll = "$env:RUNNER_TEMP\git809_detours_trace.dll"
+          $failures = @()
+          foreach ($direction in @('read','write')) {
+            Write-Output "GIT809_DETOURS_CASE direction=$direction instances=1"
+            python -u experiments/issue-809/windows_pipe_open_trace.py --client bash --instances 1 --direction $direction --bash $bash --detours-launcher $launcher --detours-dll $dll --expect failure
+            if ($LASTEXITCODE -ne 0) { $failures += $direction }
+          }
+          if ($failures.Count) { throw "Detours trace failed: $($failures -join ',')" }
+      - name: Upload full filtered handle traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-809-detours-handle-lifecycle
+          path: ${{ runner.temp }}/git809-detours-*.log
+          if-no-files-found: error
