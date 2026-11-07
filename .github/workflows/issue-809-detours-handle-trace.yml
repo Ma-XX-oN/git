@@ -30,6 +30,17 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          # Git-for-Windows adds /usr/bin/link (GNU coreutils) ahead of MSVC.
+          # Ensure nmake resolves the actual Visual Studio linker.
+          $cl = (Get-Command cl.exe -CommandType Application).Source
+          $msvcBin = Split-Path $cl -Parent
+          $link = Join-Path $msvcBin 'link.exe'
+          if (-not (Test-Path $link)) { throw "Missing MSVC link.exe beside cl.exe: $cl" }
+          $env:PATH = "$msvcBin;$env:PATH"
+          if ((Get-Command link.exe -CommandType Application).Source -ne $link) {
+            throw "Wrong linker selected: $((Get-Command link.exe).Source), expected $link"
+          }
+          Write-Output "GIT809_MSVC_LINKER=$link"
           git clone --quiet --no-checkout https://github.com/microsoft/Detours.git "$env:RUNNER_TEMP\detours"
           if ($LASTEXITCODE -ne 0) { throw 'Detours checkout failed' }
           git -C "$env:RUNNER_TEMP\detours" checkout --detach e4bfd6b03e50de46b47abfbd1e46b384f0c5f833
