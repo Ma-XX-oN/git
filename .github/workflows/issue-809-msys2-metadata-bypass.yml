@@ -31,8 +31,8 @@ jobs:
           pacman -S --needed --noconfirm base-devel msys2-devel python mingw-w64-cross-mingw32-gcc
           # Use the signed GCC package pair contemporary with the pinned
           # September 2026 runtime recipe; do not modify compiler diagnostics.
-          pacman -U --noconfirm \\
-            https://repo.msys2.org/msys/x86_64/gcc-libs-15.3.0-1-x86_64.pkg.tar.zst \\
+          pacman -U --noconfirm \
+            https://repo.msys2.org/msys/x86_64/gcc-libs-15.3.0-1-x86_64.pkg.tar.zst \
             https://repo.msys2.org/msys/x86_64/gcc-15.3.0-1-x86_64.pkg.tar.zst
           test "$(pacman -Q gcc)" = "gcc 15.3.0-1"
           test "$(pacman -Q gcc-libs)" = "gcc-libs 15.3.0-1"
