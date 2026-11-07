@@ -1,0 +1,42 @@
+name: Git issue 1 Windows --preinit functional and performance acceptance
+on:
+  push:
+    branches: [issue-1-preinit-windows]
+    paths:
+      - compat/mingw.c
+      - git.c
+      - experiments/issue-809/preinit_windows_pool.py
+      - experiments/issue-809/git-preinit.sh
+      - experiments/issue-809/preinit_windows_benchmark.py
+      - .github/workflows/issue-1-preinit-windows.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-preinit:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Build public --preinit and exercise native worker
+        shell: bash
+        run: |
+          . /etc/profile
+          PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
+          export GIT809_MANAGER_PYTHON="$(cygpath -w "$PYTHON_EXE")"
+          bash -n experiments/issue-809/git-preinit.sh
+          "$PYTHON_EXE" -m py_compile experiments/issue-809/preinit_windows_pool.py experiments/issue-809/preinit_windows_benchmark.py
+          "$PYTHON_EXE" experiments/issue-809/preinit_windows_benchmark.py
+      - name: Save exact results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: preinit-windows-${{ github.sha }}
+          path: git809-bash-pipe-results/three-os-windows.json
+          if-no-files-found: warn
