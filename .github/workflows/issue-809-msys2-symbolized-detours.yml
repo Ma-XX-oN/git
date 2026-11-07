@@ -231,12 +231,13 @@ jobs:
           $symbolPosix = (Get-Content experiments/issue-809/debug-runtime-symbols-path.txt -Raw).Trim()
           $dbg = (& "$sdk\cygpath.exe" -w $symbolPosix).Trim()
           $addr = Join-Path $sdk 'addr2line.exe'
-          foreach ($item in @($dll,$dbg,$addr)) {
+          $objdump = Join-Path $sdk 'objdump.exe'
+          foreach ($item in @($dll,$dbg,$addr,$objdump)) {
             if (-not (Test-Path $item)) { throw "Missing required matching runtime binary/debug tooling: $item" }
           }
           Get-FileHash $dll -Algorithm SHA256
           Get-FileHash $dbg -Algorithm SHA256
-          python -u experiments/issue-809/resolve_detours_symbols.py --trace-dir "$env:RUNNER_TEMP" --dll $dll --debug-file $dbg --addr2line $addr
+          python -u experiments/issue-809/resolve_detours_symbols.py --trace-dir "$env:RUNNER_TEMP" --dll $dll --debug-file $dbg --addr2line $addr --objdump $objdump
           if ($LASTEXITCODE -ne 0) { throw 'Native source symbol resolution failed' }
       - name: Upload full filtered handle traces
         if: always()
