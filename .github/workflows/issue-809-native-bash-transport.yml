@@ -1,0 +1,61 @@
+name: Git 809 native Windows Bash transport
+on:
+  push:
+    branches: [experiment-809-win32-native-bash-transport]
+    paths:
+      - experiments/issue-809/**
+      - .github/workflows/issue-809-native-bash-transport.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-native-bash-transport:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Compile native Bash builtin and source Git worker
+        shell: bash
+        run: |
+          . /etc/profile
+          set -e
+          pacman -S --needed --noconfirm bash-devel
+          PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
+          export GIT809_MANAGER_PYTHON="$(cygpath -w "$PYTHON_EXE")"
+          bash -n experiments/issue-809/git-manager-native.sh experiments/issue-809/git-manager.sh
+          "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_real_git_worker_build.py experiments/issue-809/windows_git_ipc_pool.py
+          /usr/bin/gcc -O2 -Wall -Wextra -Werror -D_WIN32_WINNT=0x0600 \
+            -shared -I/usr/include/bash -o experiments/issue-809/git809pipe.dll \
+            experiments/issue-809/windows_bash_pipe_builtin.c \
+            -L/usr/lib -lbash -lkernel32
+          test -s experiments/issue-809/git809pipe.dll
+          "$PYTHON_EXE" -c 'import importlib.util,pathlib; p=pathlib.Path("experiments/issue-809/windows_real_git_worker_build.py"); s=importlib.util.spec_from_file_location("worker",p); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); print(m.build(pathlib.Path.cwd())[0])'
+          test -s git.exe
+          export GIT809_WORKER_GIT="$(cygpath -w "$PWD/git.exe")"
+          export GIT809_NATIVE_BUILTIN_DLL="$PWD/experiments/issue-809/git809pipe.dll"
+          bash --noprofile --norc -c '
+            set -u
+            source experiments/issue-809/git-manager-native.sh 3 || exit 51
+            expected=$( "$GIT809_WORKER_GIT" --version ) || exit 52
+            for ((i=0; i<120; i++)); do
+              first=$EPOCHREALTIME
+              actual=$(git-ipc --version) || exit 53
+              last=$EPOCHREALTIME
+              [[ "$actual" == "$expected" ]] || exit 54
+              printf "NATIVE_BASH_SAMPLE i=%s begin=%s end=%s\\n" "$i" "$first" "$last"
+            done
+            printf "NATIVE_BASH_PASS count=120 workers=3\\n"
+          '
+      - name: Preserve source and test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-native-bash-transport
+          path: experiments/issue-809/git809pipe.dll
+          if-no-files-found: warn
