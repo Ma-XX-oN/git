@@ -34,8 +34,9 @@ jobs:
           bash -n experiments/issue-809/git-preinit.sh
           "$PYTHON_EXE" -m py_compile experiments/issue-809/preinit_windows_pool.py experiments/issue-809/preinit_windows_benchmark.py
           "$PYTHON_EXE" -m py_compile experiments/issue-809/preinit_native_protocol_test.py
-          "$PYTHON_EXE" experiments/issue-809/preinit_windows_benchmark.py
+          make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git.exe
           "$PYTHON_EXE" experiments/issue-809/preinit_native_protocol_test.py
+          "$PYTHON_EXE" experiments/issue-809/preinit_windows_benchmark.py
       - name: Save exact results
         if: always()
         uses: actions/upload-artifact@v4
