@@ -40,6 +40,22 @@ You can view an HTML version of the documentation with `git help --web`
 
 OPTIONS
 -------
+--preinit::
+	On Git for Windows, enter experimental preinitialized-worker mode.
+	The process reports its native PID and waits for one command on
+	four PID-addressed named pipes. This option must be specified alone;
+	it does not run the command passed on the original command line.
+	The worker's binary protocol, security requirements and current
+	limitations are described in
+	linkgit:git[1] and `Documentation/technical/preinitialized-git-worker.adoc`.
+	On other platforms this option is not available.
++
+This is a restricted IPC feature, not a general replacement for
+ordinary Git invocation. In particular, callers must not assume
+transparent standard-input forwarding, current-directory or
+environment synchronization, interactive terminal support, or
+signal/cancellation parity.
+
 -v::
 --version::
 	Prints the Git suite version that the 'git' program came from.
