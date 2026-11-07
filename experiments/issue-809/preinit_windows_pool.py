@@ -47,6 +47,7 @@ FILE_FLAG_FIRST_PIPE_INSTANCE=0x00080000
 PIPE_TYPE_BYTE=0
 PIPE_WAIT=0
 ERROR_PIPE_CONNECTED=535
+ERROR_NO_DATA=232
 PIPE_REJECT_REMOTE_CLIENTS=0x00000008
 A=C.WinDLL("advapi32",use_last_error=True)
 
@@ -204,10 +205,13 @@ def allocation_server(owner_pid:int,pool:Pool):
   try:
     while not pool.closing.is_set():
       if not K.ConnectNamedPipe(h_probe,None):
-        if C.get_last_error()!=ERROR_PIPE_CONNECTED:
+        error=C.get_last_error()
+        # The disposable Git Bash probe may already have disconnected.
+        # ERROR_NO_DATA is valid here only, never on the data instance.
+        if error not in (ERROR_PIPE_CONNECTED,ERROR_NO_DATA):
           if pool.closing.is_set():
             return
-          raise OSError(C.get_last_error(),"ConnectNamedPipe(allocation probe)")
+          raise OSError(error,"ConnectNamedPipe(allocation probe)")
       try:
         if not K.ConnectNamedPipe(h,None):
           if C.get_last_error()!=ERROR_PIPE_CONNECTED:
