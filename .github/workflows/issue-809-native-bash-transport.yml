@@ -43,11 +43,14 @@ jobs:
             set -u
             source experiments/issue-809/git-manager-native.sh 3 || exit 51
             expected=$( "$GIT809_WORKER_GIT" --version ) || exit 52
+            sample=$(mktemp) || exit 53
+            git-ipc --version >"$sample" || exit 54
+            [[ "$(<"$sample")" == "$expected" ]] || exit 55
+            rm -f "$sample"
             for ((i=0; i<120; i++)); do
               first=$EPOCHREALTIME
-              actual=$(git-ipc --version) || exit 53
+              git-ipc --version >/dev/null || exit 56
               last=$EPOCHREALTIME
-              [[ "$actual" == "$expected" ]] || exit 54
               printf "NATIVE_BASH_SAMPLE i=%s begin=%s end=%s\\n" "$i" "$first" "$last"
             done
             printf "NATIVE_BASH_PASS count=120 workers=3\\n"
