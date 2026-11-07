@@ -158,7 +158,11 @@ jobs:
           workspace_posix=$(cygpath -u "$GITHUB_WORKSPACE")
           printf '%s\n' "$PWD/src/dest/usr/bin/msys-2.0.dll" > "$workspace_posix/experiments/issue-809/patched-runtime-path.txt"
           sha256sum src/dest/usr/bin/msys-2.0.dll
-          objcopy --only-keep-debug src/dest/usr/bin/msys-2.0.dll src/dest/usr/bin/msys-2.0.dbg
+          # Match the pinned PKGBUILD debug-split recipe: the dummy debuglink
+          # prevents the .dbg file recursively resolving its own debuglink,
+          # which produced the CRC mismatch in run 42403668208.
+          objcopy --add-gnu-debuglink=/dev/null --only-keep-debug src/dest/usr/bin/msys-2.0.dll src/dest/usr/bin/msys-2.0.dbg
+          objdump -h src/dest/usr/bin/msys-2.0.dbg | grep -E '(^|[[:space:]])\.debug_info([[:space:]]|$)'
           test -s src/dest/usr/bin/msys-2.0.dbg
           objdump --dwarf=info src/dest/usr/bin/msys-2.0.dbg > /tmp/git809-dwarf.txt
           grep -q DW_TAG_subprogram /tmp/git809-dwarf.txt
