@@ -54,6 +54,8 @@ PATCH = r"""      /*
           {
             /* reset() and suffix.has() ran above; suffix.next() is
              * already active.  Keep mount_flags and path_len intact. */
+            const unsigned saved_mount_flags = mount_flags ();
+            const size_t saved_path_len = path_len ();
             if (h || conv_hdl.handle ())
               api_fatal ("git809 test-pipe bypass reached with open metadata handle");
             fileattr (FILE_ATTRIBUTE_NORMAL);
@@ -63,10 +65,14 @@ PATCH = r"""      /*
             path_flags (0);
             ext_tacked_on (false);
             clear_content ();
-            assert (!issymlink () && !isdevice ()
-                    && error () == 0
-                    && fileattr () == FILE_ATTRIBUTE_NORMAL
-                    && !ext_tacked_on () && path_flags () == 0);
+            if (issymlink () || isdevice ()
+                || error () != 0
+                || fileattr () != FILE_ATTRIBUTE_NORMAL
+                || ext_tacked_on () || path_flags () != 0
+                || mount_flags () != saved_mount_flags
+                || path_len () != saved_path_len
+                || h || conv_hdl.handle ())
+              api_fatal ("git809 test-pipe postcondition violation");
             return 0;
           }
       }
