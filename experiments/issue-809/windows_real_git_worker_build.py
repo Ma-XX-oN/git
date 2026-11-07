@@ -127,6 +127,8 @@ struct git809_pipe_local {
   ULONG state, end;
 };
 typedef LONG (NTAPI *git809_query_fn)(HANDLE, PVOID, PVOID, ULONG, int);
+static void git809_trace_api(const char *op, const char *phase,
+                            HANDLE h, DWORD result, DWORD error, DWORD aux);
 static int git809_pipe_state(HANDLE pipe, ULONG *state)
 {
   static git809_query_fn query;
@@ -139,6 +141,8 @@ static int git809_pipe_state(HANDLE pipe, ULONG *state)
   }
   if (!query) return 0;
   status = query(pipe, &io, &local, sizeof(local), 24);
+  git809_trace_api("NtQueryInformationFile", "RETURN", pipe,
+                   (DWORD)status, local.end, local.state);
   if (status < 0 || local.end != 1) return 0;
   *state = local.state;
   return 1;
@@ -185,8 +189,14 @@ static int git809_accept_pair(HANDLE pair[2], int *probe, int *data)
   for (j = 0; j < 2000; j++) {
     ULONG state0, state1;
     if (!git809_pipe_state(pair[0], &state0) ||
-        !git809_pipe_state(pair[1], &state1))
+        !git809_pipe_state(pair[1], &state1)) {
+      git809_trace_api("pipe-state-query", "FAILED", pair[0], 0, 0, (DWORD)j);
       goto finish;
+    }
+    if (j == 0 || j == 1999) {
+      git809_trace_api("pipe-state-zero", "OBSERVED", pair[0], state0, 0, (DWORD)j);
+      git809_trace_api("pipe-state-one", "OBSERVED", pair[1], state1, 0, (DWORD)j);
+    }
     if (state0 == 4 && state1 == 3) {
       *probe = 0; *data = 1; ok = 1; break;
     }
@@ -199,6 +209,8 @@ static int git809_accept_pair(HANDLE pair[2], int *probe, int *data)
     Sleep(1);
   }
 finish:
+  git809_trace_api("accept-pair", "FINISH", pair[0], ok, (DWORD)first,
+                   *data == 0 || *data == 1 ? (DWORD)*data : 0xffffffffu);
   for (j = 0; j < 2; j++) {
     if (threads[j]) CloseHandle(threads[j]);
     if (c[j].done) CloseHandle(c[j].done);
