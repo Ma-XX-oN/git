@@ -1,7 +1,7 @@
 Preinitialized Git worker (Windows experimental)
 =============================================
 
-This document describes the Windows-only `git --preinit` process contract.
+This document describes the Windows-only `git --preload` process contract.
 It is not the ordinary Git CLI interface. The initial upstream proposal
 must separately demonstrate binary, error, timeout and security acceptance
 before this behavior can be called production-ready.
@@ -9,14 +9,14 @@ before this behavior can be called production-ready.
 Launch and ownership
 --------------------
 
-The only valid invocation is `git --preinit`, with no additional
+The only valid invocation is `git --preload`, with no additional
 options, commands or positional arguments. In particular,
-`git -C DIR --preinit`, `git --preinit status` and
-`git --preinit --workers 4` fail with exit status 129 without starting
+`git -C DIR --preload`, `git --preload status` and
+`git --preload --workers 4` fail with exit status 129 without starting
 a worker. The external manager configures the worker count and lifecycle;
-`--preinit` starts exactly one worker.
+`--preload` starts exactly one worker.
 
-`git --preinit` (no other arguments) starts a *single-use* native Git
+`git --preload` (no other arguments) starts a *single-use* native Git
 worker. It writes `READY <native-win32-pid>\n` to the original launcher
 stdout after creating four native Windows named pipes, then waits for a
 command request. A separate shell-owned manager starts several workers,
@@ -68,7 +68,7 @@ returns 255 and prints `GIT-IPC ERROR: ...` on a transport failure.
 Scope and lifecycle restrictions
 --------------------------------
 
-Ordinary `git <command>` and every non-`--preinit` invocation must stay
+Ordinary `git <command>` and every non-`--preload` invocation must stay
 unchanged on all operating systems. Only Windows enters this worker
 mode. The experimental Linux/macOS FIFOs are not part of the proposed
 Windows public switch; both continue to use ordinary Git by default.
