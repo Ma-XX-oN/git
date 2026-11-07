@@ -1,0 +1,162 @@
+name: Git 809 upstream native-pipe metadata query experiment
+on:
+  push:
+    branches: [experiment-809-upstream-handlefree-probe]
+    paths:
+      - experiments/issue-809/patch_msys2_upstream_handlefree_query.py
+      - .github/workflows/issue-809-upstream-handlefree.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  isolated-msys2-runtime:
+    runs-on: windows-latest
+    timeout-minutes: 85
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+        with:
+          flavor: full
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Build disposable SDK runtime source
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export MSYSTEM=MSYS
+          export PATH="/usr/bin:$PATH"
+          pacman -S --needed --noconfirm base-devel msys2-devel python mingw-w64-cross-mingw32-gcc
+          export PATH="/opt/bin:/usr/bin:$PATH"
+          command -v i686-w64-mingw32-gcc
+          command -v x86_64-w64-mingw32-gcc
+          command -v makepkg
+          # Use the 3.6.10-4 packaging recipe corresponding to the installed
+          # Git-for-Windows SDK runtime. Do not update its production packages.
+          mkdir -p /usr/src/MSYS2-packages
+          git -C /usr/src/MSYS2-packages init
+          git -C /usr/src/MSYS2-packages remote add origin https://github.com/msys2/MSYS2-packages.git
+          git -C /usr/src/MSYS2-packages fetch --depth=1 origin af487d629edc364cac6388e3e072b70d652236a3
+          git -C /usr/src/MSYS2-packages checkout --detach FETCH_HEAD
+          cd /usr/src/MSYS2-packages/msys2-runtime
+          # Package metadata predates the current VCS archive checksum.
+          # Independently pin the signed upstream Cygwin 3.6.10 tag; only
+          # the archive digest may be reconciled, never the patch checksums.
+          makepkg -g > /tmp/git809-source-hashes.txt
+          tag_commit=$(git --git-dir=msys2-runtime rev-parse 'refs/tags/cygwin-3.6.10^{commit}')
+          printf 'GIT809_SOURCE_TAG_COMMIT=%s\\n' "$tag_commit"
+          test "$tag_commit" = b11613e477c006b2ce0332463ed07f1118260e79
+          python3 - <<'GIT809_HASH'
+          import re
+          from pathlib import Path
+          recipe = Path("PKGBUILD")
+          original = recipe.read_text()
+          updated = Path("/tmp/git809-source-hashes.txt").read_text()
+          pattern = r"'([0-9a-f]{64}|SKIP)'"
+          old_block = original.split("sha256sums=(", 1)[1].split(")", 1)[0]
+          new_block = updated.split("sha256sums=(", 1)[1].split(")", 1)[0]
+          old_hashes = re.findall(pattern, old_block)
+          new_hashes = re.findall(pattern, new_block)
+          assert len(old_hashes) == len(new_hashes) > 40, "hash-count mismatch"
+          assert old_hashes[1:] == new_hashes[1:], "non-VCS source checksum changed"
+          assert old_hashes[0] != new_hashes[0], "unexpected unchanged VCS checksum"
+          head, tail = original.split("sha256sums=(", 1)
+          assert tail.count(old_hashes[0]) == 1, "VCS checksum not unique"
+          recipe.write_text(head + "sha256sums=(" + tail.replace(old_hashes[0], new_hashes[0], 1))
+          print(f"GIT809_VCS_DIGEST expected={old_hashes[0]} actual={new_hashes[0]}")
+          GIT809_HASH
+          # The historical source archive has a checksum mismatch; verify the
+          # extracted upstream commit instead of trusting that archive.
+          makepkg --nobuild --syncdeps --noconfirm --skipchecksums
+          test -f src/msys2-runtime/winsup/cygwin/path.cc
+          # PKGBUILD fetches the upstream Cygwin 3.6.10 tag and applies
+          # MSYS2 patches; the fork commit is NOT the source HEAD here.
+          upstream=$(git -C src/msys2-runtime rev-parse "refs/tags/cygwin-3.6.10^{commit}")
+          actual_source=$(git -C src/msys2-runtime rev-parse HEAD)
+          test "$actual_source" = "$upstream"
+          printf "GIT809_RUNTIME_UPSTREAM_SHA=%s\n" "$actual_source"
+          sha256sum /usr/bin/msys-2.0.dll
+      - name: Apply exact name-restricted source test and rebuild runtime
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export MSYSTEM=MSYS
+          export PATH="/opt/bin:/usr/bin:$PATH"
+          python3 -m py_compile experiments/issue-809/patch_msys2_upstream_handlefree_query.py
+          python3 experiments/issue-809/patch_msys2_upstream_handlefree_query.py \
+            /usr/src/MSYS2-packages/msys2-runtime/src/msys2-runtime/winsup/cygwin/path.cc
+          cd /usr/src/MSYS2-packages/msys2-runtime
+          git -C src/msys2-runtime diff -- winsup/cygwin/path.cc
+          # Historical source with newer GCC: disable only this diagnosed
+          # warning-as-error; do not change dcrt0.cc or disable other errors.
+          python3 - <<'GIT809_COMPILER'
+          from pathlib import Path
+          p = Path("PKGBUILD")
+          source = p.read_text()
+          original = '  CXXFLAGS="$OPTIM -pipe -ggdb"'
+          assert source.count(original) == 1, "historical compiler contract drift"
+          # GCC 16 emits additional C++20 compatibility warnings in the
+          # historical source. Keep them visible, but do not treat
+          # pre-existing warnings as compiler failures in this experiment.
+          p.write_text(source.replace(original, '  CXXFLAGS="$OPTIM -pipe -ggdb -Wno-error"'))
+          GIT809_COMPILER
+          makepkg --noextract --noprepare --syncdeps --noconfirm --skipchecksums
+          test -s src/dest/usr/bin/msys-2.0.dll
+          workspace_posix=$(cygpath -u "$GITHUB_WORKSPACE")
+          printf '%s\n' "$PWD/src/dest/usr/bin/msys-2.0.dll" > "$workspace_posix/experiments/issue-809/patched-runtime-path.txt"
+          sha256sum src/dest/usr/bin/msys-2.0.dll
+      - name: Run existing upstream pathname regression tests against newly built runtime
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export MSYSTEM=MSYS
+          export PATH="/opt/bin:/usr/bin:$PATH"
+          root=/usr/src/MSYS2-packages/msys2-runtime/src
+          suite=$(find "$root" -path '*/winsup/testsuite/Makefile' -print -quit)
+          test -n "$suite"
+          cd "$(dirname "$suite")"
+          make check TESTS="winsup.api/ltp/open02 winsup.api/ltp/open03 winsup.api/ltp/stat01 winsup.api/ltp/stat02 winsup.api/ltp/stat03 winsup.api/ltp/lstat02 winsup.api/ltp/readlink01 winsup.api/ltp/readlink02 winsup.api/ltp/symlink01 winsup.api/ltp/symlink02"
+      - name: Compare pristine Git Bash and isolated patched runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sdk = 'D:\git-sdk-64-full\usr\bin'
+          if (-not (Test-Path "$sdk\bash.exe")) { throw 'SDK Bash missing' }
+          $location = Get-Content experiments/issue-809/patched-runtime-path.txt -Raw
+          $location = $location.Trim()
+          $win = (& "$sdk\cygpath.exe" -w "$location").Trim()
+          if (-not (Test-Path $win)) { throw "Patched DLL not found: $win" }
+          # Keep the original SDK runtime entirely untouched. Windows searches
+          # the executable's directory first for its imported runtime DLL.
+          $isolated = Join-Path $env:RUNNER_TEMP 'git809-patched-bash'
+          New-Item -ItemType Directory -Path $isolated -Force | Out-Null
+          Copy-Item "$sdk\bash.exe" "$isolated\bash.exe" -Force
+          # Bash imports additional MSYS shared libraries. Keep the full
+          # dependency family beside it; replace only this isolated runtime.
+          Copy-Item "$sdk\msys-*.dll" $isolated -Force
+          Copy-Item $win "$isolated\msys-2.0.dll" -Force
+          $bash = "$isolated\bash.exe"
+          if ((Get-FileHash "$sdk\msys-2.0.dll" -Algorithm SHA256).Hash -eq
+              (Get-FileHash "$isolated\msys-2.0.dll" -Algorithm SHA256).Hash) {
+            throw 'Patched runtime identical to stock runtime'
+          }
+          foreach ($direction in @('read','write')) {
+            Write-Output "PIPE_QUERY_CASE mode=original direction=$direction instances=1"
+            python -u experiments/issue-809/windows_pipe_open_trace.py --client bash --instances 1 --direction $direction --bash "$sdk\bash.exe" --expect failure
+            if ($LASTEXITCODE -ne 0) { throw "Original control failed: $direction" }
+          }
+          & $bash --noprofile --norc -c 'printf "PATCHED_BASH_START_OK\n"'
+          if ($LASTEXITCODE -ne 0) { throw 'Isolated patched Bash failed to start' }
+          # No application-specific names: all valid native pipe names
+          # must have the same no-throwaway-connection behavior.
+          foreach ($direction in @('read','write')) {
+            foreach ($nameKind in @('matched','unmatched','malformed')) {
+              Write-Output "PIPE_QUERY_CASE mode=patched direction=$direction instances=1 namespace=$nameKind"
+              python -u experiments/issue-809/windows_pipe_open_trace.py --client bash --instances 1 --direction $direction --bash $bash --expect success --name-kind $nameKind
+              if ($LASTEXITCODE -ne 0) { throw "Single instance native-pipe query failed: $direction $nameKind" }
+            }
+          }
+          & $bash --noprofile --norc -c 'f=$(mktemp) || exit 1; printf "normal_file_ok\n" > "$f" || exit 2; IFS= read -r payload < "$f" || exit 3; test "$payload" = normal_file_ok || exit 4; rm -f "$f"'
+          if ($LASTEXITCODE -ne 0) { throw "Ordinary file redirection regression" }
