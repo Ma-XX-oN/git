@@ -125,6 +125,7 @@ git-ipc() {
   local pout="${stem}-stdout"
   local perr="${stem}-stderr"
   local pexit="${stem}-exit-code"
+  local pcontrol="${stem}-param-env-cwd"
 
   # Open in the same order that the native worker accepts connections.
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE open stdout pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
@@ -134,12 +135,13 @@ git-ipc() {
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE open exit pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
   exec 6<>"$pexit" || { exec 4<&- 5<&-; printf 'GIT-IPC ERROR: exit-status pipe open failed\n' >&2; return 255; }
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE open stdin pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
-  exec 7<>"$pstdin" || { exec 4<&- 5<&- 6<&-; printf 'GIT-IPC ERROR: stdin pipe open failed\n' >&2; return 255; }
+  exec 8<>"$pstdin" || { exec 4<&- 5<&- 6<&-; printf 'GIT-IPC ERROR: stdin pipe open failed\n' >&2; return 255; }
+  exec 7<>"$pcontrol" || { exec 4<&- 5<&- 6<&- 8>&-; printf 'GIT-IPC ERROR: control pipe open failed\n' >&2; return 255; }
 
   # Each native server consumes this byte to identify the data connection.
   # Duplex is used for this handshake only; command data is one-way.
-  printf T >&4 && printf T >&5 && printf T >&6 && printf T >&7 || {
-    exec 4<&- 5<&- 6<&- 7>&-
+  printf T >&4 && printf T >&5 && printf T >&6 && printf T >&8 && printf T >&7 || {
+    exec 4<&- 5<&- 6<&- 7>&- 8>&-
     printf 'GIT-IPC ERROR: channel marker write failed\n' >&2
     return 255
   }
@@ -152,11 +154,11 @@ git-ipc() {
     printf '%s\x00' "$arg" >&7 || { printf 'GIT-IPC ERROR: worker request write failed\n' >&2; return 255; }
   done
   _git809_write_context windows >&7 || {
-    exec 7>&-
+    exec 7>&- 8>&-
     printf 'GIT-IPC ERROR: context frame write failed\n' >&2
     return 255
   }
-  exec 7>&-
+  exec 7>&- 8>&-
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE sent stdin pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
 
   # Experimental second timing mode: stdout accumulates all available
