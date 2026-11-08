@@ -1,0 +1,76 @@
+name: RWF 809 native Windows direct export stream validation
+on:
+  push:
+    branches: [investigation-809-direct-stream-export]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-native-stream:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Compile native Git named-pipe worker and decoder
+        shell: bash
+        run: |
+          . /etc/profile
+          make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git.exe
+      - name: Check environment roundtrip, cwd, isolation, and IPC latency
+        shell: bash
+        run: |
+          . /etc/profile
+          set -uo pipefail
+          PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
+          export GIT809_MANAGER_PYTHON="$(cygpath -w "$PYTHON_EXE")"
+          export GIT809_WORKER_GIT="$(cygpath -w "$PWD/git.exe")"
+          export GIT809_DRAIN_MODE=chunk100
+          mkdir -p git809-stream-results
+          bash -n experiments/issue-809/git-ipc-request.sh || exit 21
+          source experiments/issue-809/git-manager.sh 3 || exit 22
+          [[ "$(git-ipc --version)" == "$("$GIT809_WORKER_GIT" --version)" ]] || exit 23
+          cd experiments/issue-809
+          [[ "$(git-ipc rev-parse --show-prefix)" == "experiments/issue-809/" ]] || exit 24
+          cd ../..
+          for v in 'simple' 'sp ace' 'slash\back' 'quote"value' '$(echo DO-NOT-EXECUTE)' $'line1\nline2' $'tab\tvalue' $'carriage\rreturn' $'unicode-\u00e9-\u2603' $'single'\''quote' $'tick\x60value' ""; do
+            actual="$(GIT_EDITOR="$v" git-ipc var GIT_EDITOR)" || { printf 'failed %q\n' "$v" >&2; exit 31; }
+            [[ "$actual" == "$v" ]] || { printf 'mismatch expected=%q actual=%q\n' "$v" "$actual" >&2; exit 32; }
+          done
+          [[ ! -v GIT_EDITOR ]] || exit 33
+          printf 'GIT809_STREAM_ROUNDTRIP_PASS\n'
+          printf 'sample,begin_direct,end_direct,begin_ipc,end_ipc\n' >git809-stream-results/pairs.csv
+          for ((i=0;i<120;i++)); do
+            if ((i % 2 == 0)); then
+              a=$EPOCHREALTIME; "$GIT809_WORKER_GIT" --version >/dev/null || exit 41; b=$EPOCHREALTIME
+              c=$EPOCHREALTIME; git-ipc --version >/dev/null || exit 42; d=$EPOCHREALTIME
+            else
+              c=$EPOCHREALTIME; git-ipc --version >/dev/null || exit 43; d=$EPOCHREALTIME
+              a=$EPOCHREALTIME; "$GIT809_WORKER_GIT" --version >/dev/null || exit 44; b=$EPOCHREALTIME
+            fi
+            printf '%s,%s,%s,%s,%s\n' "$i" "$a" "$b" "$c" "$d" >>git809-stream-results/pairs.csv
+          done
+          "$PYTHON_EXE" - <<'PY'
+          import csv,math,statistics,os
+          from decimal import Decimal
+          records=list(csv.DictReader(open('git809-stream-results/pairs.csv',newline='',encoding='utf-8')))
+          assert len(records)==120
+          for name,begin,end in [('direct','begin_direct','end_direct'),('stream_ipc','begin_ipc','end_ipc')]:
+            v=sorted(float((Decimal(x[end])-Decimal(x[begin]))*1000) for x in records)
+            assert v[0]>0
+            print('GIT809_STREAM_BENCH',name,'median_ms',round(statistics.median(v),4),
+                  'p95_ms',round(v[math.ceil(.95*len(v))-1],4),flush=True)
+          print('GIT809_STREAM_SHA',os.environ['GITHUB_SHA'])
+          PY
+      - name: Preserve timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-native-direct-export-windows
+          path: git809-stream-results/
+          if-no-files-found: warn
