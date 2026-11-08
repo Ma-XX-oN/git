@@ -3,6 +3,8 @@
 #include "common-init.h"
 #include "preload-context.h"
 #include <fcntl.h>
+#include <pthread.h>
+#include <signal.h>
 #include <setjmp.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -24,6 +26,52 @@ NORETURN void git_preload_worker_exit(int status)
   exit(status);
 }
 
+/*
+ * The allocation manager relinquishes command ownership to git-ipc. Check
+ * the originating Bash PID independently every 10 seconds. Do not use
+ * getppid(): the worker's immediate parent is the allocation manager.
+ */
+static void *git_preload_watch_owner(void *context)
+{
+  pid_t owner_pid = (pid_t)(intptr_t)context;
+
+  for (;;) {
+    unsigned int left = 10;
+
+    while (left)
+      left = sleep(left);
+    if (kill(owner_pid, 0) < 0 && errno == ESRCH)
+      _exit(137);
+  }
+}
+
+static int git_preload_start_owner_watch(void)
+{
+  const char *raw = getenv("GIT809_PRELOAD_OWNER_PID");
+  unsigned long value = 0;
+  pthread_t watcher;
+  size_t i;
+
+  if (!raw || !*raw)
+    return -1;
+  for (i = 0; raw[i]; i++) {
+    unsigned char ch = raw[i];
+
+    if (ch < '0' || ch > '9' ||
+        value > (LONG_MAX - (ch - '0')) / 10)
+      return -1;
+    value = value * 10 + ch - '0';
+  }
+  if (!value || value > INT_MAX ||
+      (kill((pid_t)value, 0) < 0 && errno == ESRCH))
+    return -1;
+  if (pthread_create(&watcher, NULL, git_preload_watch_owner,
+                     (void *)(intptr_t)(pid_t)value))
+    return -1;
+  pthread_detach(watcher);
+  return 0;
+}
+
 int git_preload_unix_worker(const char *directory)
 {
   static const char *const suffixes[4] = {
@@ -39,6 +87,8 @@ int git_preload_unix_worker(const char *directory)
   size_t used = 0;
   ssize_t n;
 
+  if (git_preload_start_owner_watch())
+    return 136;
   if (!directory || strlen(directory) > 960)
     return 121;
   frame = malloc(frame_capacity);
