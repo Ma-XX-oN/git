@@ -6,6 +6,11 @@ on:
       - compat/mingw.c
       - git.c
       - t/helper/git809-preload-smoke.py
+      - preload-context.c
+      - preload-context.h
+      - experiments/issue-809/git-ipc-request.sh
+      - experiments/issue-809/git-manager.sh
+      - experiments/issue-809/windows_git_ipc_pool.py
       - .github/workflows/issue-809-preload-smoke.yml
   workflow_dispatch:
 permissions:
@@ -47,3 +52,10 @@ jobs:
           result="$(git-ipc --version)"
           [[ "$result" == git\ version\ * ]] || { printf 'unexpected ipc output: %s\n' "$result" >&2; exit 1; }
           printf '%s\n' "$result"
+          cd experiments/issue-809
+          prefix="$(git-ipc rev-parse --show-prefix)"
+          [[ "$prefix" == "experiments/issue-809/" ]] || { printf 'cwd not forwarded: %s\n' "$prefix" >&2; exit 1; }
+          editor="$(GIT_EDITOR=git809-inline git-ipc var GIT_EDITOR)"
+          [[ "$editor" == git809-inline ]] || { printf 'environment not forwarded: %s\n' "$editor" >&2; exit 1; }
+          [[ ! ${GIT_EDITOR+x} ]] || { printf 'parent environment was mutated\n' >&2; exit 1; }
+          printf 'PASS cwd, inline environment, and parent isolation\n'
