@@ -86,9 +86,9 @@ jobs:
           # without cross-connecting their per-request ID channels.
           expected_version="$("$GIT809_WORKER_GIT" --version)"
           for ((wave=0;wave<12;wave++)); do
-            git-ipc --version >git809-stream-results/concurrent-a.out &
+            { git-ipc --version >git809-stream-results/concurrent-a.out || exit $?; } &
             client_a=$!
-            git-ipc --version >git809-stream-results/concurrent-b.out &
+            { git-ipc --version >git809-stream-results/concurrent-b.out || exit $?; } &
             client_b=$!
             wait "$client_a" || exit 36
             wait "$client_b" || exit 37
