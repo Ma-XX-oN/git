@@ -4,6 +4,7 @@ on:
     branches: [experiment-809-preload-stress-1to5]
     paths:
       - experiments/issue-809/pool_size_ab_benchmark.py
+      - experiments/issue-809/git-ipc-request.sh
       - experiments/issue-809/windows_ipc_timeout_dumps.py
       - .github/workflows/issue-809-native-pool-p95.yml
   workflow_dispatch:
@@ -32,6 +33,26 @@ jobs:
           . /etc/profile
           PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
           "$PYTHON_EXE" t/helper/git809-preload-smoke.py "$(cygpath -w "$PWD/git.exe")"
+      - name: Verify native cwd forwarding without an external path converter
+        shell: bash
+        run: |
+          . /etc/profile
+          set -euo pipefail
+          PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
+          export GIT809_MANAGER_PYTHON="$(cygpath -w "$PYTHON_EXE")"
+          export GIT809_WORKER_GIT="$(cygpath -w "$PWD/git.exe")"
+          bash -n experiments/issue-809/git-ipc-request.sh
+          source experiments/issue-809/git-manager.sh 2
+          cd experiments/issue-809
+          [[ "$(git-ipc rev-parse --show-prefix)" == "experiments/issue-809/" ]] || {
+            echo "native cwd forwarding mismatch" >&2
+            exit 1
+          }
+          [[ "$(GIT_EDITOR=git809-inline git-ipc var GIT_EDITOR)" == git809-inline ]] || {
+            echo "inline environment forwarding mismatch" >&2
+            exit 1
+          }
+          echo "GIT809_CWD_AND_ENV_PASS"
       - name: Execute matched Windows P95 120-pair 1-2-3-4-5-4-3-2-1 sweep
         shell: bash
         run: |
