@@ -154,7 +154,7 @@ class Pool:
       if p.stdout:
         p.stdout.close()
 
-def select_transport(address):
+def select_transport(address, request_id=None):
   """Two Windows instances, one T-qualified unidirectional reply channel."""
   handles=[]
   threads=[]
@@ -195,6 +195,11 @@ def select_transport(address):
           n.value!=1 or marker.raw!=b"T"):
           raise RuntimeError("bad reply transport marker")
         selected=handles[i]
+        if request_id is not None:
+          # Instance number is diagnostic only; request-id names the reply.
+          print(f"REPLY_T_SELECTED request_id={request_id} instance={i} "
+                f"handle={selected} connected={int(connected[0])},{int(connected[1])}",
+                flush=True)
         handles[i]=None
         break
       time.sleep(.001)
@@ -230,6 +235,8 @@ def allocation_server(owner_pid:int,pool:Pool):
   pending=queue.Queue()
   first=True
   backlog=min(64,max(4,2*pool.target))
+  observed_requests=set()
+  identity_lock=threading.Lock()
   print(f"ALLOCATOR_START {address} backlog={backlog}",flush=True)
 
   def accept(h):
@@ -288,12 +295,20 @@ def allocation_server(owner_pid:int,pool:Pool):
       client_pid,sequence=(int(p) for p in parts)
       if not 1<=client_pid<=0xffffffff or not 1<=sequence<=0xffffffff:
         raise ValueError("reply identity out of range")
+      with identity_lock:
+        if raw_id in observed_requests:
+          raise ValueError("duplicate GET request identity")
+        observed_requests.add(raw_id)
+      print(f"GET_ACCEPT request_id={raw_id.decode('ascii')} "
+            f"digit={sequence%10} instance_handle={h}",flush=True)
       # A unique reply pipe is required per request, not just per client.
       reply=(r"\\.\pipe\git809-allocate-reply-"+str(owner_pid)+
              "-"+str(client_pid)+"-"+str(sequence))
-      response=select_transport(reply)
+      response=select_transport(reply,raw_id.decode("ascii"))
       try:
         answer=pool.alloc().encode("ascii")
+        print(f"ALLOC_REPLY request_id={raw_id.decode('ascii')} "
+              f"worker_pid={answer.decode('ascii').strip()}",flush=True)
         n=W.DWORD()
         if not K.WriteFile(response,answer,len(answer),C.byref(n),None):
           raise OSError(C.get_last_error(),"WriteFile(reply)")
