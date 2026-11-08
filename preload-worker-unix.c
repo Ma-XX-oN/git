@@ -3,6 +3,8 @@
 #include "common-init.h"
 #include "preload-context.h"
 #include <fcntl.h>
+#include <limits.h>
+#include <stdint.h>
 #include <pthread.h>
 #include <signal.h>
 #include <setjmp.h>
