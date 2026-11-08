@@ -80,18 +80,35 @@ git-ipc() {
     printf 'GIT-IPC ERROR: invalid invocation\n' >&2; return 255
   fi
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE start bashpid=%s\n' "$BASHPID" >>"$_GIT809_MANAGER_LOG"
-  local allocator; printf -v allocator '%s%s' '\\.\pipe\git809-allocate-' "$_GIT809_OWNER_WINPID"
+  # GET and worker ID are separate one-way logical channels.
+  # BASHPID correlates the reply to this client, including concurrent Bash
+  # subshells. Duplex handles carry only the Windows T identification byte
+  # in the reverse direction of each application's data flow.
+  local allocator reply client_pid=$BASHPID
+  printf -v allocator '%s%s' '\\\\.\\pipe\\git809-allocate-req-' "$_GIT809_OWNER_WINPID"
+  printf -v reply '%s%s-%s' '\\\\.\\pipe\\git809-allocate-reply-' "$_GIT809_OWNER_WINPID" "$client_pid"
   local pid i count header arg status line
-  for ((i=0;i<200;i++)); do
+  for ((i=0;i<400;i++)); do
     if { exec 3<>"$allocator"; } 2>/dev/null; then break; fi
     sleep .005
   done
-  if (( i == 200 )); then
-    printf 'Git manager allocation pipe unavailable\n' >&2
-    printf 'GIT-IPC ERROR: allocator pipe unavailable\n' >&2; return 255
+  if (( i == 400 )); then
+    printf 'GIT-IPC ERROR: allocation request pipe unavailable\\n' >&2; return 255
   fi
-  printf 'GET\n' >&3 || { exec 3>&-; printf 'GIT-IPC ERROR: allocator request write failed\n' >&2; return 255; }
-  IFS= read -r pid <&3 || { exec 3>&-; printf 'GIT-IPC ERROR: allocator response read failed\n' >&2; return 255; }
+  if ! printf 'TGET %s\\n' "$client_pid" >&3; then
+    exec 3>&-
+    printf 'GIT-IPC ERROR: allocation request write failed\\n' >&2; return 255
+  fi
+  exec 3>&-
+  for ((i=0;i<400;i++)); do
+    if { exec 3<>"$reply"; } 2>/dev/null; then break; fi
+    sleep .005
+  done
+  if (( i == 400 )); then
+    printf 'GIT-IPC ERROR: allocation reply pipe unavailable\\n' >&2; return 255
+  fi
+  printf T >&3 || { exec 3>&-; printf 'GIT-IPC ERROR: reply marker write failed\\n' >&2; return 255; }
+  IFS= read -r pid <&3 || { exec 3>&-; printf 'GIT-IPC ERROR: allocation response failed\\n' >&2; return 255; }
   exec 3>&-
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE allocated pid=%s bashpid=%s\n' "$pid" "$BASHPID" >>"$_GIT809_MANAGER_LOG"
   if [[ $pid == WAIT ]]; then
