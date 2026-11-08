@@ -6,6 +6,7 @@
 #include "alloc.h"
 #include "config.h"
 #include "common-init.h"
+#include "preload-context.h"
 #include "dir.h"
 #include "environment.h"
 #include "repository.h"
@@ -3797,7 +3798,9 @@ static int git_preinit_worker(void)
   char names[4][96];
   const char *suffixes[4] = {"stdin", "stdout", "stderr", "exit-code"};
   HANDLE pipes[4][2];
-  char frame[4096], result[64];
+  char *frame = NULL;
+  char result[64];
+  const DWORD frame_capacity = 131072;
   DWORD used = 0, n;
   int i, j, count, pos, rc = 120, written, infd, outfd, errfd;
   const char *args[33] = {0};
@@ -3812,6 +3815,11 @@ static int git_preinit_worker(void)
   for (i = 0; i < 4; i++)
     for (j = 0; j < 2; j++)
       pipes[i][j] = INVALID_HANDLE_VALUE;
+  frame = malloc(frame_capacity);
+  if (!frame) {
+    rc = 135;
+    goto cleanup;
+  }
 
   /*
    * A pipe's default security descriptor gives Everyone and Anonymous
@@ -3881,8 +3889,8 @@ static int git_preinit_worker(void)
       pipes[channel][0] = INVALID_HANDLE_VALUE;
     }
   }
-  while (used < sizeof(frame)) {
-    if (!ReadFile(pipes[0][1], frame + used, sizeof(frame) - used, &n, NULL)) {
+  while (used < frame_capacity) {
+    if (!ReadFile(pipes[0][1], frame + used, frame_capacity - used, &n, NULL)) {
       if (GetLastError() != ERROR_BROKEN_PIPE) {
         rc = 123;
         goto cleanup;
@@ -3893,7 +3901,7 @@ static int git_preinit_worker(void)
       break;
     used += n;
   }
-  if (used < 4) {
+  if (used < 4 || used == frame_capacity) {
     rc = 124;
     goto cleanup;
   }
@@ -3921,7 +3929,8 @@ static int git_preinit_worker(void)
     args[i] = frame + start;
     pos++;
   }
-  if (pos != used || strcmp(args[0], "git")) {
+  if (strcmp(args[0], "git") ||
+      preload_apply_context(frame + pos, used - pos)) {
     rc = 128;
     goto cleanup;
   }
@@ -4010,6 +4019,7 @@ cleanup:
     for (j = 0; j < 2; j++)
       if (pipes[i][j] != INVALID_HANDLE_VALUE)
         CloseHandle(pipes[i][j]);
+  free(frame);
   free(acl);
   free(token_user);
   if (token)
