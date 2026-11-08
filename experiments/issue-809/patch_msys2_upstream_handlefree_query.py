@@ -18,7 +18,17 @@ OPEN_ANCHOR = (
 )
 FS_ANCHOR = "if (fs.inited ()|| fs.update (get_nt_native_path (), NULL))"
 
-HELPER = r"""/* Native pipe objects have no drive volume to interrogate. This tests
+HELPER = r"""/* Diagnostic uses the native stderr handle, without file path resolution. */
+static void
+git809_path_event (const char *event)
+{
+  HANDLE err = GetStdHandle (STD_ERROR_HANDLE);
+  DWORD written;
+  if (err && err != INVALID_HANDLE_VALUE)
+    WriteFile (err, event, (DWORD) strlen (event), &written, NULL);
+}
+
+/* Native pipe objects have no drive volume to interrogate. This tests
    the NT object namespace, never a filename or application prefix. */
 static bool
 is_native_named_pipe_path (const UNICODE_STRING *path)
@@ -63,8 +73,16 @@ PROBE = r"""      /*
        */
       if (is_native_named_pipe_path (&upath))
         {
+          git809_path_event ("GIT809_PATH QUERY_ENTER\n");
           FILE_BASIC_INFORMATION basic;
           NTSTATUS query_status = NtQueryAttributesFile (&attr, &basic);
+          if (!NT_SUCCESS (query_status))
+            git809_path_event ("GIT809_PATH QUERY_FAILED\n");
+          else if (basic.FileAttributes & (FILE_ATTRIBUTE_DIRECTORY |
+                    FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_SYSTEM))
+            git809_path_event ("GIT809_PATH QUERY_REJECT_ATTRIBUTES\n");
+          else
+            git809_path_event ("GIT809_PATH QUERY_ACCEPTED\n");
           if (NT_SUCCESS (query_status)
               && !(basic.FileAttributes
                    & (FILE_ATTRIBUTE_DIRECTORY
@@ -73,15 +91,18 @@ PROBE = r"""      /*
             {
               fileattr (basic.FileAttributes);
               ext_tacked_on (!!*ext_here);
+              git809_path_event ("GIT809_PATH BYPASS_GOTO\\n");
               debug_printf ("named pipe metadata without open: %S", &upath);
               goto file_not_symlink;
             }
+          git809_path_event ("GIT809_PATH QUERY_FALLTHROUGH\\n");
         }
 """
 
 FS_REPLACEMENT = r"""if (fs.inited ()
-	      || (!is_native_named_pipe_path (get_nt_native_path ())
-		  && fs.update (get_nt_native_path (), NULL)))"""
+\t      || (is_native_named_pipe_path (get_nt_native_path ())
+\t\t  ? (git809_path_event ("GIT809_PATH FS_UPDATE_SKIPPED\\n"), false)
+\t\t  : fs.update (get_nt_native_path (), NULL)))"""
 
 def main() -> None:
   p = argparse.ArgumentParser()
@@ -101,8 +122,17 @@ def main() -> None:
     < function.index(OPEN_ANCHOR)
   ):
     raise ValueError("expected metadata state initialization changed")
+  label = "file_not_symlink:"
+  assert source.count(label) == 1, "expected exact bypass target label"
   result = source.replace(CLASS_ANCHOR, HELPER + CLASS_ANCHOR, 1)
-  result = result.replace(OPEN_ANCHOR, PROBE + OPEN_ANCHOR, 1)
+  metadata_event = (
+    '      if (is_native_named_pipe_path (&upath))\n'
+    '        git809_path_event ("GIT809_PATH METADATA_OPEN_REACHED\\n");\n'
+  )
+  result = result.replace(OPEN_ANCHOR, PROBE + metadata_event + OPEN_ANCHOR, 1)
+  result = result.replace(label, label +
+    '\n      if (is_native_named_pipe_path (&upath))\n'
+    '        git809_path_event ("GIT809_PATH FILE_NOT_SYMLINK\\n");', 1)
   result = result.replace(FS_ANCHOR, FS_REPLACEMENT, 1)
   args.path.write_text(result, encoding="utf-8")
   print("GIT809_UPSTREAM_SPECULATIVE_QUERY_PATCH", args.path)
