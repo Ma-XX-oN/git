@@ -68,8 +68,13 @@ static int decode_export_value(const char *p, size_t len, char **value) {
              (d = export_hex(p[i + 1])) >= 0) {
         cp = cp * 16 + d; i++; count++;
       }
-      if (!count || (limit > 2 && count != limit) ||
-          export_cp(out, &n, cp)) goto fail;
+      if (!count || (limit > 2 && count != limit)) goto fail;
+      if (limit == 2) {
+        /* Bash hex escapes describe raw bytes, not Unicode code points. */
+        if (!cp) goto fail;
+        out[n++] = (char)cp;
+      } else if (export_cp(out, &n, cp))
+        goto fail;
       continue;
     default:
       if (ch >= '0' && ch <= '7') {
