@@ -1075,6 +1075,8 @@ int cmd_main(int, const char **);
  * optionally emit a message before calling the real exit().
  */
 int common_exit(const char *file, int line, int code);
+/* Single-use --preload workers capture Git's normal exit paths. */
+void set_preload_exit_callback(void (*callback)(int));
 #define exit(code) exit(common_exit(__FILE__, __LINE__, (code)))
 
 /*
