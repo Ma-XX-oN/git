@@ -3793,6 +3793,8 @@ struct git809_connect_state {
   HANDLE thread;
   volatile LONG complete;
   DWORD error;
+  char marker;
+  int marked;
 };
 
 static DWORD WINAPI git809_connect_thread(LPVOID context)
@@ -3801,6 +3803,18 @@ static DWORD WINAPI git809_connect_thread(LPVOID context)
   BOOL ok = ConnectNamedPipe(state->pipe, NULL);
   DWORD error = ok ? ERROR_SUCCESS : GetLastError();
 
+  if (error == ERROR_SUCCESS || error == ERROR_PIPE_CONNECTED) {
+    DWORD received = 0;
+    if (ReadFile(state->pipe, &state->marker, 1, &received, NULL) &&
+        received == 1) {
+      state->marked = 1;
+      error = ERROR_SUCCESS;
+    } else {
+      error = GetLastError();
+      if (error == ERROR_SUCCESS)
+        error = ERROR_BROKEN_PIPE;
+    }
+  }
   state->error = error;
   InterlockedExchange(&state->complete, 1);
   return 0;
@@ -3851,9 +3865,9 @@ static int select_transport(HANDLE pair[2], DWORD timeout_ms,
                             char *observed)
 {
   struct git809_connect_state state[2] = {0};
-  DWORD start = GetTickCount(), available, n;
+  DWORD start = GetTickCount();
   HANDLE chosen = INVALID_HANDLE_VALUE;
-  int i, marked[2], result = TRANSPORT_TIMEOUT;
+  int i, processed[2] = {0}, result = TRANSPORT_TIMEOUT;
 
   if (!transport || !observed || !timeout_ms)
     return TRANSPORT_WIN32_ERROR;
@@ -3868,45 +3882,58 @@ static int select_transport(HANDLE pair[2], DWORD timeout_ms,
       goto done;
     }
   }
-  while (GetTickCount() - start < timeout_ms) {
+  /*
+   * Each connection thread blocks until it reads a marker or its probe
+   * disconnects. Wait for completion instead of polling PeekNamedPipe
+   * with Sleep(1), whose scheduler delay accumulates across channels.
+   */
+  for (;;) {
+    HANDLE pending[2];
+    int indices[2], count = 0, selected = -1;
+    DWORD elapsed = GetTickCount() - start;
+    DWORD wait_result;
+
     for (i = 0; i < 2; i++) {
-      marked[i] = 0;
-      if (!InterlockedCompareExchange(&state[i].complete, 0, 0))
-        continue;
-      if (state[i].error != ERROR_SUCCESS &&
-          state[i].error != ERROR_PIPE_CONNECTED)
-        continue;
-      available = 0;
-      if (PeekNamedPipe(pair[i], NULL, 0, NULL, &available, NULL) &&
-          available)
-        marked[i] = 1;
+      if (!processed[i]) {
+        pending[count] = state[i].thread;
+        indices[count++] = i;
+      }
     }
-    if (marked[0] && marked[1]) {
+    if (!count || elapsed >= timeout_ms)
+      break;
+    wait_result = WaitForMultipleObjects(count, pending, FALSE,
+                                         timeout_ms - elapsed);
+    if (wait_result == WAIT_TIMEOUT)
+      break;
+    if (wait_result < WAIT_OBJECT_0 ||
+        wait_result >= WAIT_OBJECT_0 + count) {
+      result = TRANSPORT_WIN32_ERROR;
+      goto done;
+    }
+    i = indices[wait_result - WAIT_OBJECT_0];
+    processed[i] = 1;
+    if (state[0].marked && state[1].marked) {
       result = TRANSPORT_DUPLICATE_MARKER;
       goto done;
     }
-    if (marked[0] || marked[1]) {
-      i = marked[1] ? 1 : 0;
-      {
-        char marker;
-        if (!ReadFile(pair[i], &marker, 1, &n, NULL) ||
-            n != 1 || marker < '0' || marker > '9' ||
-            (expected && marker != expected)) {
-          result = TRANSPORT_INVALID_MARKER;
-          goto done;
-        }
-        *observed = marker;
-      }
-      chosen = pair[i];
-      pair[i] = INVALID_HANDLE_VALUE;
-      result = TRANSPORT_OK;
-      break;
+    if (!state[i].marked)
+      continue;
+    selected = i;
+    if (state[selected].marker < '0' ||
+        state[selected].marker > '9' ||
+        (expected && state[selected].marker != expected)) {
+      result = TRANSPORT_INVALID_MARKER;
+      goto done;
     }
-    Sleep(1);
+    *observed = state[selected].marker;
+    chosen = pair[selected];
+    pair[selected] = INVALID_HANDLE_VALUE;
+    result = TRANSPORT_OK;
+    break;
   }
 done:
   trace_printf_key(&git809_preload_trace,
-    "pid=%lu select cleanup result=%d chosen=%p\n",
+    "pid=%lu select cleanup result=%d chosen=%p\\n",
     GetCurrentProcessId(), result, chosen);
   for (i = 0; i < 2; i++)
     git809_finish_connect(&state[i]);
