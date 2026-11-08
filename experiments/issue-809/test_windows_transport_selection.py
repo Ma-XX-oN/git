@@ -123,10 +123,13 @@ def test_duplicate_markers(name="duplicate-markers", first=b"T", second=b"T", re
     assert "two markers" in str(result[0][1]),result
     print("GIT809_SELECT_TRANSPORT_PASS",name,flush=True)
   finally:
+    print("GIT809_DUPLICATE_CLEANUP_BEGIN",name,flush=True)
     go.set()
     K.PeekNamedPipe=peek
     for h in clients:
+      print("GIT809_DUPLICATE_CLOSE_HANDLE",name,h,flush=True)
       K.CloseHandle(h)
+    print("GIT809_DUPLICATE_CLEANUP_DONE",name,flush=True)
 
 
 run_case("first-instance-marker",0)
@@ -140,3 +143,5 @@ run_case("rotating-marker-mismatch",1,b"8",request_id="123-19")
 test_duplicate_markers()
 test_duplicate_markers("matching-digit-double-marker",b"7",b"7","123-7")
 test_duplicate_markers("mixed-digit-double-marker",b"7",b"8","123-7")
+
+print("GIT809_SELECTOR_SCRIPT_END",flush=True)
