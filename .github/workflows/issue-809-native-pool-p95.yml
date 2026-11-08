@@ -1,0 +1,55 @@
+name: Git 809 Windows native 1-5 pool P95 benchmark
+on:
+  push:
+    branches: [feature/git-preinit-windows-upstream]
+    paths:
+      - experiments/issue-809/pool_size_ab_benchmark.py
+      - experiments/issue-809/windows_ipc_timeout_dumps.py
+      - .github/workflows/issue-809-native-pool-p95.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: git809-native-pool-p95-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  windows-native-p95:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Build the native source-built Git worker (no source injection)
+        shell: bash
+        run: |
+          . /etc/profile
+          make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git.exe
+      - name: Verify benchmark scripts
+        shell: bash
+        run: |
+          . /etc/profile
+          PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
+          "$PYTHON_EXE" -m py_compile experiments/issue-809/pool_size_ab_benchmark.py experiments/issue-809/windows_ipc_timeout_dumps.py experiments/issue-809/windows_git_ipc_pool.py
+          bash -n experiments/issue-809/git-manager.sh
+      - name: Same-runner P95 benchmark — 120 pairs each round, sizes 1,2,3,4,5,4,3,2,1
+        shell: bash
+        run: |
+          . /etc/profile
+          PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
+          export GIT809_MANAGER_PYTHON="$(cygpath -w "$PYTHON_EXE")"
+          "$PYTHON_EXE" experiments/issue-809/pool_size_ab_benchmark.py
+      - name: Preserve exact-SHA raw samples and timeout evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-windows-native-p95-pool-1to5
+          path: |
+            git809-bash-pipe-results/pool-size-matched-1to5-*.json
+            git809-bash-pipe-results/latest-timeout-manager.log
+            git809-bash-pipe-results/timeout-dumps/
+          if-no-files-found: warn
