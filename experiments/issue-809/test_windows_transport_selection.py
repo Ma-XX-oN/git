@@ -91,7 +91,7 @@ def run_case(name,marker_index=None,marker=b"T",drop_probe=False,request_id=None
         K.CloseHandle(h)
 
 
-def test_duplicate_markers():
+def test_duplicate_markers(name="duplicate-markers", first=b"T", second=b"T", request_id=None):
   """Force both markers to be pending before selection examines either."""
   address=r"\\.\pipe\git809-select-test-"+uuid.uuid4().hex
   peek=K.PeekNamedPipe
@@ -104,7 +104,7 @@ def test_duplicate_markers():
     return peek(*args)
   def server():
     try:
-      result.append(("selected",manager.select_transport(address)))
+      result.append(("selected",manager.select_transport(address,request_id)))
     except Exception as error:
       result.append(("error",error))
   K.PeekNamedPipe=held_peek
@@ -113,15 +113,15 @@ def test_duplicate_markers():
     t.start()
     clients.append(connect(address))
     clients.append(connect(address))
-    write(clients[0],b"T")
-    write(clients[1],b"T")
+    write(clients[0],first)
+    write(clients[1],second)
     go.set()
     t.join(timeout=5)
     assert not t.is_alive(),"duplicate marker server stuck"
     assert len(result)==1 and result[0][0]=="error",result
     assert isinstance(result[0][1],RuntimeError),result
     assert "two markers" in str(result[0][1]),result
-    print("GIT809_SELECT_TRANSPORT_PASS duplicate-markers",flush=True)
+    print("GIT809_SELECT_TRANSPORT_PASS",name,flush=True)
   finally:
     go.set()
     K.PeekNamedPipe=peek
@@ -138,3 +138,5 @@ run_case("rotating-marker-zero",0,b"0",request_id="123-10")
 run_case("rotating-marker-nine",1,b"9",request_id="123-19")
 run_case("rotating-marker-mismatch",1,b"8",request_id="123-19")
 test_duplicate_markers()
+test_duplicate_markers("matching-digit-double-marker",b"7",b"7","123-7")
+test_duplicate_markers("mixed-digit-double-marker",b"7",b"8","123-7")
