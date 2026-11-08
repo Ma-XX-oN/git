@@ -86,7 +86,8 @@ git-ipc() {
   exec 4<"$worker/stdout" || { printf 'GIT-IPC ERROR: stdout open failed\n' >&2; return 255; }
   exec 5<"$worker/stderr" || { exec 4<&-; printf 'GIT-IPC ERROR: stderr open failed\n' >&2; return 255; }
   exec 6<"$worker/exit-code" || { exec 4<&- 5<&-; printf 'GIT-IPC ERROR: exit-code open failed\n' >&2; return 255; }
-  exec 7>"$worker/stdin" || { exec 4<&- 5<&- 6<&-; printf 'GIT-IPC ERROR: stdin open failed\n' >&2; return 255; }
+  exec 8>"$worker/stdin" || { exec 4<&- 5<&- 6<&-; printf 'GIT-IPC ERROR: stdin open failed\n' >&2; return 255; }
+  exec 7>"$worker/param-env-cwd" || { exec 4<&- 5<&- 6<&- 8>&-; printf 'GIT-IPC ERROR: control open failed\n' >&2; return 255; }
 
   count=$(( $# + 1 ))
   printf -v header '\\x%02x\\x00\\x00\\x00' "$count"
@@ -100,7 +101,7 @@ git-ipc() {
     printf 'GIT-IPC ERROR: context frame write failed\n' >&2
     return 255
   }
-  exec 7>&-
+  exec 7>&- 8>&-
 
   local stdout_open=1 stderr_open=1
   while (( stdout_open || stderr_open )); do
