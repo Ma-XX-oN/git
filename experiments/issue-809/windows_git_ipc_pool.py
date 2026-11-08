@@ -350,7 +350,7 @@ def allocation_server(owner_pid:int,pool:Pool):
   address=r"\\.\pipe\git809-allocate-req-"+str(owner_pid)
   unlimited=255
   backlog=min(64,max(4,2*pool.target))
-  max_active=240  # Win32 permits 255 same-name pipe instances.
+  max_active=56  # Keep the event set normally below the Win32 wait limit.
   active=[]
   replies=[]
   first=True
@@ -395,7 +395,8 @@ def allocation_server(owner_pid:int,pool:Pool):
           K.CloseHandle(h)
           raise OSError(C.get_last_error(),"CreateEvent(reply)")
         state={"h":h,"event":event,"ov":OVERLAPPED(),"pending":False,
-               "buffer":None,"phase":"connect","ready":None,"answer":None}
+               "buffer":None,"phase":"connect","ready":None,"answer":None,
+               "probe_retries":0}
         state["ov"].hEvent=event
         pair["states"].append(state)
         state["ready"]=_start_async(state,"connect")
@@ -408,6 +409,18 @@ def allocation_server(owner_pid:int,pool:Pool):
       _close_async(state)
     replies.remove(pair)
 
+  def recycle_reply_probe(state):
+    """Reuse a disconnected probe instance; never create a third instance."""
+    state["probe_retries"]+=1
+    if state["probe_retries"]>32:
+      raise RuntimeError("reply probe reconnect limit")
+    if not K.DisconnectNamedPipe(state["h"]):
+      error=C.get_last_error()
+      if error not in (ERROR_NO_DATA,233):
+        raise OSError(error,"DisconnectNamedPipe(reply probe)")
+    state["phase"]="connect"
+    state["ready"]=_start_async(state,"connect")
+
   def advance_reply(pair):
     """Advance connection, one-byte marker and reply write using events."""
     for state in pair["states"]:
@@ -419,13 +432,14 @@ def allocation_server(owner_pid:int,pool:Pool):
         state["ready"]=None
         if state["phase"]=="connect":
           if n<0:
-            state["phase"]="done"
-            break
+            recycle_reply_probe(state)
+            continue
           state["phase"]="marker"
           state["ready"]=_start_async(state,"read")
         elif state["phase"]=="marker":
           if n<0:
-            state["phase"]="done"
+            recycle_reply_probe(state)
+            continue
           elif n!=1 or state["buffer"].raw!=pair["expected"]:
             raise RuntimeError("bad reply transport marker")
           else:
