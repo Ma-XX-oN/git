@@ -61,6 +61,15 @@ jobs:
           done
           [[ ! -v GIT_EDITOR ]] || exit 33
           printf 'GIT809_STREAM_ROUNDTRIP_PASS\n'
+          # Binary stdin must remain byte-for-byte intact and must not
+          # carry the T handshake or the argument/environment control frame.
+          stdin_expected=$("$PYTHON_EXE" -c 'import sys;sys.stdout.buffer.write(bytes(range(256))*1024)' | "$GIT809_WORKER_GIT" hash-object --stdin)
+          stdin_actual=$("$PYTHON_EXE" -c 'import sys;sys.stdout.buffer.write(bytes(range(256))*1024)' | git-ipc hash-object --stdin)
+          [[ "$stdin_actual" == "$stdin_expected" ]] || {
+            printf 'GIT809_STDIN_MISMATCH expected=%s actual=%s\n' "$stdin_expected" "$stdin_actual" >&2
+            exit 35
+          }
+          printf 'GIT809_WINDOWS_STDIN_BINARY_PASS\n'
           # Two Git Bash clients request concurrently from one manager.
           # Verify that distinct request identities receive their own PID
           # without cross-connecting their per-request ID channels.
