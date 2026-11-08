@@ -84,6 +84,7 @@ class Pool:
     self.closing=threading.Event()
     self.errors=[]
     self.allocations=0
+    self.owner_winpid=None
 
   def reap_completed(self):
     """Release completed worker process objects while retaining live workers."""
@@ -94,9 +95,13 @@ class Pool:
     if self.closing.is_set():
       return
     try:
+      worker_env=os.environ.copy()
+      if self.owner_winpid is None:
+        raise RuntimeError("owner_winpid not initialized")
+      worker_env["GIT809_PRELOAD_OWNER_WINPID"]=str(self.owner_winpid)
       p=subprocess.Popen([str(self.git),"--preload"],
         stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,
-        bufsize=0)
+        env=worker_env,bufsize=0)
     except OSError as error:
       with self.lock:
         self.errors.append("worker spawn failed: "+repr(error))
@@ -264,6 +269,7 @@ def main():
   if K.WaitForSingleObject(owner,0)!=WAIT_TIMEOUT:
     raise RuntimeError("owner already terminated")
   pool=Pool(git,args.workers)
+  pool.owner_winpid=args.owner_winpid
   try:
     for _ in range(args.workers):
       pool.spawn()
