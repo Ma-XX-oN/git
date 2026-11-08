@@ -39,6 +39,10 @@ K.PeekNamedPipe.argtypes=[W.HANDLE,W.LPVOID,W.DWORD,C.POINTER(W.DWORD),C.POINTER
 K.PeekNamedPipe.restype=W.BOOL
 K.FlushFileBuffers.argtypes=[W.HANDLE]
 K.FlushFileBuffers.restype=W.BOOL
+K.OpenThread.argtypes=[W.DWORD,W.BOOL,W.DWORD]
+K.OpenThread.restype=W.HANDLE
+K.CancelSynchronousIo.argtypes=[W.HANDLE]
+K.CancelSynchronousIo.restype=W.BOOL
 K.CloseHandle.argtypes=[W.HANDLE]
 K.CloseHandle.restype=W.BOOL
 K.GetCurrentProcess.restype=W.HANDLE
@@ -148,6 +152,69 @@ class Pool:
       if p.stdout:
         p.stdout.close()
 
+def select_reply_transport(address):
+  """Two Windows instances, one T-qualified unidirectional reply channel."""
+  handles=[]
+  threads=[]
+  connected=[False,False]
+  try:
+    for i in range(2):
+      h=K.CreateNamedPipeW(address,PIPE_ACCESS_DUPLEX |
+        (FILE_FLAG_FIRST_PIPE_INSTANCE if i==0 else 0),
+        PIPE_TYPE_BYTE|PIPE_WAIT,2,256,256,2000,None)
+      if h==INVALID:
+        raise OSError(C.get_last_error(),"CreateNamedPipe(reply)")
+      handles.append(h)
+    def accept(i):
+      ok=bool(K.ConnectNamedPipe(handles[i],None))
+      error=0 if ok else C.get_last_error()
+      connected[i]=ok or error==ERROR_PIPE_CONNECTED
+    for i in range(2):
+      t=threading.Thread(target=accept,args=(i,),daemon=True)
+      t.start()
+      threads.append(t)
+    deadline=time.monotonic()+2
+    selected=None
+    while time.monotonic()<deadline:
+      candidates=[]
+      for i,h in enumerate(handles):
+        if not connected[i]:
+          continue
+        available=W.DWORD()
+        if K.PeekNamedPipe(h,None,0,None,C.byref(available),None) and available.value:
+          candidates.append(i)
+      if len(candidates)==2:
+        raise RuntimeError("two T markers on one reply channel")
+      if candidates:
+        i=candidates[0]
+        marker=C.create_string_buffer(1)
+        n=W.DWORD()
+        if not K.ReadFile(handles[i],marker,1,C.byref(n),None) or (
+          n.value!=1 or marker.raw!=b"T"):
+          raise RuntimeError("bad reply transport marker")
+        selected=handles[i]
+        handles[i]=None
+        break
+      time.sleep(.001)
+    if selected is None:
+      raise TimeoutError("reply T marker timeout")
+    return selected
+  finally:
+    for t in threads:
+      if t.is_alive() and t.native_id:
+        thread_handle=K.OpenThread(0x0001,False,t.native_id)
+        if thread_handle:
+          K.CancelSynchronousIo(thread_handle)
+          K.CloseHandle(thread_handle)
+      t.join(timeout=1)
+      if t.is_alive():
+        raise RuntimeError("reply accept did not cancel")
+    for h in handles:
+      if h is not None:
+        K.DisconnectNamedPipe(h)
+        K.CloseHandle(h)
+
+
 def allocation_server(owner_pid:int,pool:Pool):
   """Dynamically replenish native pipe listeners; never wait for probe EOF.
 
@@ -156,7 +223,7 @@ def allocation_server(owner_pid:int,pool:Pool):
   demonstrated by request 1421 of the native Windows stress run. Accept
   connections independently and dispatch only those that send GET bytes.
   """
-  address=r"\\.\pipe\git809-allocate-"+str(owner_pid)
+  address=r"\\.\pipe\git809-allocate-req-"+str(owner_pid)
   unlimited=255
   pending=queue.Queue()
   first=True
@@ -182,46 +249,60 @@ def allocation_server(owner_pid:int,pool:Pool):
 
   def serve_connection(h):
     try:
-      # Probe connections carry no bytes and are allowed to remain open
-      # briefly. They cannot block fresh listeners or real GET requests.
-      for _ in range(5000):
+      # Probes carry no bytes; the actual transport must send TGET <PID>.
+      frame=bytearray()
+      deadline=time.monotonic()+2
+      while time.monotonic()<deadline:
         available=W.DWORD()
-        if K.PeekNamedPipe(h,None,0,None,C.byref(available),None):
-          if available.value:
-            break
-        else:
+        if not K.PeekNamedPipe(h,None,0,None,C.byref(available),None):
           error=C.get_last_error()
           if error in (109,ERROR_NO_DATA,233):
             return
-          raise OSError(error,"PeekNamedPipe(allocation)")
-        time.sleep(.001)
+          raise OSError(error,"PeekNamedPipe(request)")
+        if not available.value:
+          time.sleep(.001)
+          continue
+        buf=C.create_string_buffer(min(available.value,64))
+        n=W.DWORD()
+        if not K.ReadFile(h,buf,len(buf),C.byref(n),None):
+          error=C.get_last_error()
+          if error in (109,ERROR_NO_DATA,233):
+            return
+          raise OSError(error,"ReadFile(request)")
+        frame.extend(buf.raw[:n.value])
+        if len(frame)>64:
+          raise ValueError("oversized request")
+        if b"\n" in frame:
+          break
       else:
         print("ALLOCATOR_IDLE_PROBE_EXPIRED",flush=True)
         return
-
-      buf=C.create_string_buffer(64)
-      n=W.DWORD()
-      if not K.ReadFile(h,buf,64,C.byref(n),None):
-        error=C.get_last_error()
-        if error in (109,ERROR_NO_DATA,233):
-          return
-        raise OSError(error,"ReadFile(allocation)")
-      answer=(pool.alloc().encode("ascii") if buf.raw[:n.value]==b"GET\n"
-              else b"INVALID\n")
-      sent=W.DWORD()
-      if not K.WriteFile(h,answer,len(answer),C.byref(sent),None):
-        error=C.get_last_error()
-        if error not in (109,ERROR_NO_DATA,233):
-          raise OSError(error,"WriteFile(allocation)")
-        return
-      if sent.value!=len(answer):
-        raise OSError("short allocation reply write")
-      if not K.FlushFileBuffers(h):
-        error=C.get_last_error()
-        if error not in (109,ERROR_NO_DATA,233):
-          raise OSError(error,"FlushFileBuffers(allocation)")
+      if not frame.startswith(b"TGET ") or not frame.endswith(b"\n"):
+        raise ValueError("bad GET frame or missing T marker")
+      raw_id=frame[5:-1]
+      if not raw_id.isdigit() or len(raw_id)>10:
+        raise ValueError("invalid reply ID")
+      client_id=int(raw_id)
+      if not 1<=client_id<=0xffffffff:
+        raise ValueError("reply ID out of range")
+      reply=(r"\\\\.\\pipe\\git809-allocate-reply-"+str(owner_pid)+
+             "-"+str(client_id))
+      response=select_reply_transport(reply)
+      try:
+        answer=pool.alloc().encode("ascii")
+        n=W.DWORD()
+        if not K.WriteFile(response,answer,len(answer),C.byref(n),None):
+          raise OSError(C.get_last_error(),"WriteFile(reply)")
+        if n.value!=len(answer):
+          raise RuntimeError("short reply")
+        if not K.FlushFileBuffers(response):
+          error=C.get_last_error()
+          if error not in (109,ERROR_NO_DATA,233):
+            raise OSError(error,"FlushFileBuffers(reply)")
+      finally:
+        K.DisconnectNamedPipe(response)
+        K.CloseHandle(response)
     except Exception as error:
-      # An individual abandoned connection must not terminate the manager.
       print("ALLOCATOR_CONNECTION_ERROR "+repr(error),flush=True)
     finally:
       K.DisconnectNamedPipe(h)
@@ -280,7 +361,7 @@ def main():
     # WaitNamedPipeW rather than assuming a started thread is ready.
     K.WaitNamedPipeW.argtypes=[W.LPCWSTR,W.DWORD]
     K.WaitNamedPipeW.restype=W.BOOL
-    address=r"\\.\pipe\git809-allocate-"+str(args.owner_winpid)
+    address=r"\\.\pipe\git809-allocate-req-"+str(args.owner_winpid)
     deadline=time.monotonic()+10
     while time.monotonic()<deadline:
       if K.WaitNamedPipeW(address,100):
