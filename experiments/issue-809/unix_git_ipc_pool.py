@@ -42,6 +42,7 @@ class Pool:
         with self.lock:
             self.children.append((p, channel_dir))
         line = p.stdout.readline()
+        p.stdout.close()
         if line != ("READY " + str(p.pid) + "\n").encode("ascii"):
             self.errors.append("worker readiness failed " + repr(line))
             if p.poll() is None:
@@ -58,9 +59,12 @@ class Pool:
             p, channel_dir = self.ready.get(timeout=5)
         except queue.Empty:
             return "WAIT"
+        with self.lock:
+            self.children.remove((p, channel_dir))
         if p.poll() is not None:
             threading.Thread(target=self.spawn, daemon=True).start()
             return "WAIT"
+        # Client owns this worker; the worker owns cleaning its FIFO directory.
         threading.Thread(target=self.spawn, daemon=True).start()
         print("ALLOCATED " + str(p.pid), flush=True)
         return str(channel_dir)
@@ -82,7 +86,7 @@ class Pool:
                 p.stdout.close()
             for name in ("stdout", "stderr", "exit-code", "stdin"):
                 (directory / name).unlink(missing_ok=True)
-            directory.rmdir()
+            directory.rmdir() if directory.exists() else None
 
 
 def owner_alive(pid):
