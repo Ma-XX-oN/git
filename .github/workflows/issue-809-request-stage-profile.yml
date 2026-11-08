@@ -1,0 +1,102 @@
+name: RWF 809 Windows native request-stage profiling
+on:
+  push:
+    branches: [investigation-809-windows-request-stage-trace]
+    paths:
+      - experiments/issue-809/git-manager.sh
+      - .github/workflows/issue-809-request-stage-profile.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-stage-profile:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Build identical native Git with preload
+        shell: bash
+        run: |
+          . /etc/profile
+          make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git.exe
+      - name: Profile IPC stages without changing production implementation
+        shell: bash
+        run: |
+          . /etc/profile
+          set -euo pipefail
+          PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
+          export GIT809_MANAGER_PYTHON="$(cygpath -w "$PYTHON_EXE")"
+          export GIT809_WORKER_GIT="$(cygpath -w "$PWD/git.exe")"
+          export GIT809_DRAIN_MODE=chunk100
+          mkdir -p git809-bash-pipe-results
+          export GIT809_STAGE_TRACE_FILE="$PWD/git809-bash-pipe-results/request-stages.csv"
+          bash -n experiments/issue-809/git-manager.sh
+          source experiments/issue-809/git-manager.sh 3
+          unset GIT809_STAGE_TRACE_FILE
+          for ((i=0;i<10;i++)); do git-ipc --version >/dev/null; done
+          export GIT809_STAGE_TRACE_FILE="$PWD/git809-bash-pipe-results/request-stages.csv"
+          printf 'mode,start,end\n' >git809-bash-pipe-results/total-times.csv
+          for ((i=0;i<120;i++)); do
+            a=$EPOCHREALTIME
+            git-ipc --version >/dev/null
+            b=$EPOCHREALTIME
+            printf 'traced_ipc,%s,%s\n' "$a" "$b" >>git809-bash-pipe-results/total-times.csv
+          done
+          unset GIT809_STAGE_TRACE_FILE
+          for ((i=0;i<120;i++)); do
+            a=$EPOCHREALTIME
+            git-ipc --version >/dev/null
+            b=$EPOCHREALTIME
+            printf 'untraced_ipc,%s,%s\n' "$a" "$b" >>git809-bash-pipe-results/total-times.csv
+          done
+          for ((i=0;i<120;i++)); do
+            a=$EPOCHREALTIME
+            "$GIT809_WORKER_GIT" --version >/dev/null
+            b=$EPOCHREALTIME
+            printf 'direct_git,%s,%s\n' "$a" "$b" >>git809-bash-pipe-results/total-times.csv
+          done
+          "$PYTHON_EXE" - <<'PY'
+          import csv, math, statistics
+          from collections import defaultdict
+          from decimal import Decimal
+          def ms(a,b):
+            return float((Decimal(b)-Decimal(a))*1000)
+          def report(label, arr):
+            assert len(arr)==120,(label,len(arr))
+            arr=sorted(arr)
+            print('GIT809_STAGE',label,'count',len(arr),'median_ms',round(statistics.median(arr),4),
+                  'p95_ms',round(arr[math.ceil(.95*len(arr))-1],4),
+                  'max_ms',round(arr[-1],4),flush=True)
+          with open('git809-bash-pipe-results/request-stages.csv',newline='',encoding='utf-8') as f:
+            rows=list(csv.reader(f))
+          assert len(rows)==120, len(rows)
+          names=('allocate','open_four_channels','serialize_args','cwd_and_env_and_close_stdin','drain_output','read_exit_status')
+          samples=defaultdict(list)
+          for row in rows:
+            assert len(row)==8,repr(row)
+            for i,name in enumerate(names,1):
+              samples[name].append(ms(row[i],row[i+1]))
+            samples['internal_total_before_trace_write'].append(ms(row[1],row[7]))
+          for label, values in samples.items():
+            report(label,values)
+          totals=defaultdict(list)
+          with open('git809-bash-pipe-results/total-times.csv',newline='',encoding='utf-8') as f:
+            for row in csv.DictReader(f):
+              totals[row['mode']].append(ms(row['start'],row['end']))
+          for name,values in totals.items():
+            report(name,values)
+          print('GIT809_STAGE_SHA',__import__('os').environ['GITHUB_SHA'],flush=True)
+          PY
+      - name: Preserve stage samples and native manager trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-windows-request-stage-profile
+          path: git809-bash-pipe-results/
+          if-no-files-found: warn
