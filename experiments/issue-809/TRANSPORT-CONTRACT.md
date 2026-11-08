@@ -18,14 +18,14 @@ Allocation uses two distinct logical channels on **all** platforms:
 1. `allocate-req`: git-ipc -> git-manager, carrying `GET\n`.
 2. `allocate-reply`: git-manager -> git-ipc, carrying one worker identifier followed by newline (or a defined error).
 
-The allocated worker has **five distinct logical channels**: `stdin` and `param-env-cwd` (git-ipc -> worker); `stdout`, `stderr`, and `exit-code` (worker -> git-ipc). Arguments, cwd and environment are carried exclusively by `param-env-cwd`; stdin is a separate stream. Windows sends and consumes `T` separately on each channel, including stdin. No handshake byte enters application data.
+The allocated worker has **five distinct logical channels**: `stdin` and `param-env-cwd` (git-ipc -> worker); `stdout`, `stderr`, and `exit-code` (worker -> git-ipc). Arguments, cwd and environment are carried exclusively by `param-env-cwd`; stdin is a separate stream. Windows sends and consumes the call-specific decimal marker separately on each channel, including stdin. No handshake byte enters application data.
 
 Linux/macOS use ordinary unidirectional FIFOs, with **no** `T` marker.
 
 ### Standard-input limitation: no additional relay processes
 
 The `stdin` logical channel remains separately established, and on Windows
-the Git worker consumes the initial `T` marker before application I/O.
+the Git worker consumes the initial decimal marker before application I/O.
 However, **application stdin forwarding is not implemented**: the Bash client
 closes the stdin writer after connection setup, and the worker sees EOF.
 This applies to interactive terminals, redirected regular files, and pipes.
@@ -70,8 +70,12 @@ instance. The manager records the full request ID, chosen instance, actual
 marker, and returned worker PID.
 
 The **five Git worker data channels** (`stdin`, `param-env-cwd`,
-`stdout`, `stderr`, `exit-code`) still use the original `T` handshake
-and are not changed by this focused allocation diagnostic.
+`stdout`, `stderr`, `exit-code`) also use the same rotating decimal
+marker **in place of `T`**. The native Windows worker accepts the first
+channel's decimal marker and requires the identical marker on each of the
+remaining four channels. A different digit fails closed; it cannot be
+interpreted as a second valid call. The worker does not create another
+process to validate the marker.
 
 No simultaneous `git-ipc` calls are authorized in this experiment.
 A single request completes before the next starts; the manager may
@@ -98,7 +102,7 @@ The current Bash client drains stdout/stderr using Bash `read -d ''` into
 shell strings. Bash variables cannot contain NUL bytes. Consequently the
 existing Git IPC experiment is **not yet a byte-transparent stdout/stderr
 transport for binary Git output**. This pre-existing limitation is separate
-from, and is not corrected by, Windows `T` identification. No full-Git-compatibility claim is permitted until
+from, and is not corrected by, Windows connection-marker identification. No full-Git-compatibility claim is permitted until
 binary stdout/stderr and interactive stdin tests are implemented and pass.
 
 ## Acceptance criteria
