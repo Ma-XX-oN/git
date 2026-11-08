@@ -23,6 +23,11 @@
 extern NORETURN void git_preinit_worker_exit(int status);
 #undef exit
 #define exit(status) git_preinit_worker_exit(common_exit(__FILE__, __LINE__, (status)))
+#else
+/* Preserve builtin exit status when a single-use Unix worker dispatches. */
+extern NORETURN void git_preload_worker_exit(int status);
+#undef exit
+#define exit(status) git_preload_worker_exit(common_exit(__FILE__, __LINE__, (status)))
 #endif
 
 #define RUN_SETUP		(1<<0)
