@@ -1,20 +1,5 @@
 name: RWF 809 Linux macOS native context and owner stress
 on:
-  push:
-    branches: [investigation-809-allocator-resource-lifecycle, experiment-809-unidirectional-t-handshake]
-    paths:
-      - .github/workflows/issue-809-unix-owner-stress.yml
-      - preload-worker-unix.c
-      - preload-context.c
-      - preload-export-stream.h
-      - experiments/issue-809/git-ipc-request.sh
-      - experiments/issue-809/unix_git_ipc_pool.py
-      - experiments/issue-809/git-manager-unix.sh
-      # Run all three native OS jobs at the same commit when Windows changes.
-      - experiments/issue-809/windows_git_ipc_pool.py
-      - experiments/issue-809/test_allocator_probe_hold.py
-      - .github/workflows/issue-809-allocator-stress.yml
-      - experiments/issue-809/TRANSPORT-CONTRACT.md
   workflow_dispatch:
 permissions:
   contents: read
