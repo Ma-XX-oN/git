@@ -93,7 +93,7 @@ git-ipc() {
   local marker=$(( _GIT809_REQUEST_SEQ % 10 ))
   printf -v allocator '%s%s' '\\.\pipe\git809-allocate-req-' "$_GIT809_OWNER_WINPID"
   printf -v reply '%s%s-%s' '\\.\pipe\git809-allocate-reply-' "$_GIT809_OWNER_WINPID" "$request_id"
-  local pid i count header arg status line
+  local pid i count header arg status line ack
   for ((i=0;i<400;i++)); do
     if { exec 3<>"$allocator"; } 2>/dev/null; then break; fi
     sleep .005
@@ -114,7 +114,6 @@ git-ipc() {
     printf 'GIT-IPC ERROR: allocation reply pipe unavailable\n' >&2; return 255
   fi
   printf '%s' "$marker" >&8 || { exec 8>&- 3>&-; printf 'GIT-IPC ERROR: reply marker write failed\n' >&2; return 255; }
-  local ack
   ack=
   IFS= read -r -n 1 -u 8 ack || { printf 'GIT-IPC ERROR: channel 8 acknowledgment read failed\\n' >&2; return 255; }
   [[ $ack == A ]] || { printf 'GIT-IPC ERROR: channel 8 invalid acknowledgment\\n' >&2; return 255; }
@@ -141,21 +140,18 @@ git-ipc() {
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE open stdout pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
   exec 4<>"$pout" || { printf 'GIT-IPC ERROR: stdout pipe open failed\n' >&2; return 255; }
   printf '%s' "$marker" >&4 || { printf 'GIT-IPC ERROR: channel 4 marker failed\n' >&2; return 255; }
-  local ack
   ack=
   IFS= read -r -n 1 -u 4 ack || { printf 'GIT-IPC ERROR: channel 4 acknowledgment read failed\\n' >&2; return 255; }
   [[ $ack == A ]] || { printf 'GIT-IPC ERROR: channel 4 invalid acknowledgment\\n' >&2; return 255; }
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE open stderr pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
   exec 5<>"$perr" || { exec 4<&-; printf 'GIT-IPC ERROR: stderr pipe open failed\n' >&2; return 255; }
   printf '%s' "$marker" >&5 || { printf 'GIT-IPC ERROR: channel 5 marker failed\n' >&2; return 255; }
-  local ack
   ack=
   IFS= read -r -n 1 -u 5 ack || { printf 'GIT-IPC ERROR: channel 5 acknowledgment read failed\\n' >&2; return 255; }
   [[ $ack == A ]] || { printf 'GIT-IPC ERROR: channel 5 invalid acknowledgment\\n' >&2; return 255; }
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE open exit pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
   exec 6<>"$pexit" || { exec 4<&- 5<&-; printf 'GIT-IPC ERROR: exit-status pipe open failed\n' >&2; return 255; }
   printf '%s' "$marker" >&6 || { printf 'GIT-IPC ERROR: channel 6 marker failed\n' >&2; return 255; }
-  local ack
   ack=
   IFS= read -r -n 1 -u 6 ack || { printf 'GIT-IPC ERROR: channel 6 acknowledgment read failed\\n' >&2; return 255; }
   [[ $ack == A ]] || { printf 'GIT-IPC ERROR: channel 6 invalid acknowledgment\\n' >&2; return 255; }
@@ -164,7 +160,6 @@ git-ipc() {
   printf '%s' "$marker" >&8 || { printf 'GIT-IPC ERROR: channel 8 marker failed\n' >&2; return 255; }
   exec 7<>"$pcontrol" || { exec 4<&- 5<&- 6<&- 8>&-; printf 'GIT-IPC ERROR: control pipe open failed\n' >&2; return 255; }
   printf '%s' "$marker" >&7 || { printf 'GIT-IPC ERROR: channel 7 marker failed\n' >&2; return 255; }
-  local ack
   ack=
   IFS= read -r -n 1 -u 7 ack || { printf 'GIT-IPC ERROR: channel 7 acknowledgment read failed\\n' >&2; return 255; }
   [[ $ack == A ]] || { printf 'GIT-IPC ERROR: channel 7 invalid acknowledgment\\n' >&2; return 255; }
