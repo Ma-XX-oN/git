@@ -1,5 +1,7 @@
 name: RWF 809 Linux macOS native context and owner stress
 on:
+  push:
+    branches: [experiment-809-tmp1-unix-stress]
   workflow_dispatch:
 permissions:
   contents: read
