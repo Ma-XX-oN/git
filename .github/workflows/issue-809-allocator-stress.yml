@@ -8,7 +8,7 @@ permissions:
 jobs:
   windows-native-stream:
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,9 +39,18 @@ jobs:
           trap 'rc=$?; if [[ -n ${_GIT809_MANAGER_LOG:-} && -f $_GIT809_MANAGER_LOG ]]; then cp -- "$_GIT809_MANAGER_LOG" git809-stream-results/manager.log; if (( rc != 0 )); then tail -n 120 -- "$_GIT809_MANAGER_LOG" >&2; fi; fi; exit "$rc"' EXIT
           # Bound the first allocation so a blocking native connection
           # produces the manager diagnostic instead of consuming the 45m job.
-          git-ipc --version >git809-stream-results/smoke.out &
+          GIT809_TRACE=1 git-ipc --version >git809-stream-results/smoke.out &
           smoke_pid=$!
-          ( sleep 30; kill -TERM "$smoke_pid" 2>/dev/null || :; sleep 2; kill -KILL "$smoke_pid" 2>/dev/null || : ) &
+          (
+            sleep 12
+            printf 'GIT809_SMOKE_WATCHDOG bashpid=%s manager_log=%s\\n' "$smoke_pid" "$_GIT809_MANAGER_LOG" >&2
+            if [[ -f "$_GIT809_MANAGER_LOG" ]]; then
+              cp -- "$_GIT809_MANAGER_LOG" git809-stream-results/manager.log
+              tail -n 90 -- "$_GIT809_MANAGER_LOG" >&2
+            fi
+            ps -W >&2 || :
+            kill -KILL "$smoke_pid" 2>/dev/null || :
+          ) &
           watchdog_pid=$!
           smoke_rc=0
           wait "$smoke_pid" || smoke_rc=$?
