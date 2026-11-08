@@ -154,101 +154,105 @@ class Pool:
         p.stdout.close()
 
 def allocation_server(owner_pid:int,pool:Pool):
+  """Dynamically replenish native pipe listeners; never wait for probe EOF.
+
+  Each Git Bash duplex open may consume an extra probe instance. A fixed
+  two-instance pair can become exhausted before the actual data open, as
+  demonstrated by request 1421 of the native Windows stress run. Accept
+  connections independently and dispatch only those that send GET bytes.
+  """
   address=r"\\.\pipe\git809-allocate-"+str(owner_pid)
+  unlimited=255
+  pending=queue.Queue()
   first=True
-  print("ALLOCATOR_START "+address,flush=True)
-  while not pool.closing.is_set():
-    handles=[]
-    connected=queue.Queue()
-    threads=[]
-    def accept(h,index):
-      print(f"ALLOC_API_ENTER ns={time.perf_counter_ns()} tid={threading.get_native_id()} op=ConnectNamedPipe handle={h} instance={index}",flush=True)
-      ok=bool(K.ConnectNamedPipe(h,None))
-      err=0 if ok else C.get_last_error()
-      print(f"ALLOC_API_RETURN ns={time.perf_counter_ns()} tid={threading.get_native_id()} op=ConnectNamedPipe handle={h} instance={index} ok={ok} error={err}",flush=True)
-      connected.put((index,ok or err in (ERROR_PIPE_CONNECTED,ERROR_NO_DATA),err))
+  backlog=min(64,max(4,2*pool.target))
+  print(f"ALLOCATOR_START {address} backlog={backlog}",flush=True)
+
+  def accept(h):
+    ok=bool(K.ConnectNamedPipe(h,None))
+    error=0 if ok else C.get_last_error()
+    pending.put((h,ok or error in (ERROR_PIPE_CONNECTED,ERROR_NO_DATA),
+                 error))
+
+  def new_listener():
+    nonlocal first
+    h=K.CreateNamedPipeW(
+      address,
+      PIPE_ACCESS_DUPLEX|(FILE_FLAG_FIRST_PIPE_INSTANCE if first else 0),
+      PIPE_TYPE_BYTE|PIPE_WAIT,unlimited,256,256,5000,None)
+    if h==INVALID:
+      raise OSError(C.get_last_error(),"CreateNamedPipe(allocation)")
+    first=False
+    threading.Thread(target=accept,args=(h,),daemon=True).start()
+
+  def serve_connection(h):
     try:
-      for index in range(2):
-        print(f"ALLOC_API_ENTER ns={time.perf_counter_ns()} tid={threading.get_native_id()} op=CreateNamedPipe instance={index}",flush=True)
-        h=K.CreateNamedPipeW(address,
-          PIPE_ACCESS_DUPLEX|(FILE_FLAG_FIRST_PIPE_INSTANCE if first and index==0 else 0),
-          PIPE_TYPE_BYTE|PIPE_WAIT,2,256,256,5000,None)
-        print(f"ALLOC_API_RETURN ns={time.perf_counter_ns()} op=CreateNamedPipe instance={index} handle={h} error={C.get_last_error() if h==INVALID else 0}",flush=True)
-        if h==INVALID:
-          raise OSError(C.get_last_error(),"CreateNamedPipe(allocation)")
-        handles.append(h)
-      first=False
-      for index,h in enumerate(handles):
-        t=threading.Thread(target=accept,args=(h,index),daemon=True)
-        t.start()
-        threads.append(t)
-      first_index,first_ok,first_error=connected.get(timeout=15)
-      second_index,second_ok,second_error=connected.get(timeout=15)
-      if not first_ok or not second_ok or first_index==second_index:
-        raise OSError(first_error or second_error,"ConnectNamedPipe(allocation)")
-      # Git Bash opens two connections for one shell descriptor. The first
-      # is a probe, but it is NOT guaranteed to disconnect before the real
-      # data-bearing connection writes. A state-based (4,3) assumption failed
-      # on native Windows at request 2625 with persistent states (4,4).
-      # Identify the data instance by request bytes instead of probe closure.
+      # Probe connections carry no bytes and are allowed to remain open
+      # briefly. They cannot block fresh listeners or real GET requests.
       for _ in range(5000):
-        available=[]
-        for h in handles:
-          pending=W.DWORD()
-          if K.PeekNamedPipe(h,None,0,None,C.byref(pending),None):
-            available.append(pending.value)
-          else:
-            error=C.get_last_error()
-            if error not in (109,ERROR_NO_DATA,233):
-              raise OSError(error,"PeekNamedPipe(allocation)")
-            available.append(0)
-        written=[index for index,nbytes in enumerate(available) if nbytes]
-        if len(written)==1:
-          data_index=written[0]
-          probe_index=1-data_index
-          break
-        if len(written)>1:
-          raise RuntimeError(f"ambiguous allocation request writers: {available}")
+        available=W.DWORD()
+        if K.PeekNamedPipe(h,None,0,None,C.byref(available),None):
+          if available.value:
+            break
+        else:
+          error=C.get_last_error()
+          if error in (109,ERROR_NO_DATA,233):
+            return
+          raise OSError(error,"PeekNamedPipe(allocation)")
         time.sleep(.001)
       else:
-        raise TimeoutError(f"allocation request bytes never arrived: {available}")
-      h=handles[data_index]
-      print("ALLOCATOR_CONNECTED probe="+str(probe_index)+" data="+str(data_index)+
-            " errors="+str((first_error,second_error)),flush=True)
+        print("ALLOCATOR_IDLE_PROBE_EXPIRED",flush=True)
+        return
+
       buf=C.create_string_buffer(64)
-      count=W.DWORD()
-      print(f"ALLOC_API_ENTER ns={time.perf_counter_ns()} tid={threading.get_native_id()} op=ReadFile handle={h}",flush=True)
-      read_ok=bool(K.ReadFile(h,buf,64,C.byref(count),None))
-      read_error=0 if read_ok else C.get_last_error()
-      print(f"ALLOC_API_RETURN ns={time.perf_counter_ns()} op=ReadFile handle={h} ok={read_ok} bytes={count.value} error={read_error}",flush=True)
-      if read_ok and buf.raw[:count.value]==b"GET\n":
-        answer=pool.alloc().encode("ascii")
-      else:
-        answer=b"INVALID\n"
       n=W.DWORD()
-      print(f"ALLOC_API_ENTER ns={time.perf_counter_ns()} op=WriteFile handle={h} bytes={len(answer)}",flush=True)
-      write_ok=bool(K.WriteFile(h,answer,len(answer),C.byref(n),None))
-      write_error=0 if write_ok else C.get_last_error()
-      print(f"ALLOC_API_RETURN ns={time.perf_counter_ns()} op=WriteFile handle={h} ok={write_ok} bytes={n.value} error={write_error}",flush=True)
-      if not write_ok or n.value!=len(answer):
-        raise OSError(write_error,"WriteFile(allocation)")
-      print(f"ALLOC_API_ENTER ns={time.perf_counter_ns()} op=FlushFileBuffers handle={h}",flush=True)
-      flush_ok=bool(K.FlushFileBuffers(h))
-      flush_error=0 if flush_ok else C.get_last_error()
-      print(f"ALLOC_API_RETURN ns={time.perf_counter_ns()} op=FlushFileBuffers handle={h} ok={flush_ok} error={flush_error}",flush=True)
-      if not flush_ok:
-        raise OSError(flush_error,"FlushFileBuffers(allocation)")
+      if not K.ReadFile(h,buf,64,C.byref(n),None):
+        error=C.get_last_error()
+        if error in (109,ERROR_NO_DATA,233):
+          return
+        raise OSError(error,"ReadFile(allocation)")
+      answer=(pool.alloc().encode("ascii") if buf.raw[:n.value]==b"GET\n"
+              else b"INVALID\n")
+      sent=W.DWORD()
+      if not K.WriteFile(h,answer,len(answer),C.byref(sent),None):
+        error=C.get_last_error()
+        if error not in (109,ERROR_NO_DATA,233):
+          raise OSError(error,"WriteFile(allocation)")
+        return
+      if sent.value!=len(answer):
+        raise OSError("short allocation reply write")
+      if not K.FlushFileBuffers(h):
+        error=C.get_last_error()
+        if error not in (109,ERROR_NO_DATA,233):
+          raise OSError(error,"FlushFileBuffers(allocation)")
+    except Exception as error:
+      # An individual abandoned connection must not terminate the manager.
+      print("ALLOCATOR_CONNECTION_ERROR "+repr(error),flush=True)
     finally:
-      for h in handles:
-        print(f"ALLOC_API_ENTER ns={time.perf_counter_ns()} op=DisconnectNamedPipe handle={h}",flush=True)
-        disconnected=bool(K.DisconnectNamedPipe(h))
-        print(f"ALLOC_API_RETURN ns={time.perf_counter_ns()} op=DisconnectNamedPipe handle={h} ok={disconnected} error={0 if disconnected else C.get_last_error()}",flush=True)
-      for t in threads:
-        t.join(timeout=5)
-        if t.is_alive():
-          raise RuntimeError("allocation connection waiter did not stop")
-      for h in handles:
+      K.DisconnectNamedPipe(h)
+      K.CloseHandle(h)
+
+  try:
+    for _ in range(backlog):
+      new_listener()
+    while not pool.closing.is_set():
+      try:
+        h,ok,error=pending.get(timeout=.25)
+      except queue.Empty:
+        continue
+      # Replenish the backlog BEFORE spending time on the accepted client.
+      new_listener()
+      if ok:
+        threading.Thread(target=serve_connection,args=(h,),daemon=True).start()
+      else:
         K.CloseHandle(h)
+        print(f"ALLOCATOR_ACCEPT_ERROR {error}",flush=True)
+  except Exception as error:
+    with pool.lock:
+      pool.errors.append("allocation listener failed: "+repr(error))
+    print("ALLOCATOR_FATAL "+repr(error),flush=True)
+    raise
+
 
 def main():
   parser=argparse.ArgumentParser()
