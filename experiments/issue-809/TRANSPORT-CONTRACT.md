@@ -18,7 +18,7 @@ Allocation uses two distinct logical channels on **all** platforms:
 1. `allocate-req`: git-ipc -> git-manager, carrying `GET\n`.
 2. `allocate-reply`: git-manager -> git-ipc, carrying one worker identifier followed by newline (or a defined error).
 
-The allocated worker has four existing logical channels: `stdin` (git-ipc -> worker, currently also carrying command arguments and the cwd/environment request frame), `stdout`, `stderr`, `exit-code` (worker -> git-ipc). If the control frame is subsequently split into its own `param-env-cwd` channel, that channel is also unidirectional, git-ipc -> worker; no handshake byte may enter it as request data.
+The allocated worker has **five distinct logical channels**: `stdin` and `param-env-cwd` (git-ipc -> worker); `stdout`, `stderr`, and `exit-code` (worker -> git-ipc). Arguments, cwd and environment are carried exclusively by `param-env-cwd`; stdin is a separate stream. Windows sends and consumes `T` separately on each channel, including stdin. No handshake byte enters application data.
 
 Linux/macOS use ordinary unidirectional FIFOs, with **no** `T` marker.
 
@@ -46,4 +46,4 @@ For the allocation channels, the GET request and worker-ID reply travel over dis
 
 ## Implementation notes
 
-The prior Windows experimental code uses one duplex GET/PID pipe, and the worker creates two instances per standard channel but chooses by connection order. Those are **superseded designs** and require implementation corrections before this contract is met. The Unix experiment already uses separate request/reply FIFO names. Existing Unix request-FIFO open-mode implementation must be reviewed for reliance on `O_RDWR` despite the logical channel being unidirectional.
+The original Windows single duplex GET/PID pipe and instance-order selection are superseded. The implementation branch introduces separate GET/ID names, T-based selection, and a separate command/context channel; native CI must verify all changes at the same SHA. Unix now uses separate FIFO descriptors rather than `O_RDWR` for its manager request FIFO.
