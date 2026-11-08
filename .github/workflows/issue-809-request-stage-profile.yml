@@ -30,6 +30,12 @@ jobs:
         run: |
           . /etc/profile
           set -euo pipefail
+          mkdir -p git809-bash-pipe-results
+          exec 8>git809-bash-pipe-results/harness-shell-trace.log
+          export BASH_XTRACEFD=8
+          PS4='+GIT809_PROFILE line=${LINENO} '
+          set -x
+          trap 'rc=$?; echo "GIT809_PROFILE_FAILURE line=$LINENO rc=$rc" >&2; exit "$rc"' ERR
           PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
           export GIT809_MANAGER_PYTHON="$(cygpath -w "$PYTHON_EXE")"
           export GIT809_WORKER_GIT="$(cygpath -w "$PWD/git.exe")"
