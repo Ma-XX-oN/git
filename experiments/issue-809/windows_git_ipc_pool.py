@@ -282,13 +282,15 @@ def allocation_server(owner_pid:int,pool:Pool):
       if not frame.startswith(b"TGET ") or not frame.endswith(b"\n"):
         raise ValueError("bad GET frame or missing T marker")
       raw_id=frame[5:-1]
-      if not raw_id.isdigit() or len(raw_id)>10:
-        raise ValueError("invalid reply ID")
-      client_id=int(raw_id)
-      if not 1<=client_id<=0xffffffff:
-        raise ValueError("reply ID out of range")
+      parts=raw_id.split(b"-")
+      if len(parts)!=2 or any(not p.isdigit() or len(p)>10 for p in parts):
+        raise ValueError("invalid reply identity")
+      client_pid,sequence=(int(p) for p in parts)
+      if not 1<=client_pid<=0xffffffff or not 1<=sequence<=0xffffffff:
+        raise ValueError("reply identity out of range")
+      # A unique reply pipe is required per request, not just per client.
       reply=(r"\\.\pipe\git809-allocate-reply-"+str(owner_pid)+
-             "-"+str(client_id))
+             "-"+str(client_pid)+"-"+str(sequence))
       response=select_transport(reply)
       try:
         answer=pool.alloc().encode("ascii")
