@@ -3776,21 +3776,102 @@ NORETURN void git_preinit_worker_exit(int status)
  * Experimental preinitialized Git worker.  The PID identifies four
  * two instances per channel; the Python manager never forwards command bytes.
  */
-static int git_preinit_connect(HANDLE h, int probe_instance)
-{
+/*
+ * Git Bash can open a throwaway pipe instance during redirection.
+ * Each instance is connected independently, and only a client-sent 'T'
+ * identifies the transport. Never rely on instance number or probe EOF.
+ *
+ * ConnectNamedPipe is synchronous for these handles. Put both connection
+ * waits on cancellable threads; the selected handle remains synchronous
+ * for Git's ordinary stream I/O.
+ */
+struct git809_connect_state {
+  HANDLE pipe;
+  HANDLE thread;
+  volatile LONG complete;
   DWORD error;
+};
 
-  if (ConnectNamedPipe(h, NULL))
-    return 1;
-  error = GetLastError();
-  /*
-   * Git Bash can close its first (probe) pipe connection before the
-   * server has called ConnectNamedPipe(). ERROR_NO_DATA means that
-   * client has already disconnected. This is acceptable for the
-   * deliberately unused probe instance, NEVER the data instance.
-   */
-  return error == ERROR_PIPE_CONNECTED ||
-         (probe_instance && error == ERROR_NO_DATA);
+static DWORD WINAPI git809_connect_thread(LPVOID context)
+{
+  struct git809_connect_state *state = context;
+  BOOL ok = ConnectNamedPipe(state->pipe, NULL);
+  DWORD error = ok ? ERROR_SUCCESS : GetLastError();
+
+  state->error = error;
+  InterlockedExchange(&state->complete, 1);
+  return 0;
+}
+
+static void git809_finish_connect(struct git809_connect_state *state)
+{
+  if (!state->thread)
+    return;
+  if (!InterlockedCompareExchange(&state->complete, 0, 0))
+    CancelSynchronousIo(state->thread);
+  WaitForSingleObject(state->thread, INFINITE);
+  CloseHandle(state->thread);
+  state->thread = NULL;
+}
+
+/*
+ * Consume the marker, never forwarding it to Git or its caller.
+ * Unused probe handles are closed only after their connect waits finish.
+ */
+static HANDLE git809_select_transport(HANDLE pair[2])
+{
+  struct git809_connect_state state[2] = {0};
+  DWORD start = GetTickCount(), available, n;
+  HANDLE chosen = INVALID_HANDLE_VALUE;
+  int i, marked[2];
+
+  for (i = 0; i < 2; i++) {
+    state[i].pipe = pair[i];
+    state[i].thread = CreateThread(NULL, 0, git809_connect_thread,
+                                   &state[i], 0, NULL);
+    if (!state[i].thread)
+      goto done;
+  }
+  while (GetTickCount() - start < 2000) {
+    for (i = 0; i < 2; i++) {
+      marked[i] = 0;
+      if (!InterlockedCompareExchange(&state[i].complete, 0, 0))
+        continue;
+      if (state[i].error != ERROR_SUCCESS &&
+          state[i].error != ERROR_PIPE_CONNECTED)
+        continue;
+      available = 0;
+      if (PeekNamedPipe(pair[i], NULL, 0, NULL, &available, NULL) &&
+          available)
+        marked[i] = 1;
+    }
+    if (marked[0] && marked[1])
+      goto done; /* two transports for one logical channel */
+    if (marked[0] || marked[1]) {
+      i = marked[1] ? 1 : 0;
+      {
+        char marker;
+        if (!ReadFile(pair[i], &marker, 1, &n, NULL) ||
+            n != 1 || marker != 'T')
+          goto done;
+      }
+      chosen = pair[i];
+      pair[i] = INVALID_HANDLE_VALUE;
+      break;
+    }
+    Sleep(1);
+  }
+done:
+  for (i = 0; i < 2; i++)
+    git809_finish_connect(&state[i]);
+  for (i = 0; i < 2; i++) {
+    if (pair[i] != INVALID_HANDLE_VALUE) {
+      DisconnectNamedPipe(pair[i]);
+      CloseHandle(pair[i]);
+      pair[i] = INVALID_HANDLE_VALUE;
+    }
+  }
+  return chosen;
 }
 
 /*
@@ -3913,7 +3994,7 @@ static int git_preinit_worker(void)
       goto cleanup;
     for (j = 0; j < 2; j++) {
       pipes[i][j] = CreateNamedPipeA(names[i],
-        (i == 0 ? PIPE_ACCESS_INBOUND : PIPE_ACCESS_OUTBOUND) |
+        PIPE_ACCESS_DUPLEX |
           (j == 0 ? FILE_FLAG_FIRST_PIPE_INSTANCE : 0),
         PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
         2, 65536, 65536, 5000, &security_attributes);
@@ -3927,22 +4008,19 @@ static int git_preinit_worker(void)
   printf("READY %lu\n", (unsigned long)pid);
   fflush(stdout);
   /*
-   * Git Bash's initial open consumes a pipe instance without carrying data.
-   * Keep a second instance ready for each channel's actual redirection.
-   * Retain the original channel-open order.
+   * Keep the established channel-open order. Each channel is selected by
+   * the client marker, not by the index of the pipe instance.
    */
   {
     const int order[4] = {1, 2, 3, 0};
     for (i = 0; i < 4; i++) {
       int channel = order[i];
-      if (!git_preinit_connect(pipes[channel][0], 1) ||
-          !git_preinit_connect(pipes[channel][1], channel == 0)) {
+      HANDLE selected = git809_select_transport(pipes[channel]);
+      if (selected == INVALID_HANDLE_VALUE) {
         rc = 122;
         goto cleanup;
       }
-      DisconnectNamedPipe(pipes[channel][0]);
-      CloseHandle(pipes[channel][0]);
-      pipes[channel][0] = INVALID_HANDLE_VALUE;
+      pipes[channel][1] = selected;
     }
   }
   while (used < frame_capacity) {
