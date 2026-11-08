@@ -2,6 +2,14 @@
 # All text fields are UTF-8; environment is an exact byte-counted snapshot.
 _git809_write_context() {
   local platform=$1
+  if [[ $platform == windows ]]; then
+    printf 'cwd-win\0' || return 1
+    pwd -W || return 1
+    printf '\0env-export\0' || return 1
+    export -p || return 1
+    printf '\0' || return 1
+    return 0
+  fi
   local cwd=$PWD
   local name i size header
   local -a names=() values=()
