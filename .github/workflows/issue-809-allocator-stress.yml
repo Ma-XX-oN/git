@@ -35,6 +35,7 @@ jobs:
           mkdir -p git809-stream-results
           "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_git_ipc_pool.py experiments/issue-809/test_allocator_probe_hold.py experiments/issue-809/test_windows_transport_selection.py
           "$PYTHON_EXE" experiments/issue-809/test_windows_transport_selection.py
+          "$PYTHON_EXE" experiments/issue-809/test_windows_worker_lifecycle.py "$GIT809_WORKER_GIT" || exit 20
           bash -n experiments/issue-809/git-ipc-request.sh || exit 21
           source experiments/issue-809/git-manager.sh 3 || exit 22
           trap 'rc=$?; if [[ -n ${_GIT809_MANAGER_LOG:-} && -f $_GIT809_MANAGER_LOG ]]; then cp -- "$_GIT809_MANAGER_LOG" git809-stream-results/manager.log; if (( rc != 0 )); then tail -n 120 -- "$_GIT809_MANAGER_LOG" >&2; fi; fi; exit "$rc"' EXIT

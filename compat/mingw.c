@@ -14,6 +14,7 @@
 #include "run-command.h"
 #include "strbuf.h"
 #include "symlinks.h"
+#include "trace.h"
 #include "trace2.h"
 #include "win32.h"
 #include "win32/exit-process.h"
@@ -3750,6 +3751,8 @@ static BOOL WINAPI handle_ctrl_c(DWORD ctrl_type)
  */
 #include <setjmp.h>
 static jmp_buf git_preinit_jump;
+/* Set GIT_TRACE_GIT809_PRELOAD to an absolute file path for worker diagnostics. */
+static struct trace_key git809_preload_trace = TRACE_KEY_INIT(GIT809_PRELOAD);
 static volatile int git_preinit_active;
 static volatile int git_preinit_exit_status;
 
@@ -3807,9 +3810,21 @@ static void git809_finish_connect(struct git809_connect_state *state)
 {
   if (!state->thread)
     return;
-  if (!InterlockedCompareExchange(&state->complete, 0, 0))
-    CancelSynchronousIo(state->thread);
+  trace_printf_key(&git809_preload_trace,
+    "pid=%lu connect-finish begin pipe=%p complete=%ld\n",
+    GetCurrentProcessId(), state->pipe,
+    InterlockedCompareExchange(&state->complete, 0, 0));
+  if (!InterlockedCompareExchange(&state->complete, 0, 0)) {
+    BOOL cancelled = CancelSynchronousIo(state->thread);
+    DWORD error = cancelled ? ERROR_SUCCESS : GetLastError();
+    trace_printf_key(&git809_preload_trace,
+      "pid=%lu connect-cancel pipe=%p ok=%d error=%lu\n",
+      GetCurrentProcessId(), state->pipe, cancelled, error);
+  }
   WaitForSingleObject(state->thread, INFINITE);
+  trace_printf_key(&git809_preload_trace,
+    "pid=%lu connect-finish done pipe=%p error=%lu\n",
+    GetCurrentProcessId(), state->pipe, state->error);
   CloseHandle(state->thread);
   state->thread = NULL;
 }
@@ -3890,6 +3905,9 @@ static int select_transport(HANDLE pair[2], DWORD timeout_ms,
     Sleep(1);
   }
 done:
+  trace_printf_key(&git809_preload_trace,
+    "pid=%lu select cleanup result=%d chosen=%p\n",
+    GetCurrentProcessId(), result, chosen);
   for (i = 0; i < 2; i++)
     git809_finish_connect(&state[i]);
   for (i = 0; i < 2; i++) {
@@ -3956,6 +3974,63 @@ static int git_preinit_start_owner_watch(void)
   return 0;
 }
 
+/**
+ * Return 1 for a complete Windows request, 0 for a partial request, and -1
+ * for invalid framing. The final end tag follows argv and context fields;
+ * it lets the client retain the control handle without withholding EOF.
+ */
+static int git_preinit_request_complete(const char *frame, size_t used)
+{
+  size_t pos = 4;
+  unsigned int count, i;
+
+  if (used < 4)
+    return 0;
+  count = (unsigned int)(unsigned char)frame[0] |
+          ((unsigned int)(unsigned char)frame[1] << 8) |
+          ((unsigned int)(unsigned char)frame[2] << 16) |
+          ((unsigned int)(unsigned char)frame[3] << 24);
+  if (!count || count > 32)
+    return -1;
+  for (i = 0; i < count; i++) {
+    const char *end = memchr(frame + pos, '\0', used - pos);
+    if (!end)
+      return 0;
+    pos = end - frame + 1;
+  }
+  while (pos < used) {
+    const char *tag = frame + pos;
+    const char *end = memchr(tag, '\0', used - pos);
+    if (!end)
+      return 0;
+    pos = end - frame + 1;
+    if (!strcmp(tag, "end"))
+      return pos == used ? 1 : -1;
+    if (!strcmp(tag, "env")) {
+      size_t size;
+      if (used - pos < 4)
+        return 0;
+      size = (unsigned char)frame[pos] |
+             ((unsigned long)(unsigned char)frame[pos + 1] << 8) |
+             ((unsigned long)(unsigned char)frame[pos + 2] << 16) |
+             ((unsigned long)(unsigned char)frame[pos + 3] << 24);
+      pos += 4;
+      if (size > used - pos)
+        return 0;
+      pos += size;
+    } else if (!strcmp(tag, "cwd") || !strcmp(tag, "cwd-win") ||
+               !strcmp(tag, "env-export")) {
+      end = memchr(frame + pos, '\0', used - pos);
+      if (!end)
+        return 0;
+      pos = end - frame + 1;
+    } else {
+      return -1;
+    }
+  }
+  return 0;
+}
+
 static int git_preinit_worker(void)
 {
   char names[5][96];
@@ -3966,6 +4041,7 @@ static int git_preinit_worker(void)
   char result[64];
   const DWORD frame_capacity = 131072;
   DWORD used = 0, n;
+  int request_complete = 0;
   int i, j, count, pos, rc = 120, written, infd, outfd, errfd;
   const char *args[33] = {0};
   DWORD pid = GetCurrentProcessId();
@@ -4038,6 +4114,7 @@ static int git_preinit_worker(void)
   /* READY is an initialization handshake, not Git command output. */
   printf("READY %lu\n", (unsigned long)pid);
   fflush(stdout);
+  trace_printf_key(&git809_preload_trace, "pid=%lu ready\n", pid);
   /*
    * Keep the established channel-open order. Each channel is selected by
    * the client marker, not by the index of the pipe instance.
@@ -4048,8 +4125,15 @@ static int git_preinit_worker(void)
       int channel = order[i];
       HANDLE selected;
       char received = 0;
-      int transport_rc = select_transport(pipes[channel], 2000, &selected,
-                                          expected_marker, &received);
+      int transport_rc;
+      trace_printf_key(&git809_preload_trace,
+        "pid=%lu select begin channel=%s expected=%d\n",
+        pid, suffixes[channel], expected_marker);
+      transport_rc = select_transport(pipes[channel], 2000, &selected,
+                                      expected_marker, &received);
+      trace_printf_key(&git809_preload_trace,
+        "pid=%lu select done channel=%s result=%d marker=%d\n",
+        pid, suffixes[channel], transport_rc, received);
       if (transport_rc != TRANSPORT_OK) {
         rc = 122;
         goto cleanup;
@@ -4060,20 +4144,40 @@ static int git_preinit_worker(void)
     }
   }
   while (used < frame_capacity) {
+    int complete;
+    trace_printf_key(&git809_preload_trace,
+      "pid=%lu request-read begin used=%lu\n", pid, used);
     if (!ReadFile(pipes[4][1], frame + used, frame_capacity - used, &n, NULL)) {
-      if (GetLastError() != ERROR_BROKEN_PIPE) {
+      DWORD error = GetLastError();
+      trace_printf_key(&git809_preload_trace,
+        "pid=%lu request-read error=%lu used=%lu\n", pid, error, used);
+      if (error != ERROR_BROKEN_PIPE) {
         rc = 123;
         goto cleanup;
       }
       break;
     }
+    trace_printf_key(&git809_preload_trace,
+      "pid=%lu request-read bytes=%lu\n", pid, n);
     if (!n)
       break;
     used += n;
+    complete = git_preinit_request_complete(frame, used);
+    if (complete < 0) {
+      rc = 124;
+      goto cleanup;
+    }
+    if (complete) {
+      used -= sizeof("end");
+      request_complete = 1;
+      break;
+    }
   }
   CloseHandle(pipes[4][1]);
+  trace_printf_key(&git809_preload_trace,
+    "pid=%lu request-complete bytes=%lu\n", pid, used);
   pipes[4][1] = INVALID_HANDLE_VALUE;
-  if (used < 4 || used == frame_capacity) {
+  if (!request_complete || used < 4 || used == frame_capacity) {
     rc = 124;
     goto cleanup;
   }
@@ -4108,16 +4212,18 @@ static int git_preinit_worker(void)
   }
   args[count] = NULL;
   /*
-   * The request writer has closed. Its bytes have already been read;
-   * retain the readable endpoint as Git's stdin, which now produces EOF.
-   * Do not flush or disconnect the input endpoint.
+   * The complete request frame has been read; its writer may remain open.
+   * Application stdin forwarding is unavailable: provide EOF from NUL.
+   * The client keeps the stdin transport open until output completion so
+   * its connection marker cannot be lost before select_transport reads it.
    */
-  infd = _open_osfhandle((intptr_t)pipes[0][1], _O_BINARY);
+  CloseHandle(pipes[0][1]);
+  pipes[0][1] = INVALID_HANDLE_VALUE;
+  infd = _open("NUL", _O_RDONLY | _O_BINARY);
   if (infd < 0) {
     rc = 132;
     goto cleanup;
   }
-  pipes[0][1] = INVALID_HANDLE_VALUE;
   if (_dup2(infd, 0) < 0) {
     _close(infd);
     rc = 133;
@@ -4155,6 +4261,8 @@ static int git_preinit_worker(void)
     goto cleanup;
   }
   git_preinit_active = 1;
+  trace_printf_key(&git809_preload_trace,
+    "pid=%lu command begin argc=%d\n", pid, count);
   set_preload_exit_callback(git_preinit_worker_exit);
   if (!setjmp(git_preinit_jump)) {
     init_git(args);
@@ -4166,23 +4274,47 @@ static int git_preinit_worker(void)
   }
   set_preload_exit_callback(NULL);
   git_preinit_active = 0;
+  trace_printf_key(&git809_preload_trace,
+    "pid=%lu command done rc=%d\n", pid, rc);
   fflush(stdout);
   fflush(stderr);
   /*
    * Windows waits until readers consume all pipe bytes. Closing each
    * descriptor then provides EOF. The client drains both concurrently.
    */
+  trace_printf_key(&git809_preload_trace, "pid=%lu flush stdout begin\n", pid);
   FlushFileBuffers((HANDLE)_get_osfhandle(_fileno(stdout)));
+  trace_printf_key(&git809_preload_trace, "pid=%lu flush stderr begin\n", pid);
   FlushFileBuffers((HANDLE)_get_osfhandle(_fileno(stderr)));
+  trace_printf_key(&git809_preload_trace, "pid=%lu flush done\n", pid);
   _close(_fileno(stdout));
   _close(_fileno(stderr));
   _close(0);
 cleanup:
+  trace_printf_key(&git809_preload_trace, "pid=%lu cleanup rc=%d\n", pid, rc);
+  /* The client drains output before reading status, including on failure. */
+  for (i = 0; i < 5; i++) {
+    if (i == 3)
+      continue;
+    for (j = 0; j < 2; j++) {
+      if (pipes[i][j] != INVALID_HANDLE_VALUE) {
+        CloseHandle(pipes[i][j]);
+        pipes[i][j] = INVALID_HANDLE_VALUE;
+      }
+    }
+  }
   written = snprintf(result, sizeof(result), "EXIT %d\n", rc);
   if (pipes[3][1] != INVALID_HANDLE_VALUE) {
+    trace_printf_key(&git809_preload_trace,
+      "pid=%lu status-write begin rc=%d\n", pid, rc);
     if (written > 0 && written < sizeof(result) &&
-        WriteFile(pipes[3][1], result, written, &n, NULL))
+        WriteFile(pipes[3][1], result, written, &n, NULL)) {
+      trace_printf_key(&git809_preload_trace,
+        "pid=%lu status-flush begin bytes=%lu\n", pid, n);
       FlushFileBuffers(pipes[3][1]);
+      trace_printf_key(&git809_preload_trace,
+        "pid=%lu status-flush done\n", pid);
+    }
     DisconnectNamedPipe(pipes[3][1]);
     CloseHandle(pipes[3][1]);
     pipes[3][1] = INVALID_HANDLE_VALUE;
@@ -4191,6 +4323,8 @@ cleanup:
     for (j = 0; j < 2; j++)
       if (pipes[i][j] != INVALID_HANDLE_VALUE)
         CloseHandle(pipes[i][j]);
+  trace_printf_key(&git809_preload_trace,
+    "pid=%lu cleanup handles closed\n", pid);
   free(frame);
   free(acl);
   free(token_user);

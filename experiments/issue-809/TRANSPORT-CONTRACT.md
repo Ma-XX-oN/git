@@ -26,8 +26,14 @@ Linux/macOS use ordinary unidirectional FIFOs, with **no** `T` marker.
 
 The `stdin` logical channel remains separately established, and on Windows
 the Git worker consumes the initial decimal marker before application I/O.
-However, **application stdin forwarding is not implemented**: the Bash client
-closes the stdin writer after connection setup, and the worker sees EOF.
+However, **application stdin forwarding is not implemented**. On Unix the
+Bash client closes the stdin writer after connection setup. On Windows the
+client keeps it open through output EOF so the connection marker cannot be
+discarded before consumption; the native worker supplies stdin EOF from NUL.
+The Windows command/context frame ends with an `end` NUL-terminated tag after
+argv and context fields. The worker recognizes this tag at a field boundary;
+the client keeps the control writer open through output EOF instead of using
+pipe closure to delimit the request. Unix framing is unchanged.
 This applies to interactive terminals, redirected regular files, and pipes.
 
 An attempted implementation used a per-command background `cat` relay.

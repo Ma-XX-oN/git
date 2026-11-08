@@ -3,6 +3,24 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/git-ipc-request.sh" || return 1
 # IPC client and manager launcher for the native Git --preload worker.
 # Requires GIT809_WORKER_GIT (native Git executable with --preload support)
 # and GIT809_MANAGER_PYTHON (native Windows Python 3).
+# Busy-wait without a child process. Usage: sleep seconds (one numeric value).
+# Bash discards /dev/zero's NUL bytes, so read ends only at its timeout.
+sleep() {
+  local delay_data status
+  if (( $# != 1 )); then
+    printf 'sleep requires one duration in seconds\n' >&2
+    return 2
+  fi
+  if IFS= read -r -N 1 -t "$1" delay_data < /dev/zero; then
+    return 0
+  else
+    status=$?
+  fi
+  # SIGALRM is the expected timeout; preserve errors and other signals.
+  if (( status == 142 )); then return 0; fi
+  return "$status"
+}
+
 _git809_source_manager() {
   local requested
   requested=$1
@@ -72,6 +90,21 @@ if (( _git809_source_rc != 0 )); then
   return "$_git809_source_rc"
 fi
 
+# Close selected descriptor numbers, or all reserved IPC descriptors in the
+# current git-ipc call when no arguments are supplied. Repeated closes are safe.
+close_fhs() {
+  local fd
+  if (( $# == 0 )); then
+    exec {fd_allocate_request}>&- {fd_allocate_reply}>&- \
+         {fd_worker_stdin}>&- {fd_worker_stdout}>&- {fd_worker_stderr}>&- \
+         {fd_worker_exit}>&- {fd_worker_control}>&-
+    return
+  fi
+  for fd in "$@"; do
+    exec {fd}>&-
+  done
+}
+
 # Open any Windows IPC channel and consume its one-byte call marker here.
 # Keep the established descriptor numbers and opening order unchanged.
 _git809_open_pipe() {
@@ -91,10 +124,7 @@ _git809_open_pipe() {
       if printf '%s' "$marker" >&"$fd"; then
         return 0
       fi
-      case $fd in
-        3) exec 3>&- ;; 4) exec 4>&- ;; 5) exec 5>&- ;;
-        6) exec 6>&- ;; 7) exec 7>&- ;; 8) exec 8>&- ;;
-      esac
+      close_fhs "$fd"
       return 1
     fi
     if (( attempt + 1 < retries )); then sleep .005; fi
@@ -128,19 +158,20 @@ git-ipc() {
   printf -v reply '%s%s-%s' '\\.\pipe\git809-allocate-reply-' "$_GIT809_OWNER_WINPID" "$request_id"
   local pid i count header arg status line
   if ! _git809_open_pipe "$fd_allocate_request" "$allocator" "$marker" 400; then
+    close_fhs
     printf 'GIT-IPC ERROR: allocation request pipe unavailable\n' >&2; return 255
   fi
   if ! printf 'GET %s\n' "$request_id" >&"$fd_allocate_request"; then
-    exec {fd_allocate_request}>&-
+    close_fhs
     printf 'GIT-IPC ERROR: allocation request write failed\n' >&2; return 255
   fi
   # Keep request open until ID delivery so the server can read its bytes.
   if ! _git809_open_pipe "$fd_allocate_reply" "$reply" "$marker" 400; then
-    exec {fd_allocate_request}>&-
+    close_fhs
     printf 'GIT-IPC ERROR: allocation reply pipe unavailable\n' >&2; return 255
   fi
-  IFS= read -r pid <&"$fd_allocate_reply" || { exec {fd_allocate_reply}>&- {fd_allocate_request}>&-; printf 'GIT-IPC ERROR: allocation response failed\n' >&2; return 255; }
-  exec {fd_allocate_reply}>&- {fd_allocate_request}>&-
+  IFS= read -r pid <&"$fd_allocate_reply" || { close_fhs; printf 'GIT-IPC ERROR: allocation response failed\n' >&2; return 255; }
+  close_fhs "$fd_allocate_reply" "$fd_allocate_request"
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE allocated pid=%s bashpid=%s\n' "$pid" "$BASHPID" >>"$_GIT809_MANAGER_LOG"
   if [[ $pid == WAIT ]]; then
     printf 'Git worker pool temporarily depleted\n' >&2
@@ -160,32 +191,39 @@ git-ipc() {
 
   # Open in the same order that the native worker accepts connections.
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE open stdout pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
-  _git809_open_pipe "$fd_worker_stdout" "$pout" "$marker" || { printf 'GIT-IPC ERROR: stdout pipe open failed\n' >&2; return 255; }
+  _git809_open_pipe "$fd_worker_stdout" "$pout" "$marker" || { close_fhs; printf 'GIT-IPC ERROR: stdout pipe open failed\n' >&2; return 255; }
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE open stderr pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
-  _git809_open_pipe "$fd_worker_stderr" "$perr" "$marker" || { exec {fd_worker_stdout}<&-; printf 'GIT-IPC ERROR: stderr pipe open failed\n' >&2; return 255; }
+  _git809_open_pipe "$fd_worker_stderr" "$perr" "$marker" || { close_fhs; printf 'GIT-IPC ERROR: stderr pipe open failed\n' >&2; return 255; }
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE open exit pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
-  _git809_open_pipe "$fd_worker_exit" "$pexit" "$marker" || { exec {fd_worker_stdout}<&- {fd_worker_stderr}<&-; printf 'GIT-IPC ERROR: exit-status pipe open failed\n' >&2; return 255; }
+  _git809_open_pipe "$fd_worker_exit" "$pexit" "$marker" || { close_fhs; printf 'GIT-IPC ERROR: exit-status pipe open failed\n' >&2; return 255; }
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE open stdin pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
-  _git809_open_pipe "$fd_worker_stdin" "$pstdin" "$marker" || { exec {fd_worker_stdout}<&- {fd_worker_stderr}<&- {fd_worker_exit}<&-; printf 'GIT-IPC ERROR: stdin pipe open failed\n' >&2; return 255; }
-  _git809_open_pipe "$fd_worker_control" "$pcontrol" "$marker" || { exec {fd_worker_stdout}<&- {fd_worker_stderr}<&- {fd_worker_exit}<&- {fd_worker_stdin}>&-; printf 'GIT-IPC ERROR: control pipe open failed\n' >&2; return 255; }
+  _git809_open_pipe "$fd_worker_stdin" "$pstdin" "$marker" || { close_fhs; printf 'GIT-IPC ERROR: stdin pipe open failed\n' >&2; return 255; }
+  _git809_open_pipe "$fd_worker_control" "$pcontrol" "$marker" || { close_fhs; printf 'GIT-IPC ERROR: control pipe open failed\n' >&2; return 255; }
   # No relay process: stdin is unavailable pending process-free handle
   # transfer. Close the worker channel after Windows has consumed the digit.
-  exec {fd_worker_stdin}>&-
+  # The worker supplies EOF from NUL. Keep this handle through output EOF
+  # so closing it cannot discard the marker before the worker reads it.
 
 
   count=$(( $# + 1 ))
   printf -v header '\\x%02x\\x00\\x00\\x00' "$count"
-  printf '%b' "$header" >&"$fd_worker_control" || { printf 'GIT-IPC ERROR: worker request write failed\n' >&2; return 255; }
-  printf 'git\x00' >&"$fd_worker_control" || { printf 'GIT-IPC ERROR: worker request write failed\n' >&2; return 255; }
+  printf '%b' "$header" >&"$fd_worker_control" || { close_fhs; printf 'GIT-IPC ERROR: worker request write failed\n' >&2; return 255; }
+  printf 'git\x00' >&"$fd_worker_control" || { close_fhs; printf 'GIT-IPC ERROR: worker request write failed\n' >&2; return 255; }
   for arg in "$@"; do
-    printf '%s\x00' "$arg" >&"$fd_worker_control" || { printf 'GIT-IPC ERROR: worker request write failed\n' >&2; return 255; }
+    printf '%s\x00' "$arg" >&"$fd_worker_control" || { close_fhs; printf 'GIT-IPC ERROR: worker request write failed\n' >&2; return 255; }
   done
   _git809_write_context windows >&"$fd_worker_control" || {
-    exec {fd_worker_control}>&-
+    close_fhs
     printf 'GIT-IPC ERROR: context frame write failed\n' >&2
     return 255
   }
-  exec {fd_worker_control}>&-
+  printf 'end\0' >&"$fd_worker_control" || {
+    close_fhs
+    printf 'GIT-IPC ERROR: request end tag write failed\n' >&2
+    return 255
+  }
+  # Keep both writers open until output EOF: neither connection marker
+  # nor request bytes may be discarded by a close before server consumption.
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE sent stdin pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
 
   # Experimental second timing mode: stdout accumulates all available
@@ -203,9 +241,9 @@ git-ipc() {
         [[ -z $chunk ]] || printf '%s' "$chunk"
         if (( read_rc == 1 )); then
           out_open=0
-          exec {fd_worker_stdout}<&-
+          close_fhs "$fd_worker_stdout"
         elif (( read_rc != 0 && read_rc <= 128 )); then
-          exec {fd_worker_stdout}<&- {fd_worker_stderr}<&- {fd_worker_exit}<&-
+          close_fhs
           printf 'GIT-IPC ERROR: output pipe read failed\n' >&2; return 255
         fi
       fi
@@ -216,16 +254,17 @@ git-ipc() {
         [[ -z $stderr_chunk ]] || printf '%s' "$stderr_chunk" >&2
         if (( read_rc == 1 )); then
           err_open=0
-          exec {fd_worker_stderr}<&-
+          close_fhs "$fd_worker_stderr"
         elif (( read_rc != 0 && read_rc <= 128 )); then
-          exec {fd_worker_stdout}<&- {fd_worker_stderr}<&- {fd_worker_exit}<&-
+          close_fhs
           printf 'GIT-IPC ERROR: output pipe read failed\n' >&2; return 255
         fi
       fi
     done
     [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE drained data pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
-    IFS= read -r status <&"$fd_worker_exit" || { exec {fd_worker_exit}<&-; printf 'GIT-IPC ERROR: exit-status read failed\n' >&2; return 255; }
-    exec {fd_worker_exit}<&-
+    close_fhs "$fd_worker_stdin" "$fd_worker_control"
+    IFS= read -r status <&"$fd_worker_exit" || { close_fhs; printf 'GIT-IPC ERROR: exit-status read failed\n' >&2; return 255; }
+    close_fhs
     if [[ $status =~ ^EXIT[[:space:]]([0-9]+)$ ]]; then
       return "${BASH_REMATCH[1]}"
     fi
@@ -244,9 +283,9 @@ git-ipc() {
       [[ -z $chunk ]] || printf '%s' "$chunk"
       if (( read_rc == 1 )); then
         out_open=0
-        exec {fd_worker_stdout}<&-
+        close_fhs "$fd_worker_stdout"
       elif (( read_rc != 0 && read_rc <= 128 )); then
-        exec {fd_worker_stdout}<&- {fd_worker_stderr}<&- {fd_worker_exit}<&-
+        close_fhs
         printf 'GIT-IPC ERROR: output pipe read failed\n' >&2; return 255
       fi
     fi
@@ -257,15 +296,16 @@ git-ipc() {
       [[ -z $chunk ]] || printf '%s' "$chunk" >&2
       if (( read_rc == 1 )); then
         err_open=0
-        exec {fd_worker_stderr}<&-
+        close_fhs "$fd_worker_stderr"
       elif (( read_rc != 0 && read_rc <= 128 )); then
-        exec {fd_worker_stdout}<&- {fd_worker_stderr}<&- {fd_worker_exit}<&-
+        close_fhs
         printf 'GIT-IPC ERROR: output pipe read failed\n' >&2; return 255
       fi
     fi
   done
-  IFS= read -r status <&"$fd_worker_exit" || { exec {fd_worker_exit}<&-; printf 'GIT-IPC ERROR: exit-status read failed\n' >&2; return 255; }
-  exec {fd_worker_exit}<&-
+  close_fhs "$fd_worker_stdin" "$fd_worker_control"
+  IFS= read -r status <&"$fd_worker_exit" || { close_fhs; printf 'GIT-IPC ERROR: exit-status read failed\n' >&2; return 255; }
+  close_fhs
   if [[ $status =~ ^EXIT[[:space:]]([0-9]+)$ ]]; then
     return "${BASH_REMATCH[1]}"
   fi
