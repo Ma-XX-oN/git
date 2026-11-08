@@ -3881,8 +3881,8 @@ static int select_transport(HANDLE pair[2], DWORD timeout_ms,
           result = TRANSPORT_INVALID_MARKER;
           goto done;
         }
+        *actual_marker = marker;
       }
-      *actual_marker = marker;
       chosen = pair[i];
       pair[i] = INVALID_HANDLE_VALUE;
       result = TRANSPORT_OK;
