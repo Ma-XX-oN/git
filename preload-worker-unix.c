@@ -33,26 +33,51 @@ NORETURN void git_preload_worker_exit(int status)
  * the originating Bash PID independently every 10 seconds. Do not use
  * getppid(): the worker's immediate parent is the allocation manager.
  */
+static void git_preload_remove_fifos(const char *directory)
+{
+  static const char *const names[4] = {
+    "stdout", "stderr", "exit-code", "stdin"
+  };
+  char path[1024];
+  int i;
+
+  for (i = 0; i < 4; i++) {
+    if (snprintf(path, sizeof(path), "%s/%s", directory, names[i]) <
+        sizeof(path))
+      unlink(path);
+  }
+  rmdir(directory);
+}
+
+struct preload_owner_watch {
+  pid_t pid;
+  char directory[1];
+};
+
 static void *git_preload_watch_owner(void *context)
 {
-  pid_t owner_pid = (pid_t)(intptr_t)context;
+  struct preload_owner_watch *watch = context;
+  pid_t owner_pid = watch->pid;
 
   for (;;) {
     unsigned int left = 10;
 
     while (left)
       left = sleep(left);
-    if (kill(owner_pid, 0) < 0 && errno == ESRCH)
+    if (kill(owner_pid, 0) < 0 && errno == ESRCH) {
+      git_preload_remove_fifos(watch->directory);
       _exit(137);
+    }
   }
 }
 
-static int git_preload_start_owner_watch(void)
+static int git_preload_start_owner_watch(const char *directory)
 {
   const char *raw = getenv("GIT809_PRELOAD_OWNER_PID");
   unsigned long value = 0;
   pthread_t watcher;
-  size_t i;
+  struct preload_owner_watch *watch;
+  size_t i, n;
 
   if (!raw || !*raw)
     return -1;
@@ -67,9 +92,16 @@ static int git_preload_start_owner_watch(void)
   if (!value || value > INT_MAX ||
       (kill((pid_t)value, 0) < 0 && errno == ESRCH))
     return -1;
-  if (pthread_create(&watcher, NULL, git_preload_watch_owner,
-                     (void *)(intptr_t)(pid_t)value))
+  n = strlen(directory);
+  watch = malloc(sizeof(*watch) + n);
+  if (!watch)
     return -1;
+  watch->pid = (pid_t)value;
+  memcpy(watch->directory, directory, n + 1);
+  if (pthread_create(&watcher, NULL, git_preload_watch_owner, watch)) {
+    free(watch);
+    return -1;
+  }
   pthread_detach(watcher);
   return 0;
 }
@@ -89,7 +121,7 @@ int git_preload_unix_worker(const char *directory)
   size_t used = 0;
   ssize_t n;
 
-  if (git_preload_start_owner_watch())
+  if (git_preload_start_owner_watch(directory))
     return 136;
   if (!directory || strlen(directory) > 960)
     return 121;
@@ -211,6 +243,7 @@ cleanup:
   for (i = 0; i < 4; i++)
     if (fd[i] >= 0)
       close(fd[i]);
+  git_preload_remove_fifos(directory);
   free(frame);
   return rc;
 }
