@@ -89,8 +89,47 @@ def run_case(name,marker_index=None,marker=b"T",drop_probe=False):
         K.CloseHandle(h)
 
 
+def test_duplicate_markers():
+  """Force both markers to be pending before selection examines either."""
+  address=r"\\.\pipe\git809-select-test-"+uuid.uuid4().hex
+  peek=K.PeekNamedPipe
+  go=threading.Event()
+  clients=[]
+  result=[]
+  def held_peek(*args):
+    if not go.wait(5):
+      raise TimeoutError("test marker gate")
+    return peek(*args)
+  def server():
+    try:
+      result.append(("selected",manager.select_transport(address)))
+    except Exception as error:
+      result.append(("error",error))
+  K.PeekNamedPipe=held_peek
+  try:
+    t=threading.Thread(target=server,daemon=True)
+    t.start()
+    clients.append(connect(address))
+    clients.append(connect(address))
+    write(clients[0],b"T")
+    write(clients[1],b"T")
+    go.set()
+    t.join(timeout=5)
+    assert not t.is_alive(),"duplicate marker server stuck"
+    assert len(result)==1 and result[0][0]=="error",result
+    assert isinstance(result[0][1],RuntimeError),result
+    assert "two T markers" in str(result[0][1]),result
+    print("GIT809_SELECT_TRANSPORT_PASS duplicate-markers",flush=True)
+  finally:
+    go.set()
+    K.PeekNamedPipe=peek
+    for h in clients:
+      K.CloseHandle(h)
+
+
 run_case("first-instance-marker",0)
 run_case("second-instance-marker-probe-held",1)
 run_case("disconnected-probe-other-instance-selected",1,drop_probe=True)
 run_case("invalid-marker",1,b"X")
 run_case("missing-marker-timeout")
+test_duplicate_markers()
