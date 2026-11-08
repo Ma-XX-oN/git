@@ -41,7 +41,7 @@ def write(h,data):
   assert n.value==len(data)
 
 
-def run_case(name,marker_index=None,marker=b"T"):
+def run_case(name,marker_index=None,marker=b"T",drop_probe=False):
   address=r"\\.\pipe\git809-select-test-"+uuid.uuid4().hex
   result=[]
   def server():
@@ -56,6 +56,11 @@ def run_case(name,marker_index=None,marker=b"T"):
   try:
     clients.append(connect(address))
     clients.append(connect(address))
+    if drop_probe:
+      assert marker_index in (0,1)
+      probe=1-marker_index
+      K.CloseHandle(clients[probe])
+      clients[probe]=None
     if marker_index is not None:
       write(clients[marker_index],marker)
     t.join(timeout=5)
@@ -80,10 +85,12 @@ def run_case(name,marker_index=None,marker=b"T"):
     print("GIT809_SELECT_TRANSPORT_PASS",name,flush=True)
   finally:
     for h in clients:
-      K.CloseHandle(h)
+      if h is not None:
+        K.CloseHandle(h)
 
 
 run_case("first-instance-marker",0)
 run_case("second-instance-marker-probe-held",1)
+run_case("disconnected-probe-other-instance-selected",1,drop_probe=True)
 run_case("invalid-marker",1,b"X")
 run_case("missing-marker-timeout")
