@@ -74,7 +74,7 @@ fi
 
 # Request a worker PID, then talk directly to its four pipe endpoints.
 # The Python manager only allocates IDs; it never forwards Git output.
-git-ipc() {
+_git809_git_ipc_impl() {
   if [[ -z ${_GIT809_OWNER_WINPID:-} || $# -gt 31 ]]; then
     printf 'git-ipc requires a running manager and at most 31 arguments\n' >&2
     printf 'GIT-IPC ERROR: invalid invocation\n' >&2; return 255
@@ -147,6 +147,15 @@ git-ipc() {
   printf T >&8 || { printf 'GIT-IPC ERROR: channel 8 marker failed\n' >&2; return 255; }
   exec 7<>"$pcontrol" || { exec 4<&- 5<&- 6<&- 8>&-; printf 'GIT-IPC ERROR: control pipe open failed\n' >&2; return 255; }
   printf T >&7 || { printf 'GIT-IPC ERROR: channel 7 marker failed\n' >&2; return 255; }
+  # The Windows stdin pipe is duplex only for its T marker. Forward
+  # subsequent application bytes in the client->worker direction. No extra
+  # child is started for the normal no-input case.
+  if [[ -p /dev/fd/0 || -f /dev/fd/0 ]]; then
+    cat <&0 >&8 &
+    stdin_forward_pid=$!
+  fi
+  exec 8>&-
+
 
   count=$(( $# + 1 ))
   printf -v header '\\x%02x\\x00\\x00\\x00' "$count"
@@ -160,7 +169,7 @@ git-ipc() {
     printf 'GIT-IPC ERROR: context frame write failed\n' >&2
     return 255
   }
-  exec 7>&- 8>&-
+  exec 7>&-
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE sent stdin pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
 
   # Experimental second timing mode: stdout accumulates all available
@@ -246,6 +255,17 @@ git-ipc() {
   fi
   printf 'Invalid Git exit-code response: %s\n' "$status" >&2
   printf 'GIT-IPC ERROR: malformed exit status\n' >&2; return 255
+}
+# Reap the stdin forwarder even if Git fails after its worker is assigned.
+git-ipc() {
+  local stdin_forward_pid= rc
+  _git809_git_ipc_impl "$@"
+  rc=$?
+  if [[ -n $stdin_forward_pid ]]; then
+    kill "$stdin_forward_pid" 2>/dev/null || :
+    wait "$stdin_forward_pid" 2>/dev/null || :
+  fi
+  return "$rc"
 }
 alias git='git-ipc'
 return 0
