@@ -3974,13 +3974,16 @@ static int git_preinit_worker(void)
     goto cleanup;
   }
   git_preinit_active = 1;
+  set_preload_exit_callback(git_preinit_worker_exit);
   if (!setjmp(git_preinit_jump)) {
     init_git(args);
     rc = cmd_main(count, args);
+    set_preload_exit_callback(NULL);
     rc = common_exit(__FILE__, __LINE__, rc);
   } else {
     rc = git_preinit_exit_status;
   }
+  set_preload_exit_callback(NULL);
   git_preinit_active = 0;
   fflush(stdout);
   fflush(stderr);
