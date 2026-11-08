@@ -1,6 +1,13 @@
 #include "git-compat-util.h"
 #include "trace2.h"
 
+static void (*preload_exit_callback)(int);
+
+void set_preload_exit_callback(void (*callback)(int))
+{
+	preload_exit_callback = callback;
+}
+
 static void check_bug_if_BUG(void)
 {
 	if (!bug_called_must_BUG)
@@ -21,6 +28,8 @@ int common_exit(const char *file, int line, int code)
 
 	check_bug_if_BUG();
 	trace2_cmd_exit_fl(file, line, code);
+	if (preload_exit_callback)
+		preload_exit_callback(code);
 
 	return code;
 }
