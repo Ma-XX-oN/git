@@ -1,3 +1,4 @@
+source "$(dirname -- "${BASH_SOURCE[0]}")/git-ipc-request.sh" || return 1
 # Source into Git Bash: source /path/to/git-manager.sh [worker-count]
 # IPC client and manager launcher for the native Git --preload worker.
 # Requires GIT809_WORKER_GIT (native Git executable with --preload support)
@@ -125,6 +126,11 @@ git-ipc() {
   for arg in "$@"; do
     printf '%s\x00' "$arg" >&7 || { printf 'GIT-IPC ERROR: worker request write failed\n' >&2; return 255; }
   done
+  _git809_write_context windows >&7 || {
+    exec 7>&-
+    printf 'GIT-IPC ERROR: context frame write failed\n' >&2
+    return 255
+  }
   exec 7>&-
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE sent stdin pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
 
