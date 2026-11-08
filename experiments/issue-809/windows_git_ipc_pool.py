@@ -339,6 +339,23 @@ def select_transport(address, marker):
       _close_async(state,state is not selected)
 
 
+def parse_get_request(frame):
+  """Validate GET and return client PID, sequence and actual marker."""
+  if (len(frame)<7 or frame[0] not in b"0123456789" or
+      not frame[1:].startswith(b"GET ") or not frame.endswith(b"\n")):
+    raise ValueError("bad GET frame or missing digit marker")
+  parts=frame[5:-1].split(b"-")
+  if len(parts)!=2 or any(not p.isdigit() or len(p)>10 for p in parts):
+    raise ValueError("invalid reply identity")
+  client_pid,sequence=(int(p) for p in parts)
+  if not 1<=client_pid<=0xffffffff or not 1<=sequence<=0xffffffff:
+    raise ValueError("reply identity out of range")
+  marker=sequence%10
+  if frame[0]-ord("0")!=marker:
+    raise ValueError("GET marker does not match request sequence")
+  return client_pid,sequence,marker
+
+
 def allocation_server(owner_pid:int,pool:Pool):
   """Event-driven GET service: no per-connection threads or 1 ms polling.
 
@@ -421,46 +438,60 @@ def allocation_server(owner_pid:int,pool:Pool):
     state["phase"]="connect"
     state["ready"]=_start_async(state,"connect")
 
+  def check_reply_marker(state):
+    """Return the actual marker byte; None means I/O remains pending."""
+    while state["ready"] is not None:
+      received=state["ready"]
+      state["ready"]=None
+      if state["phase"]=="connect":
+        if received<0:
+          recycle_reply_probe(state)
+        else:
+          state["phase"]="marker"
+          state["ready"]=_start_async(state,"read")
+      elif state["phase"]=="marker":
+        if received<0:
+          recycle_reply_probe(state)
+        elif received!=1:
+          raise RuntimeError("invalid reply marker length")
+        else:
+          return state["buffer"].raw[0]
+      else:
+        raise RuntimeError("invalid reply marker phase")
+    return None
+
   def advance_reply(pair):
-    """Advance connection, one-byte marker and reply write using events."""
+    """Inspect both markers, choose one instance, then send the worker ID."""
     for state in pair["states"]:
       if state["pending"] and K.WaitForSingleObject(
           state["event"],0)==WAIT_OBJECT_0:
         state["ready"]=_finish_async(state)
-      while state["ready"] is not None:
-        n=state["ready"]
+      if state["phase"]=="write":
+        if state["ready"] is None:
+          continue
+        written=state["ready"]
         state["ready"]=None
-        if state["phase"]=="connect":
-          if n<0:
-            recycle_reply_probe(state)
-            continue
-          state["phase"]="marker"
-          state["ready"]=_start_async(state,"read")
-        elif state["phase"]=="marker":
-          if n<0:
-            recycle_reply_probe(state)
-            continue
-          elif n!=1 or state["buffer"].raw!=pair["expected"]:
-            raise RuntimeError("bad reply transport marker")
-          else:
-            state["phase"]="marked"
-        elif state["phase"]=="write":
-          if n!=len(state["answer"]):
-            raise RuntimeError("short allocation reply write")
-          if not K.FlushFileBuffers(state["h"]):
-            error=C.get_last_error()
-            if error not in (ERROR_BROKEN_PIPE,ERROR_NO_DATA,233):
-              raise OSError(error,"FlushFileBuffers(reply)")
-          return False
-        else:
-          raise RuntimeError("invalid reply state")
-    marked=[s for s in pair["states"] if s["phase"]=="marked"]
+        if written!=len(state["answer"]):
+          raise RuntimeError("short allocation reply write")
+        if not K.FlushFileBuffers(state["h"]):
+          error=C.get_last_error()
+          if error not in (ERROR_BROKEN_PIPE,ERROR_NO_DATA,233):
+            raise OSError(error,"FlushFileBuffers(reply)")
+        return False
+      if state["phase"]=="marked":
+        continue
+      marker=check_reply_marker(state)
+      if marker is not None:
+        state["phase"]="marked"
+        state["marker"]=marker
+
+    marked=[state for state in pair["states"] if state["phase"]=="marked"]
     if len(marked)>1:
       raise RuntimeError("two markers on one reply channel")
     if marked and pair["selected"] is None:
       chosen=marked[0]
-      # Both instances remain in the same logical channel. Drop only
-      # this request's probe and keep the selected handle for the reply.
+      if bytes([chosen["marker"]])!=pair["expected"]:
+        raise RuntimeError("bad reply transport marker")
       for other in pair["states"]:
         if other is not chosen:
           _close_async(other)
@@ -474,8 +505,7 @@ def allocation_server(owner_pid:int,pool:Pool):
       chosen["phase"]="write"
       pair["deadline"]=time.monotonic()+2
       chosen["ready"]=_start_async(chosen,"write",chosen["answer"])
-      if chosen["ready"] is not None:
-        return advance_reply(pair)
+
     if time.monotonic()>=pair["deadline"]:
       raise TimeoutError("reply marker/write timeout")
     if not any(s["pending"] or s["ready"] is not None for s in pair["states"]):
@@ -483,21 +513,10 @@ def allocation_server(owner_pid:int,pool:Pool):
     return True
 
   def parse_and_reply(frame):
-    if (len(frame)<7 or frame[0] not in b"0123456789" or
-        not frame[1:].startswith(b"GET ") or not frame.endswith(b"\n")):
-      raise ValueError("bad GET frame or missing digit marker")
-    raw_id=frame[5:-1]
-    parts=raw_id.split(b"-")
-    if len(parts)!=2 or any(not p.isdigit() or len(p)>10 for p in parts):
-      raise ValueError("invalid reply identity")
-    client_pid,sequence=(int(p) for p in parts)
-    if not 1<=client_pid<=0xffffffff or not 1<=sequence<=0xffffffff:
-      raise ValueError("reply identity out of range")
-    if frame[0]-ord("0")!=sequence%10:
-      raise ValueError("GET marker does not match request sequence")
-    reply=(r"\\.\pipe\git809-allocate-reply-"+str(owner_pid)+
-           "-"+str(client_pid)+"-"+str(sequence))
-    start_reply(reply,sequence%10)
+    client_pid,sequence,marker=parse_get_request(frame)
+    address=(r"\\.\pipe\git809-allocate-reply-"+str(owner_pid)+
+             "-"+str(client_pid)+"-"+str(sequence))
+    start_reply(address,marker)
 
   def advance(state):
     """Consume completed operations and submit the next read immediately."""
