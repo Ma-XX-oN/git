@@ -141,7 +141,7 @@ jobs:
           log=open(p,encoding='utf-8',errors='replace').read()
           get_ids=re.findall(r'^GET_ACCEPT request_id=([0-9]+-[0-9]+) digit=([0-9]) instance_handle=([0-9]+)$',log,re.M)
           reply_ids=re.findall(r'^ALLOC_REPLY request_id=([0-9]+-[0-9]+) worker_pid=(WAIT|[0-9]+)$',log,re.M)
-          selected_ids=re.findall(r'^REPLY_T_SELECTED request_id=([0-9]+-[0-9]+) digit=([0-9]) instance=([01]) handle=([0-9]+) connected=([01]),([01])
+          selected_ids=re.findall(r'^REPLY_T_SELECTED request_id=([0-9]+-[0-9]+) digit=([0-9]) instance=([01]) handle=([0-9]+) connected=([01]),([01])$',log,re.M)
           assert len(get_ids)>=6000,('GET count',len(get_ids))
           request_ids=[row[0] for row in get_ids]
           assert len(set(request_ids))==len(request_ids),('duplicate GET identity',len(request_ids))
@@ -164,37 +164,6 @@ jobs:
                 'T_selections',len(selected_names),
                 'T_instance0',sum(row[2]=='0' for row in selected_ids),
                 'T_instance1',sum(row[2]=='1' for row in selected_ids),flush=True)
-          handles=[(int(a),int(h),int(w)) for a,h,w in re.findall(r'ALLOC_RESOURCE allocations=(\d+) manager_handles=(\d+) tracked_workers=(\d+)',log)]
-          assert len(handles)>=55,len(handles)
-          middle=[h for a,h,w in handles if a>=100 and a<=5500]
-          assert max(middle)-min(middle)<120,(min(middle),max(middle))
-          assert max(w for a,h,w in handles)<100, max(w for a,h,w in handles)
-          print('GIT809_MANAGER_HANDLES first_last',handles[0],handles[-1],
-                'min_max',min(middle),max(middle),flush=True)
-          print('GIT809_STRESS_SHA',os.environ['GITHUB_SHA'])
-          PY
-      - name: Preserve timings
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: git809-native-direct-export-windows
-          path: git809-stream-results/
-          if-no-files-found: warn
-,log,re.M)
-          assert len(get_ids)>=6000,('GET count',len(get_ids))
-          request_ids=[row[0] for row in get_ids]
-          assert len(set(request_ids))==len(request_ids),('duplicate GET identity',len(request_ids))
-          reply_names=[row[0] for row in reply_ids]
-          assert len(set(reply_names))==len(reply_names),('duplicate reply identity',len(reply_names))
-          assert set(reply_names)==set(request_ids),('unmatched GET/ID',len(request_ids),len(reply_names))
-          selected_names=[row[0] for row in selected_ids]
-          assert len(set(selected_names))==len(selected_names),('duplicate reply selection',len(selected_names))
-          assert set(selected_names)==set(request_ids),('unselected reply',len(selected_names))
-          assert all(int(req.split('-')[1])%10==int(digit) for req,digit,_ in get_ids)
-          print('GIT809_IDENTITY_PASS GET',len(request_ids),'replies',len(reply_names),
-                'T_selections',len(selected_names),
-                'T_instance0',sum(row[1]=='0' for row in selected_ids),
-                'T_instance1',sum(row[1]=='1' for row in selected_ids),flush=True)
           handles=[(int(a),int(h),int(w)) for a,h,w in re.findall(r'ALLOC_RESOURCE allocations=(\d+) manager_handles=(\d+) tracked_workers=(\d+)',log)]
           assert len(handles)>=55,len(handles)
           middle=[h for a,h,w in handles if a>=100 and a<=5500]
