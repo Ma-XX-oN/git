@@ -31,7 +31,7 @@ class Pool:
             return
         channel_dir = self.directory / ("worker-" + uuid.uuid4().hex)
         channel_dir.mkdir(mode=0o700)
-        for name in ("stdout", "stderr", "exit-code", "stdin"):
+        for name in ("stdout", "stderr", "exit-code", "stdin", "param-env-cwd"):
             os.mkfifo(channel_dir / name, 0o600)
         worker_env = os.environ.copy()
         worker_env["GIT809_PRELOAD_OWNER_PID"] = str(self.owner_pid)
@@ -84,7 +84,7 @@ class Pool:
                 p.wait(timeout=3)
             if p.stdout:
                 p.stdout.close()
-            for name in ("stdout", "stderr", "exit-code", "stdin"):
+            for name in ("stdout", "stderr", "exit-code", "stdin", "param-env-cwd"):
                 (directory / name).unlink(missing_ok=True)
             directory.rmdir() if directory.exists() else None
 
