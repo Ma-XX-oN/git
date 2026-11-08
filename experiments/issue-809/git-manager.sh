@@ -157,6 +157,8 @@ git-ipc() {
   printf -v allocator '%s%s' '\\.\pipe\git809-allocate-req-' "$_GIT809_OWNER_WINPID"
   printf -v reply '%s%s-%s' '\\.\pipe\git809-allocate-reply-' "$_GIT809_OWNER_WINPID" "$request_id"
   local pid i count header arg status line
+  local _git809_t_start _git809_t_alloc _git809_t_connect _git809_t_send _git809_t_drained
+  if [[ -n ${GIT809_TIMING_LOG:-} ]]; then _git809_t_start=$EPOCHREALTIME; fi
   if ! _git809_open_pipe "$fd_allocate_request" "$allocator" "$marker" 400; then
     close_fhs
     printf 'GIT-IPC ERROR: allocation request pipe unavailable\n' >&2; return 255
@@ -183,6 +185,7 @@ git-ipc() {
   fi
 
   local stem; printf -v stem '%s%s' '\\.\pipe\' "$pid"
+  if [[ -n ${GIT809_TIMING_LOG:-} ]]; then _git809_t_alloc=$EPOCHREALTIME; fi
   local pstdin="${stem}-stdin"
   local pout="${stem}-stdout"
   local perr="${stem}-stderr"
@@ -199,6 +202,7 @@ git-ipc() {
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE open stdin pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
   _git809_open_pipe "$fd_worker_stdin" "$pstdin" "$marker" || { close_fhs; printf 'GIT-IPC ERROR: stdin pipe open failed\n' >&2; return 255; }
   _git809_open_pipe "$fd_worker_control" "$pcontrol" "$marker" || { close_fhs; printf 'GIT-IPC ERROR: control pipe open failed\n' >&2; return 255; }
+  if [[ -n ${GIT809_TIMING_LOG:-} ]]; then _git809_t_connect=$EPOCHREALTIME; fi
   # No relay process: stdin is unavailable pending process-free handle
   # transfer. Close the worker channel after Windows has consumed the digit.
   # The worker supplies EOF from NUL. Keep this handle through output EOF
@@ -226,6 +230,7 @@ git-ipc() {
   # nor request bytes may be discarded by a close before server consumption.
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE sent stdin pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
 
+  if [[ -n ${GIT809_TIMING_LOG:-} ]]; then _git809_t_send=$EPOCHREALTIME; fi
   # Experimental second timing mode: stdout accumulates all available
   # text up to a 100 ms deadline without requiring a newline or byte count.
   # Bash read -d '' uses NUL as terminator; the currently supported
@@ -262,9 +267,13 @@ git-ipc() {
       fi
     done
     [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE drained data pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
+    if [[ -n ${GIT809_TIMING_LOG:-} ]]; then _git809_t_drained=$EPOCHREALTIME; fi
     close_fhs "$fd_worker_stdin" "$fd_worker_control"
     IFS= read -r status <&"$fd_worker_exit" || { close_fhs; printf 'GIT-IPC ERROR: exit-status read failed\n' >&2; return 255; }
     close_fhs
+    if [[ -n ${GIT809_TIMING_LOG:-} ]]; then
+      printf '%s,%s,%s,%s,%s,%s\n' "$_git809_t_start" "$_git809_t_alloc" "$_git809_t_connect" "$_git809_t_send" "$_git809_t_drained" "$EPOCHREALTIME" >>"$GIT809_TIMING_LOG"
+    fi
     if [[ $status =~ ^EXIT[[:space:]]([0-9]+)$ ]]; then
       return "${BASH_REMATCH[1]}"
     fi
