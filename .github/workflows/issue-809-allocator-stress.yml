@@ -62,7 +62,7 @@ jobs:
           [[ ! -v GIT_EDITOR ]] || exit 33
           printf 'GIT809_STREAM_ROUNDTRIP_PASS\n'
 
-          # This experiment executes one git-ipc command at a time.
+          # Only serial calls are in scope for RWF 809.
           printf 'GIT809_SERIAL_EXECUTION_ONLY\n'
           export GIT809_ABLATION_CWD=1 GIT809_ABLATION_ENV=1
           printf 'sample,begin,end\n' >git809-stream-results/stress.csv
@@ -139,57 +139,9 @@ jobs:
           print('GIT809_STRESS_PASS count',len(d),'median_ms',round(statistics.median(d),4),flush=True)
           p='git809-stream-results/manager.log'
           log=open(p,encoding='utf-8',errors='replace').read()
-          get_ids=re.findall(r'^GET_ACCEPT request_id=([0-9]+-[0-9]+) digit=([0-9]) instance_handle=([0-9]+)r'ALLOC_RESOURCE allocations=(\d+) manager_handles=(\d+) tracked_workers=(\d+)',log)]
-          assert len(handles)>=55,len(handles)
-          middle=[h for a,h,w in handles if a>=100 and a<=5500]
-          assert max(middle)-min(middle)<120,(min(middle),max(middle))
-          assert max(w for a,h,w in handles)<100, max(w for a,h,w in handles)
-          print('GIT809_MANAGER_HANDLES first_last',handles[0],handles[-1],
-                'min_max',min(middle),max(middle),flush=True)
-          print('GIT809_STRESS_SHA',os.environ['GITHUB_SHA'])
-          PY
-      - name: Preserve timings
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: git809-native-direct-export-windows
-          path: git809-stream-results/
-          if-no-files-found: warn
-,log,re.M)
-          reply_ids=re.findall(r'^ALLOC_REPLY request_id=([0-9]+-[0-9]+) worker_pid=(WAIT|[0-9]+)r'ALLOC_RESOURCE allocations=(\d+) manager_handles=(\d+) tracked_workers=(\d+)',log)]
-          assert len(handles)>=55,len(handles)
-          middle=[h for a,h,w in handles if a>=100 and a<=5500]
-          assert max(middle)-min(middle)<120,(min(middle),max(middle))
-          assert max(w for a,h,w in handles)<100, max(w for a,h,w in handles)
-          print('GIT809_MANAGER_HANDLES first_last',handles[0],handles[-1],
-                'min_max',min(middle),max(middle),flush=True)
-          print('GIT809_STRESS_SHA',os.environ['GITHUB_SHA'])
-          PY
-      - name: Preserve timings
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: git809-native-direct-export-windows
-          path: git809-stream-results/
-          if-no-files-found: warn
-,log,re.M)
-          selected_ids=re.findall(r'^REPLY_T_SELECTED request_id=([0-9]+-[0-9]+) instance=([01]) handle=([0-9]+) connected=([01]),([01])r'ALLOC_RESOURCE allocations=(\d+) manager_handles=(\d+) tracked_workers=(\d+)',log)]
-          assert len(handles)>=55,len(handles)
-          middle=[h for a,h,w in handles if a>=100 and a<=5500]
-          assert max(middle)-min(middle)<120,(min(middle),max(middle))
-          assert max(w for a,h,w in handles)<100, max(w for a,h,w in handles)
-          print('GIT809_MANAGER_HANDLES first_last',handles[0],handles[-1],
-                'min_max',min(middle),max(middle),flush=True)
-          print('GIT809_STRESS_SHA',os.environ['GITHUB_SHA'])
-          PY
-      - name: Preserve timings
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: git809-native-direct-export-windows
-          path: git809-stream-results/
-          if-no-files-found: warn
-,log,re.M)
+          get_ids=re.findall(r'^GET_ACCEPT request_id=([0-9]+-[0-9]+) digit=([0-9]) instance_handle=([0-9]+)$',log,re.M)
+          reply_ids=re.findall(r'^ALLOC_REPLY request_id=([0-9]+-[0-9]+) worker_pid=(WAIT|[0-9]+)$',log,re.M)
+          selected_ids=re.findall(r'^REPLY_T_SELECTED request_id=([0-9]+-[0-9]+) instance=([01]) handle=([0-9]+) connected=([01]),([01])$',log,re.M)
           assert len(get_ids)>=6000,('GET count',len(get_ids))
           request_ids=[row[0] for row in get_ids]
           assert len(set(request_ids))==len(request_ids),('duplicate GET identity',len(request_ids))
