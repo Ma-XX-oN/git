@@ -154,8 +154,11 @@ class Pool:
       if p.stdout:
         p.stdout.close()
 
-def select_transport(address):
-  """Two Windows instances, one T-qualified unidirectional reply channel."""
+def select_transport(address, marker):
+  """Two Windows instances; one reply channel qualified by the call digit."""
+  expected=str(marker).encode("ascii")
+  if len(expected)!=1 or expected not in tuple(bytes([i]) for i in range(48,58)):
+    raise ValueError("invalid decimal reply marker")
   handles=[]
   threads=[]
   connected=[False,False]
@@ -186,20 +189,20 @@ def select_transport(address):
         if K.PeekNamedPipe(h,None,0,None,C.byref(available),None) and available.value:
           candidates.append(i)
       if len(candidates)==2:
-        raise RuntimeError("two T markers on one reply channel")
+        raise RuntimeError("two markers on one reply channel")
       if candidates:
         i=candidates[0]
         marker=C.create_string_buffer(1)
         n=W.DWORD()
         if not K.ReadFile(handles[i],marker,1,C.byref(n),None) or (
-          n.value!=1 or marker.raw!=b"T"):
+          n.value!=1 or marker.raw!=expected):
           raise RuntimeError("bad reply transport marker")
         selected=handles[i]
         handles[i]=None
         break
       time.sleep(.001)
     if selected is None:
-      raise TimeoutError("reply T marker timeout")
+      raise TimeoutError("reply marker timeout")
     return selected
   finally:
     for t in threads:
@@ -279,8 +282,8 @@ def allocation_server(owner_pid:int,pool:Pool):
       else:
         print("ALLOCATOR_IDLE_PROBE_EXPIRED",flush=True)
         return
-      if not frame.startswith(b"TGET ") or not frame.endswith(b"\n"):
-        raise ValueError("bad GET frame or missing T marker")
+      if len(frame)<7 or frame[0] not in b"0123456789" or not frame[1:].startswith(b"GET ") or not frame.endswith(b"\n"):
+        raise ValueError("bad GET frame or missing digit marker")
       raw_id=frame[5:-1]
       parts=raw_id.split(b"-")
       if len(parts)!=2 or any(not p.isdigit() or len(p)>10 for p in parts):
@@ -288,10 +291,12 @@ def allocation_server(owner_pid:int,pool:Pool):
       client_pid,sequence=(int(p) for p in parts)
       if not 1<=client_pid<=0xffffffff or not 1<=sequence<=0xffffffff:
         raise ValueError("reply identity out of range")
+      if frame[0]-ord("0")!=sequence%10:
+        raise ValueError("GET marker does not match request sequence")
       # A unique reply pipe is required per request, not just per client.
       reply=(r"\\.\pipe\git809-allocate-reply-"+str(owner_pid)+
              "-"+str(client_pid)+"-"+str(sequence))
-      response=select_transport(reply)
+      response=select_transport(reply,sequence%10)
       try:
         answer=pool.alloc().encode("ascii")
         n=W.DWORD()

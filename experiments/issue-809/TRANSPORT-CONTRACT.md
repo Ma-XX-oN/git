@@ -18,14 +18,14 @@ Allocation uses two distinct logical channels on **all** platforms:
 1. `allocate-req`: git-ipc -> git-manager, carrying `GET\n`.
 2. `allocate-reply`: git-manager -> git-ipc, carrying one worker identifier followed by newline (or a defined error).
 
-The allocated worker has **five distinct logical channels**: `stdin` and `param-env-cwd` (git-ipc -> worker); `stdout`, `stderr`, and `exit-code` (worker -> git-ipc). Arguments, cwd and environment are carried exclusively by `param-env-cwd`; stdin is a separate stream. Windows sends and consumes `T` separately on each channel, including stdin. No handshake byte enters application data.
+The allocated worker has **five distinct logical channels**: `stdin` and `param-env-cwd` (git-ipc -> worker); `stdout`, `stderr`, and `exit-code` (worker -> git-ipc). Arguments, cwd and environment are carried exclusively by `param-env-cwd`; stdin is a separate stream. Windows sends and consumes the call-specific decimal digit in place of `T` on each channel, including stdin. No handshake byte enters application data.
 
 Linux/macOS use ordinary unidirectional FIFOs, with **no** `T` marker.
 
 ### Standard-input limitation: no additional relay processes
 
 The `stdin` logical channel remains separately established, and on Windows
-the Git worker consumes the initial `T` marker before application I/O.
+the Git worker consumes the initial decimal marker before application I/O.
 However, **application stdin forwarding is not implemented**: the Bash client
 closes the stdin writer after connection setup, and the worker sees EOF.
 This applies to interactive terminals, redirected regular files, and pipes.
@@ -57,6 +57,16 @@ For every logical channel, the Windows server/receiving endpoint creates a pair 
 6. Close and release all handles, pending accept operations, and per-connection state on success, error, cancellation, and owner death.
 
 For allocation, GET and ID travel over distinct logical named-pipe names. The Windows reply name is unique for **every request**, identified by the Bash process ID and a monotonically increasing shell-local sequence; the GET frame carries that identity. Both the request parser and reply-name constructor validate its two unsigned decimal components. PID-only reply names are prohibited because successive calls from one Bash process overlap server-side close/recreation. The same T identification rule applies to both channels; concurrent clients must receive only their own replies.
+
+## Windows call marker
+
+For serial calls, `git-ipc` replaces each Windows `T` connection marker
+with the decimal digit `sequence % 10`, including GET, reply, and all
+five worker channels. The request ID remains `BashPID-sequence` and
+continues to determine the unique reply-pipe name. The manager verifies
+that the GET and reply marker match the sequence. The native worker
+requires the same digit on all five channels. No acknowledgment, additional
+connection, or stream-handling change is introduced.
 
 ## Transport-selection API
 

@@ -41,12 +41,12 @@ def write(h,data):
   assert n.value==len(data)
 
 
-def run_case(name,marker_index=None,marker=b"T",drop_probe=False):
+def run_case(name,marker_index=None,marker=b"1",drop_probe=False):
   address=r"\\.\pipe\git809-select-test-"+uuid.uuid4().hex
   result=[]
   def server():
     try:
-      selected=manager.select_transport(address)
+      selected=manager.select_transport(address,1)
       result.append(("selected",selected))
     except Exception as error:
       result.append(("error",error))
@@ -66,9 +66,9 @@ def run_case(name,marker_index=None,marker=b"T",drop_probe=False):
     t.join(timeout=5)
     assert not t.is_alive(),(name,"server stuck")
     assert len(result)==1,(name,result)
-    if marker_index is not None and marker==b"T":
+    if marker_index is not None and marker==b"1":
       assert result[0][0]=="selected",(name,result)
-      # Selection consumes only T, preserving the following application byte.
+      # Selection consumes only the digit, preserving application data.
       write(clients[marker_index],b"Z")
       byte=C.create_string_buffer(1)
       count=W.DWORD()
@@ -102,7 +102,7 @@ def test_duplicate_markers():
     return peek(*args)
   def server():
     try:
-      result.append(("selected",manager.select_transport(address)))
+      result.append(("selected",manager.select_transport(address,1)))
     except Exception as error:
       result.append(("error",error))
   K.PeekNamedPipe=held_peek
@@ -111,14 +111,14 @@ def test_duplicate_markers():
     t.start()
     clients.append(connect(address))
     clients.append(connect(address))
-    write(clients[0],b"T")
-    write(clients[1],b"T")
+    write(clients[0],b"1")
+    write(clients[1],b"1")
     go.set()
     t.join(timeout=5)
     assert not t.is_alive(),"duplicate marker server stuck"
     assert len(result)==1 and result[0][0]=="error",result
     assert isinstance(result[0][1],RuntimeError),result
-    assert "two T markers" in str(result[0][1]),result
+    assert "two markers" in str(result[0][1]),result
     print("GIT809_SELECT_TRANSPORT_PASS duplicate-markers",flush=True)
   finally:
     go.set()
