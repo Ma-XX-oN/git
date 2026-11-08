@@ -32,6 +32,7 @@ jobs:
           export GIT809_WORKER_GIT="$(cygpath -w "$PWD/git.exe")"
           export GIT809_DRAIN_MODE=chunk100
           mkdir -p git809-stream-results
+          export GIT809_PRELOAD_TRACE_FILE="$(cygpath -w "$PWD/git809-stream-results/worker-stages.log")"
           "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_git_ipc_pool.py experiments/issue-809/test_allocator_probe_hold.py experiments/issue-809/test_windows_transport_selection.py
           # Bound the selector subprocess separately; a native pipe-handle
           # cleanup hang must not consume the entire stress-job timeout.
@@ -63,7 +64,10 @@ jobs:
               cp -- "$_GIT809_MANAGER_LOG" git809-stream-results/manager.log
               tail -n 90 -- "$_GIT809_MANAGER_LOG" >&2
             fi
-            ps -W >&2 || :
+            if [[ -f git809-stream-results/worker-stages.log ]]; then
+              printf 'GIT809_WORKER_STAGES\\n' >&2
+              tail -n 100 git809-stream-results/worker-stages.log >&2
+            fi
             kill -KILL "$smoke_pid" 2>/dev/null || :
             # This shell can remain blocked in a Windows named-pipe open.
             # Stop the diagnostic step after preserving its evidence.
