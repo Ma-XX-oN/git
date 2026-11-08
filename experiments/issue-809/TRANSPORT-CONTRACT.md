@@ -24,7 +24,7 @@ Linux/macOS use ordinary unidirectional FIFOs, with **no** `T` marker.
 
 ## Windows-only connection identification
 
-Git Bash can open a named pipe temporarily during redirection, leaving a *probe* instance alongside its actual transport instance. This must never be identified by assuming one instance disconnects first or by fixed ordering.
+**Why Windows needs the marker:** In this Git Bash/MSYS2 named-pipe redirection path, tests observed an additional connection that does not carry the application's transport bytes (the *probe*), alongside the actual transport connection. The earlier allocator tried to identify the real connection by assuming the probe closed first. That assumption failed in native stress testing: two instances reached the same closing state, and allocation timed out. The `T` marker identifies the connection explicitly instead of guessing from connection order or disconnection state. This is a documented Git Bash/MSYS2 interoperability defect in our experimental transport; the evidence does **not** establish an upstream Git Bash bug or its root cause. Linux and macOS do not require this Windows-specific workaround.
 
 For every logical channel, the Windows server/receiving endpoint creates a pair of named-pipe instances for the same pipe name. The instances are created using duplex capability **only so git-ipc can write a connection marker even on normal server-to-client channels** (including stdout, stderr, and exit-code). This capability must not be used for reverse-direction application traffic.
 
