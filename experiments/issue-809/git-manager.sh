@@ -72,7 +72,37 @@ if (( _git809_source_rc != 0 )); then
   return "$_git809_source_rc"
 fi
 
-# Request a worker PID, then talk directly to its four pipe endpoints.
+# Open any Windows IPC channel and consume its one-byte call marker here.
+# Keep the established descriptor numbers and opening order unchanged.
+_git809_open_pipe() {
+  local fd=$1 path=$2 marker=$3 retries=${4:-1} attempt
+  [[ $fd =~ ^[3-8]$ && $marker =~ ^[0-9]$ &&
+     $retries =~ ^[1-9][0-9]*$ ]] || return 2
+  for ((attempt=0; attempt<retries; attempt++)); do
+    case $fd in
+      3) { exec 3<>"$path"; } 2>/dev/null ;;
+      4) { exec 4<>"$path"; } 2>/dev/null ;;
+      5) { exec 5<>"$path"; } 2>/dev/null ;;
+      6) { exec 6<>"$path"; } 2>/dev/null ;;
+      7) { exec 7<>"$path"; } 2>/dev/null ;;
+      8) { exec 8<>"$path"; } 2>/dev/null ;;
+    esac
+    if (( $? == 0 )); then
+      if printf '%s' "$marker" >&"$fd"; then
+        return 0
+      fi
+      case $fd in
+        3) exec 3>&- ;; 4) exec 4>&- ;; 5) exec 5>&- ;;
+        6) exec 6>&- ;; 7) exec 7>&- ;; 8) exec 8>&- ;;
+      esac
+      return 1
+    fi
+    if (( attempt + 1 < retries )); then sleep .005; fi
+  done
+  return 1
+}
+
+# Request a worker PID, then talk directly to its five worker channels.
 # The Python manager only allocates IDs; it never forwards Git output.
 git-ipc() {
   if [[ -z ${_GIT809_OWNER_WINPID:-} || $# -gt 31 ]]; then
@@ -94,26 +124,18 @@ git-ipc() {
   printf -v allocator '%s%s' '\\.\pipe\git809-allocate-req-' "$_GIT809_OWNER_WINPID"
   printf -v reply '%s%s-%s' '\\.\pipe\git809-allocate-reply-' "$_GIT809_OWNER_WINPID" "$request_id"
   local pid i count header arg status line
-  for ((i=0;i<400;i++)); do
-    if { exec 3<>"$allocator"; } 2>/dev/null; then break; fi
-    sleep .005
-  done
-  if (( i == 400 )); then
+  if ! _git809_open_pipe 3 "$allocator" "$marker" 400; then
     printf 'GIT-IPC ERROR: allocation request pipe unavailable\n' >&2; return 255
   fi
-  if ! printf '%sGET %s\n' "$marker" "$request_id" >&3; then
+  if ! printf 'GET %s\n' "$request_id" >&3; then
     exec 3>&-
     printf 'GIT-IPC ERROR: allocation request write failed\n' >&2; return 255
   fi
   # Keep request open until ID delivery so the server can read its bytes.
-  for ((i=0;i<400;i++)); do
-    if { exec 8<>"$reply"; } 2>/dev/null; then break; fi
-    sleep .005
-  done
-  if (( i == 400 )); then
+  if ! _git809_open_pipe 8 "$reply" "$marker" 400; then
+    exec 3>&-
     printf 'GIT-IPC ERROR: allocation reply pipe unavailable\n' >&2; return 255
   fi
-  printf '%s' "$marker" >&8 || { exec 8>&- 3>&-; printf 'GIT-IPC ERROR: reply marker write failed\n' >&2; return 255; }
   IFS= read -r pid <&8 || { exec 8>&- 3>&-; printf 'GIT-IPC ERROR: allocation response failed\n' >&2; return 255; }
   exec 8>&- 3>&-
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE allocated pid=%s bashpid=%s\n' "$pid" "$BASHPID" >>"$_GIT809_MANAGER_LOG"
@@ -135,19 +157,14 @@ git-ipc() {
 
   # Open in the same order that the native worker accepts connections.
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE open stdout pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
-  exec 4<>"$pout" || { printf 'GIT-IPC ERROR: stdout pipe open failed\n' >&2; return 255; }
-  printf '%s' "$marker" >&4 || { printf 'GIT-IPC ERROR: channel 4 marker failed\n' >&2; return 255; }
+  _git809_open_pipe 4 "$pout" "$marker" || { printf 'GIT-IPC ERROR: stdout pipe open failed\n' >&2; return 255; }
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE open stderr pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
-  exec 5<>"$perr" || { exec 4<&-; printf 'GIT-IPC ERROR: stderr pipe open failed\n' >&2; return 255; }
-  printf '%s' "$marker" >&5 || { printf 'GIT-IPC ERROR: channel 5 marker failed\n' >&2; return 255; }
+  _git809_open_pipe 5 "$perr" "$marker" || { exec 4<&-; printf 'GIT-IPC ERROR: stderr pipe open failed\n' >&2; return 255; }
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE open exit pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
-  exec 6<>"$pexit" || { exec 4<&- 5<&-; printf 'GIT-IPC ERROR: exit-status pipe open failed\n' >&2; return 255; }
-  printf '%s' "$marker" >&6 || { printf 'GIT-IPC ERROR: channel 6 marker failed\n' >&2; return 255; }
+  _git809_open_pipe 6 "$pexit" "$marker" || { exec 4<&- 5<&-; printf 'GIT-IPC ERROR: exit-status pipe open failed\n' >&2; return 255; }
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE open stdin pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
-  exec 8<>"$pstdin" || { exec 4<&- 5<&- 6<&-; printf 'GIT-IPC ERROR: stdin pipe open failed\n' >&2; return 255; }
-  printf '%s' "$marker" >&8 || { printf 'GIT-IPC ERROR: channel 8 marker failed\n' >&2; return 255; }
-  exec 7<>"$pcontrol" || { exec 4<&- 5<&- 6<&- 8>&-; printf 'GIT-IPC ERROR: control pipe open failed\n' >&2; return 255; }
-  printf '%s' "$marker" >&7 || { printf 'GIT-IPC ERROR: channel 7 marker failed\n' >&2; return 255; }
+  _git809_open_pipe 8 "$pstdin" "$marker" || { exec 4<&- 5<&- 6<&-; printf 'GIT-IPC ERROR: stdin pipe open failed\n' >&2; return 255; }
+  _git809_open_pipe 7 "$pcontrol" "$marker" || { exec 4<&- 5<&- 6<&- 8>&-; printf 'GIT-IPC ERROR: control pipe open failed\n' >&2; return 255; }
   # No relay process: stdin is unavailable pending process-free handle
   # transfer. Close the worker channel after Windows has consumed the digit.
   exec 8>&-
