@@ -4,7 +4,7 @@ case ${OSTYPE:-} in
     source "$(dirname -- "${BASH_SOURCE[0]}")/git-manager-unix.sh" "$@"
     return $?
     ;;
-  msys*) ;;
+  msys*|cygwin*) ;;
   *)
     printf 'Git IPC does not support OSTYPE=%s\n' "${OSTYPE:-unset}" >&2
     return 2

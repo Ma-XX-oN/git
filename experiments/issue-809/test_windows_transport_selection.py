@@ -28,6 +28,7 @@ K.PeekNamedPipe.restype=W.BOOL
 
 
 def connect(address):
+  """Open one synchronous client instance within the fixture deadline."""
   deadline=time.monotonic()+5
   while time.monotonic()<deadline:
     if K.WaitNamedPipeW(address,100):
@@ -39,6 +40,7 @@ def connect(address):
 
 
 def write(h,data):
+  """Write fixture bytes completely or fail with the native pipe error."""
   n=W.DWORD()
   if not K.WriteFile(h,data,len(data),C.byref(n),None):
     raise OSError(C.get_last_error(),"WriteFile(test)")
@@ -170,12 +172,20 @@ def test_allocator_isolation():
       self.lock = threading.Lock()
       self.errors = []
       self.notify = None
+      self.inject_ready = None
 
     def alloc(self):
       """Return an ID immediately, or None when no worker is ready."""
       try:
         return self.ready.get_nowait()
       except queue.Empty:
+        if self.inject_ready is not None:
+          # Force readiness to arrive just after the empty-queue check,
+          # with its notification consumed by another completion dispatch.
+          self.ready.put(self.inject_ready)
+          self.inject_ready = None
+          self.notify()
+          self.notify.__self__.drain()
         return None
 
   pool = ReadyPool()
@@ -228,6 +238,8 @@ def test_allocator_isolation():
     with pool.lock:
       pool.notify()
     assert {read_reply(first), read_reply(second)} == {b"1003\n", b"1004\n"}
+    pool.inject_ready = "1005\n"
+    assert read_reply(request(5)) == b"1005\n"
     assert not pool.errors, pool.errors
     print("GIT809_ALLOCATOR_PASS slow-reader-shortage-80-probes", flush=True)
   finally:
@@ -242,6 +254,57 @@ def test_allocator_isolation():
     assert not pool.errors, pool.errors
 
 
+def test_shutdown_after_drained_wakeup():
+  """Force shutdown's notification to be consumed before the loop waits."""
+  pool = manager.Pool(Path("unused"), 1)
+  original_drain = manager.CompletionPort.drain
+
+  def drain_then_stop(port):
+    """Inject the shutdown race after the loop's initial closing check."""
+    original_drain(port)
+    pool.closing.set()
+    pool.notify()
+    original_drain(port)
+
+  manager.CompletionPort.drain = drain_then_stop
+  try:
+    owner = 90000000 + int(uuid.uuid4().hex[:6], 16)
+    thread = threading.Thread(target=manager.allocation_server,
+                              args=(owner, pool), daemon=True)
+    thread.start()
+    thread.join(timeout=3)
+    assert not thread.is_alive(), "lost shutdown notification"
+    assert not pool.errors, pool.errors
+    print("GIT809_ALLOCATOR_PASS drained-shutdown-wakeup", flush=True)
+  finally:
+    manager.CompletionPort.drain = original_drain
+
+
+def test_connect_failure_cleanup():
+  """An immediate connect error must release the partially constructed pipe."""
+  port = manager.CompletionPort()
+  original_connect = K.ConnectNamedPipe
+
+  def failed_connect(handle, overlap):
+    """Inject an access error before any I/O is submitted."""
+    C.set_last_error(5)
+    return False
+
+  K.ConnectNamedPipe = failed_connect
+  try:
+    try:
+      manager.Pipe(port, r"\\.\pipe\git809-failure-" + uuid.uuid4().hex)
+    except OSError as error:
+      assert error.winerror == 5, error
+    else:
+      raise AssertionError("connect error was ignored")
+    assert not port.pipes, "failed constructor retained its pipe"
+    print("GIT809_ALLOCATOR_PASS connect-failure-cleanup", flush=True)
+  finally:
+    K.ConnectNamedPipe = original_connect
+    port.close()
+
+
 run_case("first-instance-marker", 0)
 run_case("second-instance-marker-probe-held", 1)
 run_case("disconnected-probe-other-instance-selected", 1, drop_probe=True)
@@ -250,3 +313,5 @@ run_case("nul-marker-is-invalid", 1, b"\0")
 run_case("missing-marker-timeout")
 test_duplicate_markers()
 test_allocator_isolation()
+test_shutdown_after_drained_wakeup()
+test_connect_failure_cleanup()

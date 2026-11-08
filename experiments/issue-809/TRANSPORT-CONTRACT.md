@@ -12,7 +12,7 @@ Status: approved design; implementation and native acceptance must be verified s
 ## Cross-platform contract
 
 Source `experiments/issue-809/git-manager.sh [worker-count]` as the common
-entry point. It uses Bash's `OSTYPE`: `msys*` selects the Windows client;
+entry point. It uses Bash's `OSTYPE`: `msys*` and `cygwin*` select the Windows client;
 `linux*` and `darwin*` source `git-manager-unix.sh`, forwarding the arguments
 and return status. Other platforms return an unsupported-platform error.
 

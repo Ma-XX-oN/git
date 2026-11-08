@@ -455,6 +455,9 @@ def allocation_server(owner_pid:int,pool:Pool):
               if len(pipe.frame) >= 64:
                 raise ValueError("oversized request")
             pipe.issue("read", size=64 - len(pipe.frame))
+            # A buffered GET completes immediately. Dispatch it before
+            # replenishing listeners so the client's reply pipe is ready.
+            port.drain()
           else:
             if pipe.deadline is None or now < pipe.deadline:
               continue
@@ -514,6 +517,14 @@ def allocation_server(owner_pid:int,pool:Pool):
         listeners += 1
       if any(pipe.result is not None for pipe in port.pipes.values()):
         continue
+      # A notification may have been drained while advancing another reply.
+      # Recheck its predicate before sleeping so readiness/shutdown cannot
+      # be lost between dispatch and the next blocking wait.
+      if pool.closing.is_set():
+        break
+      if not pool.ready.empty() and any(reply["phase"] == "worker"
+                                        for reply in replies):
+        continue
       deadlines = [pipe.deadline for pipe in requests if pipe.deadline is not None]
       deadlines.extend(reply["pair"].deadline if reply["phase"] == "select"
                        else reply["deadline"] for reply in replies)
@@ -553,6 +564,7 @@ def main():
     raise RuntimeError("owner already terminated")
   pool=Pool(git,args.workers)
   pool.owner_winpid=args.owner_winpid
+  allocator=None
   try:
     for _ in range(args.workers):
       pool.spawn()
@@ -594,6 +606,8 @@ def main():
   finally:
     args.ready_file.unlink(missing_ok=True)
     pool.close()
+    if allocator is not None:
+      allocator.join()
     K.CloseHandle(owner)
 
 if __name__=="__main__":
