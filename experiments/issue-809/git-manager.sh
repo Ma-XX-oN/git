@@ -194,14 +194,14 @@ git-ipc() {
 
   # Open in the same order that the native worker accepts connections.
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE open stdout pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
-  _git809_open_pipe "$fd_worker_stdout" "$pout" "$marker" || { close_fhs; printf 'GIT-IPC ERROR: stdout pipe open failed\n' >&2; return 255; }
+  _git809_open_pipe "$fd_worker_stdout" "$pout" "$marker" 40 || { close_fhs; printf 'GIT-IPC ERROR: stdout pipe open failed\n' >&2; return 255; }
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE open stderr pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
-  _git809_open_pipe "$fd_worker_stderr" "$perr" "$marker" || { close_fhs; printf 'GIT-IPC ERROR: stderr pipe open failed\n' >&2; return 255; }
+  _git809_open_pipe "$fd_worker_stderr" "$perr" "$marker" 40 || { close_fhs; printf 'GIT-IPC ERROR: stderr pipe open failed\n' >&2; return 255; }
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE open exit pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
-  _git809_open_pipe "$fd_worker_exit" "$pexit" "$marker" || { close_fhs; printf 'GIT-IPC ERROR: exit-status pipe open failed\n' >&2; return 255; }
+  _git809_open_pipe "$fd_worker_exit" "$pexit" "$marker" 40 || { close_fhs; printf 'GIT-IPC ERROR: exit-status pipe open failed\n' >&2; return 255; }
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE open stdin pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
-  _git809_open_pipe "$fd_worker_stdin" "$pstdin" "$marker" || { close_fhs; printf 'GIT-IPC ERROR: stdin pipe open failed\n' >&2; return 255; }
-  _git809_open_pipe "$fd_worker_control" "$pcontrol" "$marker" || { close_fhs; printf 'GIT-IPC ERROR: control pipe open failed\n' >&2; return 255; }
+  _git809_open_pipe "$fd_worker_stdin" "$pstdin" "$marker" 40 || { close_fhs; printf 'GIT-IPC ERROR: stdin pipe open failed\n' >&2; return 255; }
+  _git809_open_pipe "$fd_worker_control" "$pcontrol" "$marker" 40 || { close_fhs; printf 'GIT-IPC ERROR: control pipe open failed\n' >&2; return 255; }
   if [[ -n ${GIT809_TIMING_LOG:-} ]]; then _git809_t_connect=$EPOCHREALTIME; fi
   # No relay process: stdin is unavailable pending process-free handle
   # transfer. Close the worker channel after Windows has consumed the digit.
