@@ -2,19 +2,12 @@ name: Git 809 native preload Windows IPC smoke
 on:
   push:
     branches: [feature/git-preinit-windows-upstream]
-    paths:
-      - compat/mingw.c
-      - git.c
-      - t/helper/git809-preload-smoke.py
-      - preload-context.c
-      - preload-context.h
-      - experiments/issue-809/git-ipc-request.sh
-      - experiments/issue-809/git-manager.sh
-      - experiments/issue-809/windows_git_ipc_pool.py
-      - .github/workflows/issue-809-preload-smoke.yml
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: git809-preload-windows-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   windows-preload:
     runs-on: windows-latest
