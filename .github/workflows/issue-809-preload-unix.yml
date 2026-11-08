@@ -1,0 +1,46 @@
+name: Git 809 native preload Unix IPC smoke
+on:
+  push:
+    branches: [feature/git-preinit-windows-upstream]
+    paths:
+      - common-main.c
+      - git.c
+      - preload-worker-unix.c
+      - Makefile
+      - experiments/issue-809/unix_git_ipc_pool.py
+      - experiments/issue-809/git-manager-unix.sh
+      - .github/workflows/issue-809-preload-unix.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  unix-preload:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build native Git including permanent Unix preload worker
+        shell: bash
+        run: |
+          make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git
+      - name: Verify Unix four-FIFO client and exit propagation
+        shell: bash
+        run: |
+          python3 -m py_compile experiments/issue-809/unix_git_ipc_pool.py
+          bash -n experiments/issue-809/git-manager-unix.sh
+          export GIT809_WORKER_GIT="$PWD/git"
+          source experiments/issue-809/git-manager-unix.sh 2
+          result="$(git-ipc --version)"
+          [[ "$result" == git\ version\ * ]] || { printf 'unexpected ipc output: %s\n' "$result" >&2; exit 1; }
+          set +e
+          git-ipc nonexistent-git809-command >failed.out 2>failed.err
+          rc=$?
+          set -e
+          [[ $rc -ne 0 && -s failed.err ]] || { printf 'invalid error response: rc=%s\n' "$rc" >&2; exit 1; }
+          printf 'PASS Unix --preload four-FIFO stdout/stderr/exit: %s\n' "$result"
