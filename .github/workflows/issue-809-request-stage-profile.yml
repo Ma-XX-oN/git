@@ -42,6 +42,21 @@ jobs:
           bash -n experiments/issue-809/git-manager.sh
           source experiments/issue-809/git-manager.sh 3
           unset GIT809_STAGE_TRACE_FILE
+          printf 'operation,start,end\\n' >git809-bash-pipe-results/context-primitives.csv
+          for ((i=0;i<120;i++)); do
+            a=$EPOCHREALTIME; pwd -W >/dev/null; b=$EPOCHREALTIME
+            printf 'pwd_builtin,%s,%s\\n' "$a" "$b" >>git809-bash-pipe-results/context-primitives.csv
+            a=$EPOCHREALTIME; cwd=$(pwd -W); b=$EPOCHREALTIME
+            printf 'pwd_subshell,%s,%s\\n' "$a" "$b" >>git809-bash-pipe-results/context-primitives.csv
+            a=$EPOCHREALTIME; compgen -e >/dev/null; b=$EPOCHREALTIME
+            printf 'compgen_builtin,%s,%s\\n' "$a" "$b" >>git809-bash-pipe-results/context-primitives.csv
+            a=$EPOCHREALTIME; while IFS= read -r name; do :; done < <(compgen -e); b=$EPOCHREALTIME
+            printf 'compgen_process_substitution,%s,%s\\n' "$a" "$b" >>git809-bash-pipe-results/context-primitives.csv
+            a=$EPOCHREALTIME; _git809_write_context windows >/dev/null; b=$EPOCHREALTIME
+            printf 'full_windows_context,%s,%s\\n' "$a" "$b" >>git809-bash-pipe-results/context-primitives.csv
+            a=$EPOCHREALTIME; _git809_write_context unix >/dev/null; b=$EPOCHREALTIME
+            printf 'full_unix_context,%s,%s\\n' "$a" "$b" >>git809-bash-pipe-results/context-primitives.csv
+          done
           for ((i=0;i<10;i++)); do git-ipc --version >/dev/null || { echo "GIT809_WARMUP_FAILED i=$i" >&2; exit 42; }; done
           export GIT809_STAGE_TRACE_FILE="$PWD/git809-bash-pipe-results/request-stages.csv"
           printf 'mode,start,end\n' >git809-bash-pipe-results/total-times.csv
@@ -94,6 +109,12 @@ jobs:
               totals[row['mode']].append(ms(row['start'],row['end']))
           for name,values in totals.items():
             report(name,values)
+          primitive=defaultdict(list)
+          with open('git809-bash-pipe-results/context-primitives.csv',newline='',encoding='utf-8') as f:
+            for row in csv.DictReader(f):
+              primitive[row['operation']].append(ms(row['start'],row['end']))
+          for name,values in primitive.items():
+            report('primitive_'+name,values)
           print('GIT809_STAGE_SHA',__import__('os').environ['GITHUB_SHA'],flush=True)
           PY
       - name: Preserve stage samples and native manager trace
