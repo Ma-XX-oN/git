@@ -52,3 +52,9 @@ jobs:
           [[ "$editor" == git809-inline ]] || { printf 'environment not forwarded: %s\n' "$editor" >&2; exit 1; }
           [[ ! ${GIT_EDITOR+x} ]] || { printf 'parent environment was mutated\n' >&2; exit 1; }
           printf 'PASS cwd, inline environment, and parent isolation\n'
+          direct="$(./git.exe --version)"
+          [[ "$direct" == git\ version\ * ]] || exit 1
+          for i in {1..30}; do
+            git-ipc --version >/dev/null || { printf 'worker request %s failed\n' "$i" >&2; exit 1; }
+          done
+          printf 'PASS: direct Git unaffected and 30 worker replenishments\n'
