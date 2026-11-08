@@ -20,6 +20,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Ensure Bash supports fractional read timeouts on macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          brew install bash
+          echo "$(brew --prefix bash)/bin" >> "$GITHUB_PATH"
       - name: Build native Git including permanent Unix preload worker
         shell: bash
         run: |
