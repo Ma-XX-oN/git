@@ -75,6 +75,16 @@ It returns the selected native handle, raising on failure. No cross-language
 C library is introduced: GET and ID connect Bash with Python, while the five
 Git worker channels connect Bash with C.
 
+## Existing output limitation
+
+The current Bash client drains stdout/stderr using Bash `read -d ''` into
+shell strings. Bash variables cannot contain NUL bytes. Consequently the
+existing Git IPC experiment is **not yet a byte-transparent stdout/stderr
+transport for binary Git output**. This pre-existing limitation is separate
+from, and is not corrected by, Windows `T` identification or by the new
+binary stdin forwarding. No full-Git-compatibility claim is permitted until
+binary stdout/stderr and interactive stdin tests are implemented and pass.
+
 ## Acceptance criteria
 
 - Windows: identify selected pipe by `T`, not `NtQueryInformationFile` state or probe close; test both possible instance orders, two markers, no marker, probe remaining open, and client disconnect mid-handshake.
