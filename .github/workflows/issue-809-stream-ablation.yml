@@ -1,0 +1,88 @@
+name: RWF 809 same-runner Windows stream ablation
+on:
+  push:
+    branches: [investigation-809-stream-same-runner-ablation]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-native-stream:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Compile native Git named-pipe worker and decoder
+        shell: bash
+        run: |
+          . /etc/profile
+          make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git.exe
+      - name: Check environment roundtrip, cwd, isolation, and IPC latency
+        shell: bash
+        run: |
+          . /etc/profile
+          set -uo pipefail
+          PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
+          export GIT809_MANAGER_PYTHON="$(cygpath -w "$PYTHON_EXE")"
+          export GIT809_WORKER_GIT="$(cygpath -w "$PWD/git.exe")"
+          export GIT809_DRAIN_MODE=chunk100
+          mkdir -p git809-stream-results
+          bash -n experiments/issue-809/git-ipc-request.sh || exit 21
+          source experiments/issue-809/git-manager.sh 3 || exit 22
+          [[ "$(git-ipc --version)" == "$("$GIT809_WORKER_GIT" --version)" ]] || exit 23
+          cd experiments/issue-809
+          [[ "$(git-ipc rev-parse --show-prefix)" == "experiments/issue-809/" ]] || exit 24
+          cd ../..
+          for v in 'simple' 'sp ace' 'slash\back' 'quote"value' '$(echo DO-NOT-EXECUTE)' $'line1\nline2' $'tab\tvalue' $'carriage\rreturn' $'unicode-\u00e9-\u2603' $'single'\''quote' $'tick\x60value' ""; do
+            actual="$(GIT_EDITOR="$v" git-ipc var GIT_EDITOR)" || { printf 'failed %q\n' "$v" >&2; exit 31; }
+            [[ "$actual" == "$v" ]] || { printf 'mismatch expected=%q actual=%q\n' "$v" "$actual" >&2; exit 32; }
+          done
+          [[ ! -v GIT_EDITOR ]] || exit 33
+          printf 'GIT809_STREAM_ROUNDTRIP_PASS\n'
+          printf 'round,cwd,env,sample,start,end\n' >git809-stream-results/ablation.csv
+          modes=(00 10 11 01 01 11 10 00 00 01 11 10 10 11 01 00)
+          for ((round=0;round<16;round++)); do
+            mode=${modes[round]}
+            export GIT809_ABLATION_CWD=${mode:0:1}
+            export GIT809_ABLATION_ENV=${mode:1:1}
+            git-ipc --version >/dev/null || { echo "SMOKE_FAILED $mode" >&2; exit 41; }
+            for ((i=0;i<100;i++)); do
+              a=$EPOCHREALTIME
+              git-ipc --version >/dev/null || { echo "BENCH_FAILED $mode $i" >&2; exit 42; }
+              b=$EPOCHREALTIME
+              printf '%s,%s,%s,%s,%s,%s\n' "$round" "${mode:0:1}" "${mode:1:1}" "$i" "$a" "$b" >>git809-stream-results/ablation.csv
+            done
+            printf 'GIT809_ABLATION_ROUND round=%d mode=%s\n' "$round" "$mode"
+          done
+          "$PYTHON_EXE" - <<'PY'
+          import csv,math,statistics,os
+          from collections import defaultdict
+          from decimal import Decimal
+          samples=defaultdict(list); batches=defaultdict(list)
+          with open('git809-stream-results/ablation.csv',newline='',encoding='utf-8') as f:
+            for row in csv.DictReader(f):
+              mode=row['cwd']+row['env']
+              v=float((Decimal(row['end'])-Decimal(row['start']))*1000)
+              assert v>0
+              samples[mode].append(v); batches[(mode,int(row['round']))].append(v)
+          assert set(samples)=={'00','01','10','11'}
+          assert sum(map(len,samples.values()))==1600
+          for mode in ('00','10','01','11'):
+            v=sorted(samples[mode]); assert len(v)==400
+            rm=[round(statistics.median(vals),4) for (m,round_id),vals in sorted(batches.items(),key=lambda item:item[0][1]) if m==mode]
+            assert len(rm)==4
+            print('GIT809_SAME_RUNNER',mode,'n',len(v),'median_ms',round(statistics.median(v),4),'p95_ms',round(v[math.ceil(.95*len(v))-1],4),'round_medians',rm,flush=True)
+          print('GIT809_SAME_RUNNER_SHA',os.environ['GITHUB_SHA'])
+          PY
+      - name: Preserve timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-native-direct-export-windows
+          path: git809-stream-results/
+          if-no-files-found: warn
