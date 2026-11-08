@@ -11,6 +11,11 @@ Status: approved design; implementation and native acceptance must be verified s
 
 ## Cross-platform contract
 
+Source `experiments/issue-809/git-manager.sh [worker-count]` as the common
+entry point. It uses Bash's `OSTYPE`: `msys*` selects the Windows client;
+`linux*` and `darwin*` source `git-manager-unix.sh`, forwarding the arguments
+and return status. Other platforms return an unsupported-platform error.
+
 Every logical FIFO or named-pipe channel is treated as **unidirectional** on Linux, macOS, and Windows. No application protocol depends on Linux's non-POSIX `O_RDWR` FIFO extension or on Windows full-duplex application transport.
 
 Allocation uses two distinct logical channels on **all** platforms:
