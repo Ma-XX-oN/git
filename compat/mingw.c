@@ -3977,7 +3977,7 @@ static void git809_trace_worker_stage(const char *stage)
                      FILE_ATTRIBUTE_NORMAL, NULL);
   if (file == INVALID_HANDLE_VALUE)
     return;
-  count = snprintf(line, sizeof(line), "worker=%lu stage=%s\\n",
+  count = snprintf(line, sizeof(line), "worker=%lu stage=%s\n",
                    (unsigned long)GetCurrentProcessId(), stage);
   if (count > 0 && count < sizeof(line))
     WriteFile(file, line, count, &written, NULL);
