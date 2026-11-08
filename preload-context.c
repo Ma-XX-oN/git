@@ -113,6 +113,8 @@ static int apply_environment_block(const char *buf, size_t len)
   return 0;
 }
 
+#include "preload-export-stream.h"
+
 int preload_apply_context(const char *buf, size_t len)
 {
   size_t offset = 0;
@@ -133,6 +135,30 @@ int preload_apply_context(const char *buf, size_t len)
       if (!*cwd || !is_utf8(cwd) || chdir(cwd))
         return -1;
       seen_cwd = 1;
+      offset = (size_t)(end - buf) + 1;
+    } else if (!strcmp(tag, "cwd-win") && !seen_cwd) {
+      size_t n;
+      char *path;
+      int bad;
+      end = memchr(buf + offset, '\0', len - offset);
+      if (!end) return -1;
+      n = (size_t)(end - (buf + offset));
+      if (n < 2 || buf[offset + n - 1] != '\n') return -1;
+      path = malloc(n);
+      if (!path) return -1;
+      memcpy(path, buf + offset, n - 1);
+      path[n - 1] = '\0';
+      bad = !is_utf8(path) || chdir(path);
+      free(path);
+      if (bad) return -1;
+      seen_cwd = 1;
+      offset = (size_t)(end - buf) + 1;
+    } else if (!strcmp(tag, "env-export") && !seen_env) {
+      end = memchr(buf + offset, '\0', len - offset);
+      if (!end || apply_export_stream(buf + offset,
+                                      (size_t)(end - (buf + offset))))
+        return -1;
+      seen_env = 1;
       offset = (size_t)(end - buf) + 1;
     } else if (!strcmp(tag, "env") && !seen_env) {
       unsigned long size;
