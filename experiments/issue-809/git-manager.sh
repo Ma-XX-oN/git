@@ -90,6 +90,7 @@ git-ipc() {
   _GIT809_REQUEST_SEQ=$(( ${_GIT809_REQUEST_SEQ:-0} + 1 ))
   local allocator reply client_pid=$BASHPID
   local request_id="${client_pid}-${_GIT809_REQUEST_SEQ}"
+  local marker=$(( _GIT809_REQUEST_SEQ % 10 ))
   printf -v allocator '%s%s' '\\.\pipe\git809-allocate-req-' "$_GIT809_OWNER_WINPID"
   printf -v reply '%s%s-%s' '\\.\pipe\git809-allocate-reply-' "$_GIT809_OWNER_WINPID" "$request_id"
   local pid i count header arg status line
@@ -100,7 +101,7 @@ git-ipc() {
   if (( i == 400 )); then
     printf 'GIT-IPC ERROR: allocation request pipe unavailable\n' >&2; return 255
   fi
-  if ! printf 'TGET %s\n' "$request_id" >&3; then
+  if ! printf '%sGET %s\n' "$marker" "$request_id" >&3; then
     exec 3>&-
     printf 'GIT-IPC ERROR: allocation request write failed\n' >&2; return 255
   fi
@@ -112,7 +113,7 @@ git-ipc() {
   if (( i == 400 )); then
     printf 'GIT-IPC ERROR: allocation reply pipe unavailable\n' >&2; return 255
   fi
-  printf T >&8 || { exec 8>&- 3>&-; printf 'GIT-IPC ERROR: reply marker write failed\n' >&2; return 255; }
+  printf '%s' "$marker" >&8 || { exec 8>&- 3>&-; printf 'GIT-IPC ERROR: reply marker write failed\n' >&2; return 255; }
   IFS= read -r pid <&8 || { exec 8>&- 3>&-; printf 'GIT-IPC ERROR: allocation response failed\n' >&2; return 255; }
   exec 8>&- 3>&-
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE allocated pid=%s bashpid=%s\n' "$pid" "$BASHPID" >>"$_GIT809_MANAGER_LOG"
