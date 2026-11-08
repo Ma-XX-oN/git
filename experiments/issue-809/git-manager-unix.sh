@@ -58,12 +58,6 @@ if (( _git809_unix_source_rc != 0 )); then
   return "$_git809_unix_source_rc"
 fi
 
-# Preserve the shell's original stdin so ordinary Git commands do not
-# spawn a pump just because the invoking environment itself uses a FIFO.
-if [[ -z ${_GIT809_BASE_STDIN_FD:-} ]]; then
-  exec {_GIT809_BASE_STDIN_FD}<&0 || return 255
-fi
-
 _git809_git_ipc_impl() {
   if [[ -z ${_GIT809_UNIX_DIRECTORY:-} || $# -gt 31 ]]; then
     printf 'GIT-IPC ERROR: manager unavailable or too many arguments\n' >&2
@@ -94,16 +88,8 @@ _git809_git_ipc_impl() {
   exec 6<"$worker/exit-code" || { exec 4<&- 5<&-; printf 'GIT-IPC ERROR: exit-code open failed\n' >&2; return 255; }
   exec 8>"$worker/stdin" || { exec 4<&- 5<&- 6<&-; printf 'GIT-IPC ERROR: stdin open failed\n' >&2; return 255; }
   exec 7>"$worker/param-env-cwd" || { exec 4<&- 5<&- 6<&- 8>&-; printf 'GIT-IPC ERROR: control open failed\n' >&2; return 255; }
-  # Forward redirected stdin only when it actually refers to a file or
-  # pipe. Ordinary no-input Git commands do not start a relay process.
-  # The child owns the writer after this function closes descriptor 8.
-  if [[ ( -p /dev/fd/0 || -f /dev/fd/0 ) &&
-          ! /dev/fd/0 -ef /dev/fd/$_GIT809_BASE_STDIN_FD ]]; then
-    # Close the control writer in the pump: the worker waits for its EOF.
-    # Also drop unrelated worker channels inherited by the child.
-    cat <&0 >&8 8>&- 7>&- 4<&- 5<&- 6<&- &
-    stdin_forward_pid=$!
-  fi
+  # No relay process: stdin is unavailable pending process-free handle
+  # transfer. Close the worker channel after Windows has consumed T.
   exec 8>&-
 
 
@@ -164,16 +150,8 @@ _git809_git_ipc_impl() {
   printf 'GIT-IPC ERROR: invalid worker exit-code response\n' >&2
   return 255
 }
-# Always reap a stdin forwarder, including when the Git command fails.
 git-ipc() {
-  local stdin_forward_pid= rc=0
-  # Run under an explicit error guard so Bash errexit cannot skip cleanup.
-  _git809_git_ipc_impl "$@" || rc=$?
-  if [[ -n $stdin_forward_pid ]]; then
-    kill "$stdin_forward_pid" 2>/dev/null || :
-    wait "$stdin_forward_pid" 2>/dev/null || :
-  fi
-  return "$rc"
+  _git809_git_ipc_impl "$@"
 }
 alias git='git-ipc'
 return 0
