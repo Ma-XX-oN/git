@@ -22,6 +22,7 @@ BAD_HANDLE = ctypes.c_void_p(-1).value
 READ, WRITE = 0x80000000, 0x40000000
 OPEN_EXISTING = 3
 ERROR_BROKEN_PIPE = 109
+ERROR_PIPE_NOT_CONNECTED = 233
 
 def connect(pid, suffix, access):
     path = rf"\\.\pipe\{pid}-{suffix}"
@@ -44,7 +45,7 @@ def read_all(handle):
             break
         output.extend(buf.raw[:count.value])
     err = ctypes.get_last_error()
-    if err not in (0, ERROR_BROKEN_PIPE):
+    if err not in (0, ERROR_BROKEN_PIPE, ERROR_PIPE_NOT_CONNECTED):
         raise OSError(err, "named pipe read failed")
     return bytes(output)
 
