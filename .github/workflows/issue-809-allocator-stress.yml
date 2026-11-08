@@ -42,7 +42,7 @@ jobs:
           trap 'rc=$?; if [[ -n ${_GIT809_MANAGER_LOG:-} && -f $_GIT809_MANAGER_LOG ]]; then cp -- "$_GIT809_MANAGER_LOG" git809-stream-results/manager.log; if (( rc != 0 )); then tail -n 120 -- "$_GIT809_MANAGER_LOG" >&2; fi; fi; exit "$rc"' EXIT
           # Bound the first allocation so a blocking native connection
           # produces the manager diagnostic instead of consuming the 45m job.
-          git-ipc --version >git809-stream-results/smoke.out &
+          { git-ipc --version >git809-stream-results/smoke.out || exit $?; } &
           smoke_pid=$!
           # MSYS signals do not reliably interrupt a blocked native pipe open.
           # Kill only the smoke subshell by native Windows PID on timeout.
