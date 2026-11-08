@@ -48,7 +48,7 @@ try:
     # The first pipe stays connected as a probe. The second sends GET.
     # The ID is delivered on a distinct, T-qualified logical channel.
     client_id = f"{os.getpid()}-1"
-    request = (f"TGET {client_id}\n").encode("ascii")
+    request = (f"{1%10}GET {client_id}\n").encode("ascii")
     n = W.DWORD()
     if not K.WriteFile(handles[1], request, len(request), C.byref(n), None):
         raise OSError(C.get_last_error(), "WriteFile(request)")
@@ -65,7 +65,7 @@ try:
         time.sleep(.002)
     else:
         raise TimeoutError("separate reply unavailable")
-    if not K.WriteFile(response_handle, b"T", 1, C.byref(n), None):
+    if not K.WriteFile(response_handle, b"1", 1, C.byref(n), None):
         raise OSError(C.get_last_error(), "WriteFile(reply marker)")
     data = C.create_string_buffer(64)
     if not K.ReadFile(response_handle, data, 64, C.byref(n), None):
