@@ -145,7 +145,7 @@ git-ipc() {
   printf '%s' "$marker" >&6 || { printf 'GIT-IPC ERROR: channel 6 marker failed\n' >&2; return 255; }
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE open stdin pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
   exec 8<>"$pstdin" || { exec 4<&- 5<&- 6<&-; printf 'GIT-IPC ERROR: stdin pipe open failed\n' >&2; return 255; }
-  printf T >&8 || { printf 'GIT-IPC ERROR: channel 8 marker failed\n' >&2; return 255; }
+  printf '%s' "$marker" >&8 || { printf 'GIT-IPC ERROR: channel 8 marker failed\n' >&2; return 255; }
   exec 7<>"$pcontrol" || { exec 4<&- 5<&- 6<&- 8>&-; printf 'GIT-IPC ERROR: control pipe open failed\n' >&2; return 255; }
   printf '%s' "$marker" >&7 || { printf 'GIT-IPC ERROR: channel 7 marker failed\n' >&2; return 255; }
   # No relay process: stdin is unavailable pending process-free handle
