@@ -84,7 +84,7 @@ K.GetOverlappedResult.restype=W.BOOL
 K.CancelIoEx.argtypes=[W.HANDLE,C.POINTER(OVERLAPPED)]
 K.CancelIoEx.restype=W.BOOL
 
-def _start_async(state,operation,data=None):
+def _start_async(state,operation,data=None,size=1):
   """Start one pending connect/read/write on a named-pipe instance."""
   state["pending"]=False
   K.ResetEvent(state["event"])
@@ -94,8 +94,9 @@ def _start_async(state,operation,data=None):
   if operation=="connect":
     ok=bool(K.ConnectNamedPipe(state["h"],C.byref(state["ov"])))
   elif operation=="read":
-    state["buffer"]=C.create_string_buffer(1)
-    ok=bool(K.ReadFile(state["h"],state["buffer"],1,C.byref(n),
+    assert 1<=size<=64
+    state["buffer"]=C.create_string_buffer(size)
+    ok=bool(K.ReadFile(state["h"],state["buffer"],size,C.byref(n),
                        C.byref(state["ov"])))
   else:
     assert operation=="write" and data is not None
@@ -339,118 +340,148 @@ def select_transport(address, marker):
 
 
 def allocation_server(owner_pid:int,pool:Pool):
-  """Dynamically replenish native pipe listeners; never wait for probe EOF.
+  """Event-driven GET service: no per-connection threads or 1 ms polling.
 
-  Each Git Bash duplex open may consume an extra probe instance. A fixed
-  two-instance pair can become exhausted before the actual data open, as
-  demonstrated by request 1421 of the native Windows stress run. Accept
-  connections independently and dispatch only those that send GET bytes.
+  Each connection gets its own OVERLAPPED connect/read event. The single
+  allocator loop retains a backlog of listeners while distinguishing real
+  GET requests from the short-lived Git Bash open probes. Replies use their
+  separate per-request named-pipe channel.
   """
   address=r"\\.\pipe\git809-allocate-req-"+str(owner_pid)
   unlimited=255
-  pending=queue.Queue()
-  first=True
   backlog=min(64,max(4,2*pool.target))
+  max_active=56  # WaitForMultipleObjects supports at most 64 handles.
+  active=[]
+  first=True
   print(f"ALLOCATOR_START {address} backlog={backlog}",flush=True)
 
-  def accept(h):
-    ok=bool(K.ConnectNamedPipe(h,None))
-    error=0 if ok else C.get_last_error()
-    pending.put((h,ok or error in (ERROR_PIPE_CONNECTED,ERROR_NO_DATA),
-                 error))
-
-  def new_listener():
+  def make_listener():
     nonlocal first
     h=K.CreateNamedPipeW(
-      address,
-      PIPE_ACCESS_DUPLEX|(FILE_FLAG_FIRST_PIPE_INSTANCE if first else 0),
+      address,PIPE_ACCESS_DUPLEX|FILE_FLAG_OVERLAPPED|
+      (FILE_FLAG_FIRST_PIPE_INSTANCE if first else 0),
       PIPE_TYPE_BYTE|PIPE_WAIT,unlimited,256,256,5000,None)
     if h==INVALID:
       raise OSError(C.get_last_error(),"CreateNamedPipe(allocation)")
     first=False
-    threading.Thread(target=accept,args=(h,),daemon=True).start()
-
-  def serve_connection(h):
-    try:
-      # Probes carry no bytes; the actual transport must send TGET <PID>.
-      frame=bytearray()
-      deadline=time.monotonic()+2
-      while time.monotonic()<deadline:
-        available=W.DWORD()
-        if not K.PeekNamedPipe(h,None,0,None,C.byref(available),None):
-          error=C.get_last_error()
-          if error in (109,ERROR_NO_DATA,233):
-            return
-          raise OSError(error,"PeekNamedPipe(request)")
-        if not available.value:
-          time.sleep(.001)
-          continue
-        buf=C.create_string_buffer(min(available.value,64))
-        n=W.DWORD()
-        if not K.ReadFile(h,buf,len(buf),C.byref(n),None):
-          error=C.get_last_error()
-          if error in (109,ERROR_NO_DATA,233):
-            return
-          raise OSError(error,"ReadFile(request)")
-        frame.extend(buf.raw[:n.value])
-        if len(frame)>64:
-          raise ValueError("oversized request")
-        if b"\n" in frame:
-          break
-      else:
-        print("ALLOCATOR_IDLE_PROBE_EXPIRED",flush=True)
-        return
-      if len(frame)<7 or frame[0] not in b"0123456789" or not frame[1:].startswith(b"GET ") or not frame.endswith(b"\n"):
-        raise ValueError("bad GET frame or missing digit marker")
-      raw_id=frame[5:-1]
-      parts=raw_id.split(b"-")
-      if len(parts)!=2 or any(not p.isdigit() or len(p)>10 for p in parts):
-        raise ValueError("invalid reply identity")
-      client_pid,sequence=(int(p) for p in parts)
-      if not 1<=client_pid<=0xffffffff or not 1<=sequence<=0xffffffff:
-        raise ValueError("reply identity out of range")
-      if frame[0]-ord("0")!=sequence%10:
-        raise ValueError("GET marker does not match request sequence")
-      # A unique reply pipe is required per request, not just per client.
-      reply=(r"\\.\pipe\git809-allocate-reply-"+str(owner_pid)+
-             "-"+str(client_pid)+"-"+str(sequence))
-      response=select_transport(reply,sequence%10)
-      try:
-        answer=pool.alloc().encode("ascii")
-        _write_reply(response,answer)
-        if not K.FlushFileBuffers(response):
-          error=C.get_last_error()
-          if error not in (109,ERROR_NO_DATA,233):
-            raise OSError(error,"FlushFileBuffers(reply)")
-      finally:
-        K.DisconnectNamedPipe(response)
-        K.CloseHandle(response)
-    except Exception as error:
-      print("ALLOCATOR_CONNECTION_ERROR "+repr(error),flush=True)
-    finally:
-      K.DisconnectNamedPipe(h)
+    event=K.CreateEventW(None,True,False,None)
+    if not event:
       K.CloseHandle(h)
+      raise OSError(C.get_last_error(),"CreateEvent(allocation)")
+    state={"h":h,"event":event,"ov":OVERLAPPED(),"pending":False,
+           "buffer":None,"phase":"connect","ready":None,
+           "frame":bytearray(),"deadline":None}
+    state["ov"].hEvent=event
+    active.append(state)
+    state["ready"]=_start_async(state,"connect")
+    return state
+
+  def parse_and_reply(frame):
+    if (len(frame)<7 or frame[0] not in b"0123456789" or
+        not frame[1:].startswith(b"GET ") or not frame.endswith(b"\n")):
+      raise ValueError("bad GET frame or missing digit marker")
+    raw_id=frame[5:-1]
+    parts=raw_id.split(b"-")
+    if len(parts)!=2 or any(not p.isdigit() or len(p)>10 for p in parts):
+      raise ValueError("invalid reply identity")
+    client_pid,sequence=(int(p) for p in parts)
+    if not 1<=client_pid<=0xffffffff or not 1<=sequence<=0xffffffff:
+      raise ValueError("reply identity out of range")
+    if frame[0]-ord("0")!=sequence%10:
+      raise ValueError("GET marker does not match request sequence")
+    reply=(r"\\.\pipe\git809-allocate-reply-"+str(owner_pid)+
+           "-"+str(client_pid)+"-"+str(sequence))
+    response=select_transport(reply,sequence%10)
+    try:
+      answer=pool.alloc().encode("ascii")
+      _write_reply(response,answer)
+      if not K.FlushFileBuffers(response):
+        error=C.get_last_error()
+        if error not in (ERROR_BROKEN_PIPE,ERROR_NO_DATA,233):
+          raise OSError(error,"FlushFileBuffers(reply)")
+    finally:
+      K.DisconnectNamedPipe(response)
+      K.CloseHandle(response)
+
+  def advance(state):
+    """Consume completed operations and submit the next read immediately."""
+    while state["ready"] is not None:
+      n=state["ready"]
+      state["ready"]=None
+      if state["phase"]=="connect":
+        if n<0:
+          return False
+        state["phase"]="read"
+        state["deadline"]=time.monotonic()+2
+      elif state["phase"]=="read":
+        if n<=0:
+          return False
+        state["frame"].extend(state["buffer"].raw[:n])
+        if len(state["frame"])>64:
+          raise ValueError("oversized request")
+        if b"\n" in state["frame"]:
+          parse_and_reply(bytes(state["frame"]))
+          return False
+        if len(state["frame"])==64:
+          raise ValueError("oversized request")
+      else:
+        raise RuntimeError("invalid GET state")
+      state["ready"]=_start_async(state,"read",
+                                  size=64-len(state["frame"]))
+    return True
+
+  def dispose(state):
+    _close_async(state)
+    active.remove(state)
 
   try:
     for _ in range(backlog):
-      new_listener()
+      make_listener()
     while not pool.closing.is_set():
-      try:
-        h,ok,error=pending.get(timeout=.25)
-      except queue.Empty:
+      now=time.monotonic()
+      for state in list(active):
+        try:
+          if state["pending"] and K.WaitForSingleObject(
+              state["event"],0)==WAIT_OBJECT_0:
+            state["ready"]=_finish_async(state)
+          if state["ready"] is not None:
+            if not advance(state):
+              dispose(state)
+              continue
+          if state["deadline"] is not None and now>=state["deadline"]:
+            print("ALLOCATOR_IDLE_PROBE_EXPIRED",flush=True)
+            dispose(state)
+        except Exception as error:
+          print("ALLOCATOR_CONNECTION_ERROR "+repr(error),flush=True)
+          dispose(state)
+      # Keep ready listeners available before servicing the next request.
+      listeners=sum(s["phase"]=="connect" for s in active)
+      while listeners<backlog and len(active)<max_active:
+        make_listener()
+        listeners+=1
+      pending=[s for s in active if s["pending"]]
+      if not pending:
         continue
-      # Replenish the backlog BEFORE spending time on the accepted client.
-      new_listener()
-      if ok:
-        threading.Thread(target=serve_connection,args=(h,),daemon=True).start()
-      else:
-        K.CloseHandle(h)
-        print(f"ALLOCATOR_ACCEPT_ERROR {error}",flush=True)
+      deadlines=[s["deadline"] for s in pending
+                 if s["deadline"] is not None]
+      remaining=min(0.25,max(0,min(deadlines)-time.monotonic())) if (
+        deadlines) else 0.25
+      handles=(W.HANDLE*len(pending))(*(s["event"] for s in pending))
+      wait=K.WaitForMultipleObjects(len(pending),handles,False,
+                                    max(1,int(remaining*1000)))
+      if wait==WAIT_FAILED:
+        raise OSError(C.get_last_error(),"WaitForMultipleObjects(GET)")
   except Exception as error:
     with pool.lock:
       pool.errors.append("allocation listener failed: "+repr(error))
     print("ALLOCATOR_FATAL "+repr(error),flush=True)
     raise
+  finally:
+    for state in list(active):
+      try:
+        dispose(state)
+      except Exception as error:
+        print("ALLOCATOR_CLEANUP_ERROR "+repr(error),flush=True)
 
 
 def main():
