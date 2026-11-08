@@ -105,7 +105,15 @@ def run(args):
     response = root / "allocate-reply"
     os.mkfifo(request, 0o600)
     os.mkfifo(response, 0o600)
-    req_fd = os.open(request, os.O_RDWR | os.O_NONBLOCK)
+    # A FIFO has one application-data direction. A separate local writer
+    # prevents EOF/readability spin while no external request writer is open.
+    # Unlike O_RDWR, this is portable to macOS and conforming POSIX FIFOs.
+    req_fd = os.open(request, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        req_guard_fd = os.open(request, os.O_WRONLY | os.O_NONBLOCK)
+    except BaseException:
+        os.close(req_fd)
+        raise
     incoming = bytearray()
     response_fd = None
     try:
@@ -158,6 +166,7 @@ def run(args):
         ready.unlink(missing_ok=True) if "ready" in locals() else None
         if response_fd is not None:
             os.close(response_fd)
+        os.close(req_guard_fd)
         os.close(req_fd)
         pool.close()
         request.unlink(missing_ok=True)
