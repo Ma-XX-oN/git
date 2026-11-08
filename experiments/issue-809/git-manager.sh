@@ -99,17 +99,17 @@ git-ipc() {
     exec 3>&-
     printf 'GIT-IPC ERROR: allocation request write failed\n' >&2; return 255
   fi
-  exec 3>&-
+  # Keep request open until ID delivery so the server can read its bytes.
   for ((i=0;i<400;i++)); do
-    if { exec 3<>"$reply"; } 2>/dev/null; then break; fi
+    if { exec 8<>"$reply"; } 2>/dev/null; then break; fi
     sleep .005
   done
   if (( i == 400 )); then
     printf 'GIT-IPC ERROR: allocation reply pipe unavailable\n' >&2; return 255
   fi
-  printf T >&3 || { exec 3>&-; printf 'GIT-IPC ERROR: reply marker write failed\n' >&2; return 255; }
-  IFS= read -r pid <&3 || { exec 3>&-; printf 'GIT-IPC ERROR: allocation response failed\n' >&2; return 255; }
-  exec 3>&-
+  printf T >&8 || { exec 8>&- 3>&-; printf 'GIT-IPC ERROR: reply marker write failed\n' >&2; return 255; }
+  IFS= read -r pid <&8 || { exec 8>&- 3>&-; printf 'GIT-IPC ERROR: allocation response failed\n' >&2; return 255; }
+  exec 8>&- 3>&-
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE allocated pid=%s bashpid=%s\n' "$pid" "$BASHPID" >>"$_GIT809_MANAGER_LOG"
   if [[ $pid == WAIT ]]; then
     printf 'Git worker pool temporarily depleted\n' >&2
