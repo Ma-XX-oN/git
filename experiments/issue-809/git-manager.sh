@@ -151,7 +151,9 @@ _git809_git_ipc_impl() {
   # subsequent application bytes in the client->worker direction. No extra
   # child is started for the normal no-input case.
   if [[ -p /dev/fd/0 || -f /dev/fd/0 ]]; then
-    cat <&0 >&8 &
+    # Close the control writer in the pump: the worker waits for its EOF.
+    # Also drop unrelated worker channels inherited by the child.
+    cat <&0 >&8 8>&- 7>&- 4<&- 5<&- 6<&- &
     stdin_forward_pid=$!
   fi
   exec 8>&-
