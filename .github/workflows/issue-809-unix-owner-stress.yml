@@ -1,0 +1,114 @@
+name: RWF 809 Linux macOS native context and owner stress
+on:
+  push:
+    branches: [investigation-809-allocator-resource-lifecycle]
+    paths:
+      - .github/workflows/issue-809-unix-owner-stress.yml
+      - preload-worker-unix.c
+      - preload-context.c
+      - preload-export-stream.h
+      - experiments/issue-809/git-ipc-request.sh
+      - experiments/issue-809/unix_git_ipc_pool.py
+      - experiments/issue-809/git-manager-unix.sh
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  unix-owner-stress:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install current Bash on macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          brew install bash
+          echo "$(brew --prefix bash)/bin" >> "$GITHUB_PATH"
+      - name: Build native Unix Git including worker and context decoder
+        shell: bash
+        run: |
+          make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git
+      - name: Stress context forwarding, process ownership and FIFO cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile experiments/issue-809/unix_git_ipc_pool.py
+          bash -n experiments/issue-809/git-manager-unix.sh
+          bash -n experiments/issue-809/git-ipc-request.sh
+          export GIT809_WORKER_GIT="$PWD/git"
+          export GIT809_MANAGER_PYTHON=python3
+          export GIT809_SHELL_LIBRARY="$PWD/experiments/issue-809/git-manager-unix.sh"
+          source experiments/issue-809/git-manager-unix.sh 4
+          direct="$("$GIT809_WORKER_GIT" --version)"
+          [[ "$(git-ipc --version)" == "$direct" ]] || exit 31
+          cd experiments/issue-809
+          [[ "$(git-ipc rev-parse --show-prefix)" == 'experiments/issue-809/' ]] || exit 32
+          cd ../..
+          for v in 'plain' 'sp ace' 'quote"value' 'slash\back' '$HOME' $'line1\nline2' $'tab\tvalue' $'carriage\rreturn' $'unicode-\u00e9-\u2603' $'single'\''quote' ''; do
+            actual="$(GIT_EDITOR="$v" git-ipc var GIT_EDITOR)" || exit 33
+            [[ "$actual" == "$v" ]] || { printf 'value mismatch expected=%q actual=%q\n' "$v" "$actual" >&2; exit 34; }
+          done
+          [[ ! -v GIT_EDITOR ]] || exit 35
+          printf 'GIT809_UNIX_CONTEXT_PASS %s\n' "$RUNNER_OS"
+          for ((i=0;i<6000;i++)); do
+            git-ipc --version >/dev/null || { printf 'GIT809_UNIX_STRESS_FAIL %s\n' "$i" >&2; exit 41; }
+            if (( i % 1000 == 0 )); then printf 'GIT809_UNIX_PROGRESS %s\n' "$i"; fi
+          done
+          export GIT809_POOL_ROOT="$_GIT809_UNIX_DIRECTORY"
+          python3 - <<'PY'
+          import os,time
+          from pathlib import Path
+          root=Path(os.environ['GIT809_POOL_ROOT'])
+          deadline=time.monotonic()+5
+          while time.monotonic()<deadline:
+            dirs=list(root.glob('worker-*'))
+            if len(dirs)<=8: break
+            time.sleep(.1)
+          assert len(dirs)<=8,('FIFO directories retained',len(dirs))
+          print('GIT809_UNIX_STRESS_PASS 6000 FIFO_DIRECTORIES',len(dirs),flush=True)
+          PY
+          python3 - <<'PY'
+          import os, re, shutil, subprocess, time
+          from pathlib import Path
+          bash=shutil.which('bash')
+          assert bash
+          script='''
+          source "$GIT809_SHELL_LIBRARY" 3 || exit 51
+          printf 'GET\n' > "$_GIT809_UNIX_DIRECTORY/allocate-req" || exit 52
+          IFS= read -r worker <&"$_GIT809_UNIX_REPLY_FD" || exit 53
+          printf 'ALLOCATED_DIR %s LOG %s\n' "$worker" "$_GIT809_UNIX_MANAGER_LOG"
+          IFS= read -r -t 120 hold || :
+          '''
+          child=subprocess.Popen([bash,'--noprofile','--norc','-c',script],
+             stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+             text=True,encoding='utf-8',env=os.environ.copy())
+          try:
+            line=child.stdout.readline().strip()
+            m=re.fullmatch(r'ALLOCATED_DIR (.+) LOG (.+)',line)
+            assert m,('allocation did not complete',line,child.poll())
+            log=Path(m.group(2)).read_text(encoding='utf-8',errors='replace')
+            matches=re.findall(r'^ALLOCATED (\d+)$',log,re.M)
+            assert matches,('missing allocated PID',log[-1500:])
+            pid=int(matches[-1])
+            assert subprocess.run(['ps','-p',str(pid)],capture_output=True).returncode==0
+            child.kill(); child.wait(timeout=5)
+            deadline=time.monotonic()+22
+            while time.monotonic()<deadline:
+              ps=subprocess.run(['ps','-o','stat=','-p',str(pid)],capture_output=True,text=True)
+              if ps.returncode!=0 or ps.stdout.strip().startswith('Z'): break
+              time.sleep(.2)
+            else:
+              raise AssertionError(f'worker {pid} remained active after owner shell exit')
+            print('GIT809_UNIX_OWNER_DEATH_PASS worker_pid',pid,flush=True)
+          finally:
+            if child.poll() is None: child.kill()
+            child.wait(timeout=5)
+          PY
+          printf 'GIT809_NATIVE_UNIX_ACCEPTED %s SHA=%s\n' "$RUNNER_OS" "$GITHUB_SHA"
