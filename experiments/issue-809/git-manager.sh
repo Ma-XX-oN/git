@@ -267,9 +267,9 @@ _git809_git_ipc_impl() {
 }
 # Reap the stdin forwarder even if Git fails after its worker is assigned.
 git-ipc() {
-  local stdin_forward_pid= rc
-  _git809_git_ipc_impl "$@"
-  rc=$?
+  local stdin_forward_pid= rc=0
+  # Run under an explicit error guard so Bash errexit cannot skip cleanup.
+  _git809_git_ipc_impl "$@" || rc=$?
   if [[ -n $stdin_forward_pid ]]; then
     kill "$stdin_forward_pid" 2>/dev/null || :
     wait "$stdin_forward_pid" 2>/dev/null || :
