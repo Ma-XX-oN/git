@@ -35,7 +35,7 @@ jobs:
           "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_git_ipc_pool.py experiments/issue-809/test_allocator_probe_hold.py
           bash -n experiments/issue-809/git-ipc-request.sh || exit 21
           source experiments/issue-809/git-manager.sh 3 || exit 22
-          trap 'rc=$?; if [[ -n ${_GIT809_MANAGER_LOG:-} && -f $_GIT809_MANAGER_LOG ]]; then cp -- "$_GIT809_MANAGER_LOG" git809-stream-results/manager.log; fi; exit "$rc"' EXIT
+          trap 'rc=$?; if [[ -n ${_GIT809_MANAGER_LOG:-} && -f $_GIT809_MANAGER_LOG ]]; then cp -- "$_GIT809_MANAGER_LOG" git809-stream-results/manager.log; if (( rc != 0 )); then tail -n 120 -- "$_GIT809_MANAGER_LOG" >&2; fi; fi; exit "$rc"' EXIT
           [[ "$(git-ipc --version)" == "$("$GIT809_WORKER_GIT" --version)" ]] || exit 23
           cd experiments/issue-809
           [[ "$(git-ipc rev-parse --show-prefix)" == "experiments/issue-809/" ]] || exit 24
