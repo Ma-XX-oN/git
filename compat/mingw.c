@@ -3778,8 +3778,9 @@ NORETURN void git_preinit_worker_exit(int status)
  */
 /*
  * Git Bash can open a throwaway pipe instance during redirection.
- * Each instance is connected independently, and only a client-sent 'T'
- * identifies the transport. Never rely on instance number or probe EOF.
+ * Each instance is connected independently; the client-sent per-command
+ * digit identifies the transport. The same digit is required on each channel.
+ * Never rely on instance number or probe EOF.
  *
  * ConnectNamedPipe is synchronous for these handles. Put both connection
  * waits on cancellable threads; the selected handle remains synchronous
@@ -3832,16 +3833,18 @@ enum transport_result {
  * remains INVALID_HANDLE_VALUE.
  */
 static int select_transport(HANDLE pair[2], DWORD timeout_ms,
-                            HANDLE *transport)
+                            HANDLE *transport, char expected_marker,
+                            char *actual_marker)
 {
   struct git809_connect_state state[2] = {0};
   DWORD start = GetTickCount(), available, n;
   HANDLE chosen = INVALID_HANDLE_VALUE;
   int i, marked[2], result = TRANSPORT_TIMEOUT;
 
-  if (!transport || !timeout_ms)
+  if (!transport || !actual_marker || !timeout_ms)
     return TRANSPORT_WIN32_ERROR;
   *transport = INVALID_HANDLE_VALUE;
+  *actual_marker = 0;
   for (i = 0; i < 2; i++) {
     state[i].pipe = pair[i];
     state[i].thread = CreateThread(NULL, 0, git809_connect_thread,
@@ -3873,11 +3876,13 @@ static int select_transport(HANDLE pair[2], DWORD timeout_ms,
       {
         char marker;
         if (!ReadFile(pair[i], &marker, 1, &n, NULL) ||
-            n != 1 || marker != 'T') {
+            n != 1 || marker < '0' || marker > '9' ||
+            (expected_marker && marker != expected_marker)) {
           result = TRANSPORT_INVALID_MARKER;
           goto done;
         }
       }
+      *actual_marker = marker;
       chosen = pair[i];
       pair[i] = INVALID_HANDLE_VALUE;
       result = TRANSPORT_OK;
@@ -3956,6 +3961,7 @@ static int git_preinit_worker(void)
 {
   char names[5][96];
   const char *suffixes[5] = {"stdin", "stdout", "stderr", "exit-code", "param-env-cwd"};
+  char call_marker = 0;
   HANDLE pipes[5][2];
   char *frame = NULL;
   char result[64];
@@ -4042,11 +4048,16 @@ static int git_preinit_worker(void)
     for (i = 0; i < 5; i++) {
       int channel = order[i];
       HANDLE selected;
-      int transport_rc = select_transport(pipes[channel], 2000, &selected);
+      char observed_marker = 0;
+      int transport_rc = select_transport(pipes[channel], 2000,
+                                          &selected, call_marker,
+                                          &observed_marker);
       if (transport_rc != TRANSPORT_OK) {
         rc = 122;
         goto cleanup;
       }
+      if (!call_marker)
+        call_marker = observed_marker;
       pipes[channel][1] = selected;
     }
   }
