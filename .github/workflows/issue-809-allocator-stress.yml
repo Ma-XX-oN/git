@@ -103,6 +103,7 @@ jobs:
             child.wait(timeout=5)
             if handle: k.CloseHandle(handle)
           PY
+          "$PYTHON_EXE" experiments/issue-809/test_allocator_probe_hold.py "$_GIT809_OWNER_WINPID" || exit 65
           cp -- "$_GIT809_MANAGER_LOG" git809-stream-results/manager.log
           "$PYTHON_EXE" - <<'PY'
           import csv,statistics,os,re
