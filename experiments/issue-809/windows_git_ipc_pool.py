@@ -152,7 +152,7 @@ class Pool:
       if p.stdout:
         p.stdout.close()
 
-def select_reply_transport(address):
+def select_transport(address):
   """Two Windows instances, one T-qualified unidirectional reply channel."""
   handles=[]
   threads=[]
@@ -287,7 +287,7 @@ def allocation_server(owner_pid:int,pool:Pool):
         raise ValueError("reply ID out of range")
       reply=(r"\\\\.\\pipe\\git809-allocate-reply-"+str(owner_pid)+
              "-"+str(client_id))
-      response=select_reply_transport(reply)
+      response=select_transport(reply)
       try:
         answer=pool.alloc().encode("ascii")
         n=W.DWORD()
