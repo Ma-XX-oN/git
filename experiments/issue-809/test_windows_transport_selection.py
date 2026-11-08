@@ -93,9 +93,21 @@ def test_duplicate_markers():
   """Both markers exist before the selector is allowed to read either."""
   address=r"\\.\pipe\git809-select-test-"+uuid.uuid4().hex
   original_start=manager._start_async
+  original_create=K.CreateNamedPipeW
+  instances_ready=threading.Event()
+  instances_created=0
   go=threading.Event()
   clients=[]
   result=[]
+
+  def tracked_create(*args):
+    nonlocal instances_created
+    handle=original_create(*args)
+    if handle!=manager.INVALID:
+      instances_created+=1
+      if instances_created==2:
+        instances_ready.set()
+    return handle
 
   def held_marker_read(state,operation,data=None,size=1):
     if operation=="read" and not go.wait(5):
@@ -109,9 +121,11 @@ def test_duplicate_markers():
       result.append(("error",error))
 
   manager._start_async=held_marker_read
+  K.CreateNamedPipeW=tracked_create
   try:
     t=threading.Thread(target=server,daemon=True)
     t.start()
+    assert instances_ready.wait(5),"server did not create both pipe instances"
     clients.append(connect(address))
     clients.append(connect(address))
     write(clients[0],b"1")
@@ -126,6 +140,7 @@ def test_duplicate_markers():
   finally:
     go.set()
     manager._start_async=original_start
+    K.CreateNamedPipeW=original_create
     for h in clients:
       K.CloseHandle(h)
 
