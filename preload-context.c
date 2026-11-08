@@ -12,6 +12,8 @@ static int valid_environment_block(const char *buf, size_t len)
 
   if (len < 2 || buf[len - 1] || buf[len - 2])
     return -1;
+  if (len == 2)
+    return 0;
   while (offset < len - 1 && buf[offset]) {
     const char *entry = buf + offset;
     const char *end = memchr(entry, '\0', len - offset);
