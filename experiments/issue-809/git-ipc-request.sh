@@ -7,7 +7,7 @@ _git809_write_context() {
   local -a names=() values=()
 
   if [[ $platform == windows ]]; then
-    cwd=$(cygpath -w "$PWD") || return 1
+    cwd=$(pwd -W) || return 1
   fi
   printf 'cwd\0%s\0' "$cwd" || return 1
 
