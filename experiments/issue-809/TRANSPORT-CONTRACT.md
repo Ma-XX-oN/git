@@ -22,6 +22,29 @@ The allocated worker has **five distinct logical channels**: `stdin` and `param-
 
 Linux/macOS use ordinary unidirectional FIFOs, with **no** `T` marker.
 
+### Standard-input payload and fast path
+
+The `stdin` channel is for application stdin bytes, not for the argument,
+cwd or environment frame. On Windows, Git Bash writes `T` first and the
+worker consumes it before exposing that handle as Git's stdin. On Unix,
+stdin carries application bytes without a marker. Redirected file or FIFO
+stdin is copied from git-ipc to the stdin channel by a short-lived shell
+child; the child must not inherit the `param-env-cwd` writer, because that
+would prevent the worker from observing the command frame's EOF. The shell
+reaps this child on success or error.
+
+When stdin is the same descriptor the owning shell had when git-manager was
+sourced, the client does not spawn a copy process. This keeps normal
+no-input commands on the low-overhead path. **Interactive terminal input
+forwarding is not implemented in this experiment**; it must not be claimed
+to work until a separate interactive-input acceptance test passes.
+
+Native acceptance must verify binary bytes crossing the separate stdin
+channel, including an input larger than one Windows pipe buffer, and confirm
+the normal no-input benchmark does not add a per-command forwarding process.
+
+
+
 ## Windows-only connection identification
 
 **Why Windows needs the marker:** In this Git Bash/MSYS2 named-pipe redirection path, tests observed an additional connection that does not carry the application's transport bytes (the *probe*), alongside the actual transport connection. The earlier allocator tried to identify the real connection by assuming the probe closed first. That assumption failed in native stress testing: two instances reached the same closing state, and allocation timed out. The `T` marker identifies the connection explicitly instead of guessing from connection order or disconnection state. This is a documented Git Bash/MSYS2 interoperability defect in our experimental transport; the evidence does **not** establish an upstream Git Bash bug or its root cause. Linux and macOS do not require this Windows-specific workaround.
