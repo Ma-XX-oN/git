@@ -35,7 +35,7 @@ For every logical channel, the Windows server/receiving endpoint creates a pair 
 5. Two `T` markers on distinct instances of a pair indicate a protocol violation; report an error, do not arbitrarily select one.
 6. Close and release all handles, pending accept operations, and per-connection state on success, error, cancellation, and owner death.
 
-For the allocation channels, the GET request and worker-ID reply travel over distinct logical named-pipe names, and the same marker rule applies to each. Concurrent clients must have correctly correlated replies; a shared reply stream without correlation is not sufficient.
+For allocation, GET and ID travel over distinct logical named-pipe names. The Windows reply name is unique for **every request**, identified by the Bash process ID and a monotonically increasing shell-local sequence; the GET frame carries that identity. Both the request parser and reply-name constructor validate its two unsigned decimal components. PID-only reply names are prohibited because successive calls from one Bash process overlap server-side close/recreation. The same T identification rule applies to both channels; concurrent clients must receive only their own replies.
 
 ## Transport-selection API
 
