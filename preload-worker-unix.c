@@ -1,0 +1,152 @@
+#include "git-compat-util.h"
+#ifndef GIT_WINDOWS_NATIVE
+#include "common-init.h"
+#include <fcntl.h>
+#include <setjmp.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+/*
+ * A --preload worker executes one command and exits. Its private channel
+ * directory is created by the owning manager, not by the Git worker.
+ */
+static jmp_buf preload_exit_jump;
+static volatile int preload_exit_active;
+static volatile int preload_exit_status;
+
+NORETURN void git_preload_worker_exit(int status)
+{
+  if (preload_exit_active) {
+    preload_exit_status = status;
+    longjmp(preload_exit_jump, 1);
+  }
+  exit(status);
+}
+
+int git_preload_unix_worker(const char *directory)
+{
+  static const char *const suffixes[4] = {
+    "stdout", "stderr", "exit-code", "stdin"
+  };
+  char paths[4][1024];
+  char frame[4096], result[64];
+  const char *args[33] = { NULL };
+  int fd[4] = { -1, -1, -1, -1 };
+  int i, count, pos, rc = 120;
+  size_t used = 0;
+  ssize_t n;
+
+  if (!directory || strlen(directory) > 960)
+    return 121;
+  for (i = 0; i < 4; i++) {
+    if (snprintf(paths[i], sizeof(paths[i]), "%s/%s",
+                 directory, suffixes[i]) >= sizeof(paths[i]))
+      return 121;
+  }
+
+  printf("READY %ld\n", (long)getpid());
+  fflush(stdout);
+
+  /* Match the four-channel open order used by git-ipc. */
+  for (i = 0; i < 3; i++) {
+    fd[i] = open(paths[i], O_WRONLY);
+    if (fd[i] < 0) {
+      rc = 122;
+      goto cleanup;
+    }
+  }
+  fd[3] = open(paths[3], O_RDONLY);
+  if (fd[3] < 0) {
+    rc = 123;
+    goto cleanup;
+  }
+
+  while (used < sizeof(frame)) {
+    n = read(fd[3], frame + used, sizeof(frame) - used);
+    if (n < 0) {
+      if (errno == EINTR)
+        continue;
+      rc = 124;
+      goto cleanup;
+    }
+    if (!n)
+      break;
+    used += (size_t)n;
+  }
+  if (used < 4) {
+    rc = 125;
+    goto cleanup;
+  }
+  count = (unsigned char)frame[0] |
+    ((unsigned char)frame[1] << 8) |
+    ((unsigned char)frame[2] << 16) |
+    ((unsigned char)frame[3] << 24);
+  if (count < 1 || count > 32) {
+    rc = 126;
+    goto cleanup;
+  }
+  pos = 4;
+  for (i = 0; i < count; i++) {
+    int start = pos;
+    if ((size_t)pos >= used) {
+      rc = 127;
+      goto cleanup;
+    }
+    while ((size_t)pos < used && frame[pos])
+      pos++;
+    if ((size_t)pos == used) {
+      rc = 128;
+      goto cleanup;
+    }
+    args[i] = frame + start;
+    pos++;
+  }
+  if ((size_t)pos != used || strcmp(args[0], "git")) {
+    rc = 129;
+    goto cleanup;
+  }
+  args[count] = NULL;
+
+  /*
+   * The request writer has reached EOF, but its readable endpoint remains
+   * valid. Redirect it to Git's stdin instead of closing descriptor zero.
+   */
+  if (dup2(fd[3], STDIN_FILENO) < 0 ||
+      dup2(fd[0], STDOUT_FILENO) < 0 ||
+      dup2(fd[1], STDERR_FILENO) < 0) {
+    rc = 130;
+    goto cleanup;
+  }
+  close(fd[3]); fd[3] = -1;
+  close(fd[0]); fd[0] = -1;
+  close(fd[1]); fd[1] = -1;
+
+  /* Defer Git initialization until after the command arrives. */
+  init_git(args);
+  preload_exit_active = 1;
+  if (!setjmp(preload_exit_jump))
+    rc = cmd_main(count, args);
+  else
+    rc = preload_exit_status;
+  preload_exit_active = 0;
+
+  fflush(stdout);
+  fflush(stderr);
+  close(STDOUT_FILENO);
+  close(STDERR_FILENO);
+  close(STDIN_FILENO);
+
+cleanup:
+  n = snprintf(result, sizeof(result), "EXIT %d\n", rc);
+  if (fd[2] >= 0) {
+    if (n > 0 && (size_t)n < sizeof(result))
+      (void)write(fd[2], result, (size_t)n);
+    close(fd[2]);
+    fd[2] = -1;
+  }
+  for (i = 0; i < 4; i++)
+    if (fd[i] >= 0)
+      close(fd[i]);
+  return rc;
+}
+#endif
