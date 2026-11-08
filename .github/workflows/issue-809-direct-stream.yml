@@ -1,7 +1,7 @@
 name: RWF 809 native Windows direct export stream validation
 on:
   push:
-    branches: [investigation-809-direct-stream-export]
+    branches: [experiment-809-tmp1-quick-speed-smoke]
   workflow_dispatch:
 permissions:
   contents: read
@@ -45,7 +45,7 @@ jobs:
           [[ ! -v GIT_EDITOR ]] || exit 33
           printf 'GIT809_STREAM_ROUNDTRIP_PASS\n'
           printf 'sample,begin_direct,end_direct,begin_ipc,end_ipc\n' >git809-stream-results/pairs.csv
-          for ((i=0;i<120;i++)); do
+          for ((i=0;i<20;i++)); do
             if ((i % 2 == 0)); then
               a=$EPOCHREALTIME; "$GIT809_WORKER_GIT" --version >/dev/null || exit 41; b=$EPOCHREALTIME
               c=$EPOCHREALTIME; git-ipc --version >/dev/null || exit 42; d=$EPOCHREALTIME
@@ -59,7 +59,7 @@ jobs:
           import csv,math,statistics,os
           from decimal import Decimal
           records=list(csv.DictReader(open('git809-stream-results/pairs.csv',newline='',encoding='utf-8')))
-          assert len(records)==120
+          assert len(records)==20
           for name,begin,end in [('direct','begin_direct','end_direct'),('stream_ipc','begin_ipc','end_ipc')]:
             v=sorted(float((Decimal(x[end])-Decimal(x[begin]))*1000) for x in records)
             assert v[0]>0
