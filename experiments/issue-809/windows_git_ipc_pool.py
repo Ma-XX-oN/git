@@ -191,7 +191,7 @@ def select_transport(address, request_id=None):
         ok=bool(K.PeekNamedPipe(h,peek,1,C.byref(read),
                                 C.byref(available),None))
         snapshot.append((int(ok),available.value if ok else 0,
-                         peek.raw[:read.value].hex() if ok else "-"))
+                         (peek.raw[:read.value].hex() or "-") if ok else "-"))
         if ok and available.value:
           candidates.append(i)
       if candidates and request_id is not None:
