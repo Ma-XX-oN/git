@@ -1,0 +1,94 @@
+name: RWF 809 Windows named-pipe three-factor ablation
+on:
+  push:
+    branches: [investigation-809-three-factor-ablation]
+    paths:
+      - .github/workflows/issue-809-three-factor-ablation.yml
+      - experiments/issue-809/git-manager.sh
+      - experiments/issue-809/git-ipc-request.sh
+      - compat/mingw.c
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-three-factor:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Build exactly one native Windows named-pipe Git
+        shell: bash
+        run: |
+          . /etc/profile
+          make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git.exe
+      - name: Run all eight factor combinations in paired forward and reverse orders
+        shell: bash
+        run: |
+          . /etc/profile
+          set -uo pipefail
+          PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
+          export GIT809_MANAGER_PYTHON="$(cygpath -w "$PYTHON_EXE")"
+          export GIT809_WORKER_GIT="$(cygpath -w "$PWD/git.exe")"
+          export GIT809_DRAIN_MODE=chunk100
+          bash -n experiments/issue-809/git-manager.sh || exit 31
+          bash -n experiments/issue-809/git-ipc-request.sh || exit 32
+          mkdir -p git809-bash-pipe-results
+          source experiments/issue-809/git-manager.sh 3 || exit 33
+          printf 'round,cwd,env,close,index,start,end\n' >git809-bash-pipe-results/ablation-samples.csv
+          # 0=removed, 1=enabled. The normal all-on path remains the control.
+          modes=(000 100 010 001 110 101 011 111 111 011 101 110 001 010 100 000)
+          for ((round=0;round<16;round++)); do
+            bits=${modes[round]}
+            export GIT809_ABLATION_CWD=${bits:0:1}
+            export GIT809_ABLATION_ENV=${bits:1:1}
+            export GIT809_ABLATION_STDIN_CLOSE=${bits:2:1}
+            printf 'GIT809_ABLATION_BEGIN round=%d factors=%s\n' "$round" "$bits"
+            git-ipc --version >/dev/null || { echo "GIT809_ABLATION_SMOKE_FAILED factors=$bits" >&2; exit 41; }
+            for ((i=0;i<120;i++)); do
+              a=$EPOCHREALTIME
+              git-ipc --version >/dev/null || { echo "GIT809_ABLATION_FAILED round=$round factors=$bits sample=$i" >&2; exit 42; }
+              b=$EPOCHREALTIME
+              printf '%s,%s,%s,%s,%s,%s,%s\n' "$round" "${bits:0:1}" "${bits:1:1}" "${bits:2:1}" "$i" "$a" "$b" >>git809-bash-pipe-results/ablation-samples.csv
+            done
+            printf 'GIT809_ABLATION_FINISH round=%d factors=%s\n' "$round" "$bits"
+          done
+          "$PYTHON_EXE" - <<'PY'
+          import csv, math, statistics, os
+          from collections import defaultdict
+          from decimal import Decimal
+          measured=defaultdict(list)
+          runs=defaultdict(list)
+          with open('git809-bash-pipe-results/ablation-samples.csv',newline='',encoding='utf-8') as f:
+            for r in csv.DictReader(f):
+              bits=r['cwd']+r['env']+r['close']
+              v=float((Decimal(r['end'])-Decimal(r['start']))*1000)
+              assert v>0,(bits,v)
+              measured[bits].append(v)
+              runs[(bits,int(r['round']))].append(v)
+          assert len(measured)==8,len(measured)
+          assert len(runs)==16,len(runs)
+          for bits,values in sorted(measured.items()):
+            assert len(values)==240,(bits,len(values))
+            assert len([k for k in runs if k[0]==bits])==2,bits
+            v=sorted(values)
+            print('GIT809_ABLATION_RESULT bits',bits,'n',len(v),
+                  'median_ms',round(statistics.median(v),4),
+                  'p95_ms',round(v[math.ceil(.95*len(v))-1],4),
+                  'min_ms',round(v[0],4),'max_ms',round(v[-1],4),
+                  'round_medians',[round(statistics.median(w),4) for (k,i),w in sorted(runs.items(),key=lambda kv:kv[0][1]) if k==bits],
+                  flush=True)
+          print('GIT809_ABLATION_SHA',os.environ['GITHUB_SHA'],flush=True)
+          PY
+      - name: Preserve 1920 native named-pipe sample timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-windows-three-factor-ablation
+          path: git809-bash-pipe-results/
+          if-no-files-found: warn
