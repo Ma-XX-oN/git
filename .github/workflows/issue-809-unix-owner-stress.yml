@@ -50,7 +50,7 @@ jobs:
           export GIT809_WORKER_GIT="$PWD/git"
           export GIT809_MANAGER_PYTHON=python3
           export GIT809_SHELL_LIBRARY="$PWD/experiments/issue-809/git-manager-unix.sh"
-          source experiments/issue-809/git-manager-unix.sh 4
+          source experiments/issue-809/git-manager-unix.sh 3
           direct="$("$GIT809_WORKER_GIT" --version)"
           [[ "$(git-ipc --version)" == "$direct" ]] || exit 31
           cd experiments/issue-809
