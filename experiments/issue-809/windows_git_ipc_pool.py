@@ -60,6 +60,121 @@ PIPE_WAIT=0
 ERROR_PIPE_CONNECTED=535
 ERROR_NO_DATA=232
 POLL_SECONDS=10
+FILE_FLAG_OVERLAPPED=0x40000000
+ERROR_IO_PENDING=997
+ERROR_OPERATION_ABORTED=995
+ERROR_BROKEN_PIPE=109
+ERROR_NOT_FOUND=1168
+WAIT_OBJECT_0=0
+WAIT_FAILED=0xffffffff
+
+class OVERLAPPED(C.Structure):
+  _fields_=[("Internal",C.c_size_t),("InternalHigh",C.c_size_t),
+            ("Offset",W.DWORD),("OffsetHigh",W.DWORD),("hEvent",W.HANDLE)]
+
+K.CreateEventW.argtypes=[W.LPVOID,W.BOOL,W.BOOL,W.LPCWSTR]
+K.CreateEventW.restype=W.HANDLE
+K.ResetEvent.argtypes=[W.HANDLE]
+K.ResetEvent.restype=W.BOOL
+K.WaitForMultipleObjects.argtypes=[W.DWORD,C.POINTER(W.HANDLE),W.BOOL,W.DWORD]
+K.WaitForMultipleObjects.restype=W.DWORD
+K.GetOverlappedResult.argtypes=[W.HANDLE,C.POINTER(OVERLAPPED),
+                                C.POINTER(W.DWORD),W.BOOL]
+K.GetOverlappedResult.restype=W.BOOL
+K.CancelIoEx.argtypes=[W.HANDLE,C.POINTER(OVERLAPPED)]
+K.CancelIoEx.restype=W.BOOL
+
+def _start_async(state,operation,data=None):
+  """Start one pending connect/read/write on a named-pipe instance."""
+  state["pending"]=False
+  K.ResetEvent(state["event"])
+  state["ov"].Internal=0
+  state["ov"].InternalHigh=0
+  n=W.DWORD()
+  if operation=="connect":
+    ok=bool(K.ConnectNamedPipe(state["h"],C.byref(state["ov"])))
+  elif operation=="read":
+    state["buffer"]=C.create_string_buffer(1)
+    ok=bool(K.ReadFile(state["h"],state["buffer"],1,C.byref(n),
+                       C.byref(state["ov"])))
+  else:
+    assert operation=="write" and data is not None
+    state["buffer"]=C.create_string_buffer(data)
+    ok=bool(K.WriteFile(state["h"],state["buffer"],len(data),
+                        C.byref(n),C.byref(state["ov"])))
+  if ok:
+    return n.value
+  error=C.get_last_error()
+  if operation=="connect" and error==ERROR_PIPE_CONNECTED:
+    return 0
+  if error==ERROR_IO_PENDING:
+    state["pending"]=True
+    return None
+  if error in (ERROR_BROKEN_PIPE,ERROR_NO_DATA,233):
+    return -1
+  raise OSError(error,operation)
+
+def _finish_async(state):
+  n=W.DWORD()
+  if not K.GetOverlappedResult(state["h"],C.byref(state["ov"]),
+                               C.byref(n),False):
+    error=C.get_last_error()
+    if error in (ERROR_BROKEN_PIPE,ERROR_NO_DATA,233,ERROR_OPERATION_ABORTED):
+      state["pending"]=False
+      return -1
+    raise OSError(error,"GetOverlappedResult")
+  state["pending"]=False
+  return n.value
+
+def _close_async(state,close_pipe=True):
+  if state["pending"]:
+    if not K.CancelIoEx(state["h"],C.byref(state["ov"])) and (
+        C.get_last_error()!=ERROR_NOT_FOUND):
+      raise OSError(C.get_last_error(),"CancelIoEx")
+    n=W.DWORD()
+    # Keep OVERLAPPED storage and its event alive through cancellation.
+    K.GetOverlappedResult(state["h"],C.byref(state["ov"]),C.byref(n),True)
+    state["pending"]=False
+  K.CloseHandle(state["event"])
+  if close_pipe:
+    K.DisconnectNamedPipe(state["h"])
+    K.CloseHandle(state["h"])
+
+def _wait_async(states,deadline):
+  waiting=[x for x in states if x["pending"]]
+  if not waiting:
+    return None
+  remaining=deadline-time.monotonic()
+  if remaining<=0:
+    return None
+  handles=(W.HANDLE*len(waiting))(*(x["event"] for x in waiting))
+  result=K.WaitForMultipleObjects(len(waiting),handles,False,
+                                  max(1,int(remaining*1000)))
+  if result==WAIT_TIMEOUT:
+    return None
+  if result==WAIT_FAILED or result>=len(waiting):
+    raise OSError(C.get_last_error(),"WaitForMultipleObjects")
+  return waiting[result]
+
+def _write_reply(handle,data):
+  """Write on a FILE_FLAG_OVERLAPPED handle without a helper thread."""
+  event=K.CreateEventW(None,True,False,None)
+  if not event:
+    raise OSError(C.get_last_error(),"CreateEvent(reply write)")
+  state={"h":handle,"event":event,"ov":OVERLAPPED(),
+         "pending":False,"buffer":None}
+  state["ov"].hEvent=event
+  try:
+    n=_start_async(state,"write",data)
+    if n is None:
+      result=K.WaitForSingleObject(event,2000)
+      if result!=WAIT_OBJECT_0:
+        raise TimeoutError("reply write timeout")
+      n=_finish_async(state)
+    if n!=len(data):
+      raise OSError("short allocation reply write")
+  finally:
+    _close_async(state,False)
 class Pool:
   def __init__(self, git:Path, target:int):
     self.git=git
@@ -155,69 +270,72 @@ class Pool:
         p.stdout.close()
 
 def select_transport(address, marker):
-  """Two Windows instances; one reply channel qualified by the call digit."""
+  """Select a marked reply instance, event-driven on this thread only."""
   expected=str(marker).encode("ascii")
   if len(expected)!=1 or expected not in tuple(bytes([i]) for i in range(48,58)):
     raise ValueError("invalid decimal reply marker")
-  handles=[]
-  threads=[]
-  connected=[False,False]
+  states=[]
+  selected=None
+  deadline=time.monotonic()+2
   try:
     for i in range(2):
-      h=K.CreateNamedPipeW(address,PIPE_ACCESS_DUPLEX |
+      h=K.CreateNamedPipeW(address,PIPE_ACCESS_DUPLEX|FILE_FLAG_OVERLAPPED|
         (FILE_FLAG_FIRST_PIPE_INSTANCE if i==0 else 0),
         PIPE_TYPE_BYTE|PIPE_WAIT,2,256,256,2000,None)
       if h==INVALID:
         raise OSError(C.get_last_error(),"CreateNamedPipe(reply)")
-      handles.append(h)
-    def accept(i):
-      ok=bool(K.ConnectNamedPipe(handles[i],None))
-      error=0 if ok else C.get_last_error()
-      connected[i]=ok or error==ERROR_PIPE_CONNECTED
-    for i in range(2):
-      t=threading.Thread(target=accept,args=(i,),daemon=True)
-      t.start()
-      threads.append(t)
-    deadline=time.monotonic()+2
-    selected=None
+      event=K.CreateEventW(None,True,False,None)
+      if not event:
+        K.CloseHandle(h)
+        raise OSError(C.get_last_error(),"CreateEvent(reply)")
+      state={"h":h,"event":event,"ov":OVERLAPPED(),"pending":False,
+             "buffer":None,"phase":"connect","marked":False}
+      state["ov"].hEvent=event
+      states.append(state)
+      n=_start_async(state,"connect")
+      if n is not None:
+        state["phase"]="read"
+        n=_start_async(state,"read")
+        if n is not None:
+          state["phase"]="done"
+          state["marked"]=n==1
     while time.monotonic()<deadline:
-      candidates=[]
-      for i,h in enumerate(handles):
-        if not connected[i]:
+      # Observe all completed markers before selecting either transport.
+      for state in states:
+        if not state["pending"] or K.WaitForSingleObject(
+            state["event"],0)!=WAIT_OBJECT_0:
           continue
-        available=W.DWORD()
-        if K.PeekNamedPipe(h,None,0,None,C.byref(available),None) and available.value:
-          candidates.append(i)
-      if len(candidates)==2:
+        n=_finish_async(state)
+        if state["phase"]=="connect":
+          if n<0:
+            state["phase"]="done"
+          else:
+            state["phase"]="read"
+            n=_start_async(state,"read")
+            if n is not None:
+              state["phase"]="done"
+              state["marked"]=n==1
+        elif state["phase"]=="read":
+          state["phase"]="done"
+          state["marked"]=n==1
+      candidates=[x for x in states if x["marked"]]
+      if len(candidates)>1:
         raise RuntimeError("two markers on one reply channel")
       if candidates:
-        i=candidates[0]
-        marker=C.create_string_buffer(1)
-        n=W.DWORD()
-        if not K.ReadFile(handles[i],marker,1,C.byref(n),None) or (
-          n.value!=1 or marker.raw!=expected):
+        state=candidates[0]
+        if state["buffer"].raw!=expected:
           raise RuntimeError("bad reply transport marker")
-        selected=handles[i]
-        handles[i]=None
+        selected=state
         break
-      time.sleep(.001)
+      if not any(x["pending"] for x in states):
+        break
+      _wait_async(states,deadline)
     if selected is None:
       raise TimeoutError("reply marker timeout")
-    return selected
+    return selected["h"]
   finally:
-    for t in threads:
-      if t.is_alive() and t.native_id:
-        thread_handle=K.OpenThread(0x0001,False,t.native_id)
-        if thread_handle:
-          K.CancelSynchronousIo(thread_handle)
-          K.CloseHandle(thread_handle)
-      t.join(timeout=1)
-      if t.is_alive():
-        raise RuntimeError("reply accept did not cancel")
-    for h in handles:
-      if h is not None:
-        K.DisconnectNamedPipe(h)
-        K.CloseHandle(h)
+    for state in states:
+      _close_async(state,state is not selected)
 
 
 def allocation_server(owner_pid:int,pool:Pool):
@@ -299,11 +417,7 @@ def allocation_server(owner_pid:int,pool:Pool):
       response=select_transport(reply,sequence%10)
       try:
         answer=pool.alloc().encode("ascii")
-        n=W.DWORD()
-        if not K.WriteFile(response,answer,len(answer),C.byref(n),None):
-          raise OSError(C.get_last_error(),"WriteFile(reply)")
-        if n.value!=len(answer):
-          raise RuntimeError("short reply")
+        _write_reply(response,answer)
         if not K.FlushFileBuffers(response):
           error=C.get_last_error()
           if error not in (109,ERROR_NO_DATA,233):
