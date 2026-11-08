@@ -1,3 +1,4 @@
+source "$(dirname -- "${BASH_SOURCE[0]}")/git-ipc-request.sh" || return 1
 # Source in Bash on Linux/macOS after setting GIT809_WORKER_GIT.
 # Single-use native Git --preload worker; Bash client remains text-output only.
 _git809_unix_source() {
@@ -91,6 +92,11 @@ git-ipc() {
   for arg in "$@"; do
     printf '%s\x00' "$arg" >&7 || { printf 'GIT-IPC ERROR: argument write failed\n' >&2; return 255; }
   done
+  _git809_write_context unix >&7 || {
+    exec 7>&-
+    printf 'GIT-IPC ERROR: context frame write failed\n' >&2
+    return 255
+  }
   exec 7>&-
 
   local stdout_open=1 stderr_open=1
