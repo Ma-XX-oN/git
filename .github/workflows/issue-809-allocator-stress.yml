@@ -88,7 +88,9 @@ jobs:
           handle=None
           try:
             line=child.stdout.readline().strip()
-            assert line.startswith("ALLOCATED_PID "),line
+            if not line.startswith("ALLOCATED_PID "):
+              rc=child.wait(timeout=8)
+              raise AssertionError(f"owner shell rc={rc}, stdout={line!r}, stderr={child.stderr.read()!r}")
             pid=int(line.split()[1])
             handle=k.OpenProcess(0x00100000,False,pid)
             assert handle,f"allocated worker {pid} not found"
