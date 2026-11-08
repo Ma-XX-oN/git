@@ -1,7 +1,7 @@
 name: RWF 809 Windows allocator lifecycle stress
 on:
   push:
-    branches: [investigation-809-allocator-resource-lifecycle]
+    branches: [investigation-809-allocator-resource-lifecycle, experiment-809-unidirectional-t-handshake]
   workflow_dispatch:
 permissions:
   contents: read
