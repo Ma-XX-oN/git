@@ -352,6 +352,7 @@ def allocation_server(owner_pid:int,pool:Pool):
   backlog=min(64,max(4,2*pool.target))
   max_active=56  # WaitForMultipleObjects supports at most 64 handles.
   active=[]
+  replies=[]
   first=True
   print(f"ALLOCATOR_START {address} backlog={backlog}",flush=True)
 
@@ -376,6 +377,92 @@ def allocation_server(owner_pid:int,pool:Pool):
     state["ready"]=_start_async(state,"connect")
     return state
 
+  def start_reply(address,marker):
+    """Publish both reply instances without stalling the GET event loop."""
+    pair={"states":[],"expected":str(marker).encode("ascii"),
+          "deadline":time.monotonic()+2,"selected":None}
+    replies.append(pair)
+    try:
+      for i in range(2):
+        h=K.CreateNamedPipeW(address,PIPE_ACCESS_DUPLEX|FILE_FLAG_OVERLAPPED|
+          (FILE_FLAG_FIRST_PIPE_INSTANCE if i==0 else 0),
+          PIPE_TYPE_BYTE|PIPE_WAIT,2,256,256,2000,None)
+        if h==INVALID:
+          raise OSError(C.get_last_error(),"CreateNamedPipe(reply)")
+        event=K.CreateEventW(None,True,False,None)
+        if not event:
+          K.CloseHandle(h)
+          raise OSError(C.get_last_error(),"CreateEvent(reply)")
+        state={"h":h,"event":event,"ov":OVERLAPPED(),"pending":False,
+               "buffer":None,"phase":"connect","ready":None,"answer":None}
+        state["ov"].hEvent=event
+        pair["states"].append(state)
+        state["ready"]=_start_async(state,"connect")
+    except Exception:
+      finish_reply(pair)
+      raise
+
+  def finish_reply(pair):
+    for state in pair["states"]:
+      _close_async(state)
+    replies.remove(pair)
+
+  def advance_reply(pair):
+    """Advance connection, one-byte marker and reply write using events."""
+    for state in pair["states"]:
+      if state["pending"] and K.WaitForSingleObject(
+          state["event"],0)==WAIT_OBJECT_0:
+        state["ready"]=_finish_async(state)
+      while state["ready"] is not None:
+        n=state["ready"]
+        state["ready"]=None
+        if state["phase"]=="connect":
+          if n<0:
+            state["phase"]="done"
+            break
+          state["phase"]="marker"
+          state["ready"]=_start_async(state,"read")
+        elif state["phase"]=="marker":
+          if n<0:
+            state["phase"]="done"
+          elif n!=1 or state["buffer"].raw!=pair["expected"]:
+            raise RuntimeError("bad reply transport marker")
+          else:
+            state["phase"]="marked"
+        elif state["phase"]=="write":
+          if n!=len(state["answer"]):
+            raise RuntimeError("short allocation reply write")
+          if not K.FlushFileBuffers(state["h"]):
+            error=C.get_last_error()
+            if error not in (ERROR_BROKEN_PIPE,ERROR_NO_DATA,233):
+              raise OSError(error,"FlushFileBuffers(reply)")
+          return False
+        else:
+          raise RuntimeError("invalid reply state")
+    marked=[s for s in pair["states"] if s["phase"]=="marked"]
+    if len(marked)>1:
+      raise RuntimeError("two markers on one reply channel")
+    if marked and pair["selected"] is None:
+      chosen=marked[0]
+      # Both instances remain in the same logical channel. Drop only
+      # this request's probe and keep the selected handle for the reply.
+      for other in pair["states"]:
+        if other is not chosen:
+          _close_async(other)
+      pair["states"]=[chosen]
+      pair["selected"]=chosen
+      chosen["answer"]=pool.alloc().encode("ascii")
+      chosen["phase"]="write"
+      pair["deadline"]=time.monotonic()+2
+      chosen["ready"]=_start_async(chosen,"write",chosen["answer"])
+      if chosen["ready"] is not None:
+        return advance_reply(pair)
+    if time.monotonic()>=pair["deadline"]:
+      raise TimeoutError("reply marker/write timeout")
+    if not any(s["pending"] or s["ready"] is not None for s in pair["states"]):
+      raise TimeoutError("no connected reply transport")
+    return True
+
   def parse_and_reply(frame):
     if (len(frame)<7 or frame[0] not in b"0123456789" or
         not frame[1:].startswith(b"GET ") or not frame.endswith(b"\n")):
@@ -389,19 +476,9 @@ def allocation_server(owner_pid:int,pool:Pool):
       raise ValueError("reply identity out of range")
     if frame[0]-ord("0")!=sequence%10:
       raise ValueError("GET marker does not match request sequence")
-    reply=(r"\\.\pipe\git809-allocate-reply-"+str(owner_pid)+
+    reply=(r"\\\\.\\pipe\\git809-allocate-reply-"+str(owner_pid)+
            "-"+str(client_pid)+"-"+str(sequence))
-    response=select_transport(reply,sequence%10)
-    try:
-      answer=pool.alloc().encode("ascii")
-      _write_reply(response,answer)
-      if not K.FlushFileBuffers(response):
-        error=C.get_last_error()
-        if error not in (ERROR_BROKEN_PIPE,ERROR_NO_DATA,233):
-          raise OSError(error,"FlushFileBuffers(reply)")
-    finally:
-      K.DisconnectNamedPipe(response)
-      K.CloseHandle(response)
+    start_reply(reply,sequence%10)
 
   def advance(state):
     """Consume completed operations and submit the next read immediately."""
@@ -454,29 +531,48 @@ def allocation_server(owner_pid:int,pool:Pool):
         except Exception as error:
           print("ALLOCATOR_CONNECTION_ERROR "+repr(error),flush=True)
           dispose(state)
+      for pair in list(replies):
+        try:
+          if not advance_reply(pair):
+            finish_reply(pair)
+        except Exception as error:
+          print("ALLOCATOR_CONNECTION_ERROR "+repr(error),flush=True)
+          finish_reply(pair)
       # Keep ready listeners available before servicing the next request.
       listeners=sum(s["phase"]=="connect" for s in active)
       while listeners<backlog and len(active)<max_active:
         make_listener()
         listeners+=1
       pending=[s for s in active if s["pending"]]
+      pending.extend(s for pair in replies for s in pair["states"]
+                     if s["pending"])
       if not pending:
         continue
-      deadlines=[s["deadline"] for s in pending
+      deadlines=[s["deadline"] for s in active
                  if s["deadline"] is not None]
+      deadlines.extend(p["deadline"] for p in replies)
       remaining=min(0.25,max(0,min(deadlines)-time.monotonic())) if (
         deadlines) else 0.25
-      handles=(W.HANDLE*len(pending))(*(s["event"] for s in pending))
-      wait=K.WaitForMultipleObjects(len(pending),handles,False,
-                                    max(1,int(remaining*1000)))
+      # Win32 has a 64-handle wait limit. A saturated burst is split
+      # across iterations; regular operation waits on all ready events.
+      count=min(len(pending),64)
+      handles=(W.HANDLE*count)(*(s["event"] for s in pending[:count]))
+      wait=K.WaitForMultipleObjects(count,handles,False,
+                          max(1,int(min(remaining,0.01 if len(pending)>64
+                                        else remaining)*1000)))
       if wait==WAIT_FAILED:
-        raise OSError(C.get_last_error(),"WaitForMultipleObjects(GET)")
+        raise OSError(C.get_last_error(),"WaitForMultipleObjects(allocation)")
   except Exception as error:
     with pool.lock:
       pool.errors.append("allocation listener failed: "+repr(error))
     print("ALLOCATOR_FATAL "+repr(error),flush=True)
     raise
   finally:
+    for pair in list(replies):
+      try:
+        finish_reply(pair)
+      except Exception as error:
+        print("ALLOCATOR_CLEANUP_ERROR "+repr(error),flush=True)
     for state in list(active):
       try:
         dispose(state)
