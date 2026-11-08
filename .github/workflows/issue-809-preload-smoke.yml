@@ -58,3 +58,53 @@ jobs:
             git-ipc --version >/dev/null || { printf 'worker request %s failed\n' "$i" >&2; exit 1; }
           done
           printf 'PASS: direct Git unaffected and 30 worker replenishments\n'
+  unix-preload:
+    needs: windows-preload
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Ensure Bash supports fractional read timeouts on macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          brew install bash
+          echo "$(brew --prefix bash)/bin" >> "$GITHUB_PATH"
+      - name: Build native Git including permanent Unix preload worker
+        shell: bash
+        run: |
+          make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git
+      - name: Verify Unix four-FIFO client and exit propagation
+        shell: bash
+        run: |
+          python3 -m py_compile experiments/issue-809/unix_git_ipc_pool.py
+          bash -n experiments/issue-809/git-manager-unix.sh
+          export GIT809_WORKER_GIT="$PWD/git"
+          source experiments/issue-809/git-manager-unix.sh 2
+          result="$(git-ipc --version)"
+          [[ "$result" == git\ version\ * ]] || { printf 'unexpected ipc output: %s\n' "$result" >&2; exit 1; }
+          set +e
+          git-ipc nonexistent-git809-command >failed.out 2>failed.err
+          rc=$?
+          set -e
+          [[ $rc -ne 0 && -s failed.err ]] || { printf 'invalid error response: rc=%s\n' "$rc" >&2; exit 1; }
+          printf 'PASS Unix --preload four-FIFO stdout/stderr/exit: %s\n' "$result"
+          cd experiments/issue-809
+          prefix="$(git-ipc rev-parse --show-prefix)"
+          [[ "$prefix" == "experiments/issue-809/" ]] || { printf 'cwd not forwarded: %s\n' "$prefix" >&2; exit 1; }
+          editor="$(GIT_EDITOR=git809-inline git-ipc var GIT_EDITOR)"
+          [[ "$editor" == git809-inline ]] || { printf 'environment not forwarded: %s\n' "$editor" >&2; exit 1; }
+          [[ ! ${GIT_EDITOR+x} ]] || { printf 'parent environment was mutated\n' >&2; exit 1; }
+          printf 'PASS cwd, inline environment, and parent isolation\n'
+          direct="$("$GIT809_WORKER_GIT" --version)"
+          [[ "$direct" == git\ version\ * ]] || exit 1
+          for i in {1..30}; do
+            git-ipc --version >/dev/null || { printf 'worker request %s failed\n' "$i" >&2; exit 1; }
+          done
+          printf 'PASS: direct Git unaffected and 30 worker replenishments\n'
