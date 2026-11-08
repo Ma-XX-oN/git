@@ -100,9 +100,9 @@ PROBE = r"""      /*
 """
 
 FS_REPLACEMENT = r"""if (fs.inited ()
-\t      || (is_native_named_pipe_path (get_nt_native_path ())
-\t\t  ? (git809_path_event ("GIT809_PATH FS_UPDATE_SKIPPED\n"), false)
-\t\t  : fs.update (get_nt_native_path (), NULL)))"""
+              || (is_native_named_pipe_path (get_nt_native_path ())
+                  ? (git809_path_event ("GIT809_PATH FS_UPDATE_SKIPPED\n"), false)
+                  : fs.update (get_nt_native_path (), NULL)))"""
 
 def main() -> None:
   p = argparse.ArgumentParser()
