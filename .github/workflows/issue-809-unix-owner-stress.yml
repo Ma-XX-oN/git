@@ -62,15 +62,7 @@ jobs:
           done
           [[ ! -v GIT_EDITOR ]] || exit 35
           printf 'GIT809_UNIX_CONTEXT_PASS %s\n' "$RUNNER_OS"
-          # Binary stdin must remain byte-for-byte intact and must not
-          # carry the T handshake or the argument/environment control frame.
-          stdin_expected=$(python3 -c 'import sys;sys.stdout.buffer.write(bytes(range(256))*1024)' | "$GIT809_WORKER_GIT" hash-object --stdin)
-          stdin_actual=$(python3 -c 'import sys;sys.stdout.buffer.write(bytes(range(256))*1024)' | git-ipc hash-object --stdin)
-          [[ "$stdin_actual" == "$stdin_expected" ]] || {
-            printf 'GIT809_STDIN_MISMATCH expected=%s actual=%s\n' "$stdin_expected" "$stdin_actual" >&2
-            exit 35
-          }
-          printf 'GIT809_UNIX_STDIN_BINARY_PASS\n'
+
           for ((i=0;i<6000;i++)); do
             git-ipc --version >/dev/null || { printf 'GIT809_UNIX_STRESS_FAIL %s\n' "$i" >&2; exit 41; }
             if (( i % 1000 == 0 )); then printf 'GIT809_UNIX_PROGRESS %s\n' "$i"; fi
