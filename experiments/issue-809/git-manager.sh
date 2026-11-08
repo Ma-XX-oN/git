@@ -74,7 +74,7 @@ fi
 
 # Request a worker PID, then talk directly to its four pipe endpoints.
 # The Python manager only allocates IDs; it never forwards Git output.
-_git809_git_ipc_impl() {
+git-ipc() {
   if [[ -z ${_GIT809_OWNER_WINPID:-} || $# -gt 31 ]]; then
     printf 'git-ipc requires a running manager and at most 31 arguments\n' >&2
     printf 'GIT-IPC ERROR: invalid invocation\n' >&2; return 255
@@ -250,9 +250,6 @@ _git809_git_ipc_impl() {
   fi
   printf 'Invalid Git exit-code response: %s\n' "$status" >&2
   printf 'GIT-IPC ERROR: malformed exit status\n' >&2; return 255
-}
-git-ipc() {
-  _git809_git_ipc_impl "$@"
 }
 alias git='git-ipc'
 return 0
