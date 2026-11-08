@@ -80,6 +80,7 @@ git-ipc() {
     printf 'GIT-IPC ERROR: invalid invocation\n' >&2; return 255
   fi
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE start bashpid=%s\n' "$BASHPID" >>"$_GIT809_MANAGER_LOG"
+  local _g809_t0=$EPOCHREALTIME _g809_t1 _g809_t2 _g809_t3 _g809_t4 _g809_t5 _g809_t6
   local allocator; printf -v allocator '%s%s' '\\.\pipe\git809-allocate-' "$_GIT809_OWNER_WINPID"
   local pid i count header arg status line
   for ((i=0;i<200;i++)); do
@@ -103,6 +104,7 @@ git-ipc() {
     printf 'GIT-IPC ERROR: invalid worker PID response\n' >&2; return 255
   fi
 
+  _g809_t1=$EPOCHREALTIME
   local stem; printf -v stem '%s%s' '\\.\pipe\' "$pid"
   local pstdin="${stem}-stdin"
   local pout="${stem}-stdout"
@@ -119,6 +121,7 @@ git-ipc() {
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE open stdin pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
   exec 7>>"$pstdin" || { exec 4<&- 5<&- 6<&-; printf 'GIT-IPC ERROR: stdin pipe open failed\n' >&2; return 255; }
 
+  _g809_t2=$EPOCHREALTIME
   count=$(( $# + 1 ))
   printf -v header '\\x%02x\\x00\\x00\\x00' "$count"
   printf '%b' "$header" >&7 || { printf 'GIT-IPC ERROR: worker request write failed\n' >&2; return 255; }
@@ -126,12 +129,14 @@ git-ipc() {
   for arg in "$@"; do
     printf '%s\x00' "$arg" >&7 || { printf 'GIT-IPC ERROR: worker request write failed\n' >&2; return 255; }
   done
+  _g809_t3=$EPOCHREALTIME
   _git809_write_context windows >&7 || {
     exec 7>&-
     printf 'GIT-IPC ERROR: context frame write failed\n' >&2
     return 255
   }
   exec 7>&-
+  _g809_t4=$EPOCHREALTIME
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE sent stdin pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
 
   # Experimental second timing mode: stdout accumulates all available
@@ -170,9 +175,14 @@ git-ipc() {
       fi
     done
     [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE drained data pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
+    _g809_t5=$EPOCHREALTIME
     IFS= read -r status <&6 || { exec 6<&-; printf 'GIT-IPC ERROR: exit-status read failed\n' >&2; return 255; }
     exec 6<&-
+    _g809_t6=$EPOCHREALTIME
     if [[ $status =~ ^EXIT[[:space:]]([0-9]+)$ ]]; then
+      if [[ -n ${GIT809_STAGE_TRACE_FILE:-} ]]; then
+        printf '%s,%s,%s,%s,%s,%s,%s,%s\n' "$pid" "$_g809_t0" "$_g809_t1" "$_g809_t2" "$_g809_t3" "$_g809_t4" "$_g809_t5" "$_g809_t6" >> "$GIT809_STAGE_TRACE_FILE"
+      fi
       return "${BASH_REMATCH[1]}"
     fi
     printf 'Invalid Git exit-code response: %s\n' "$status" >&2
