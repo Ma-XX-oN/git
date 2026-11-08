@@ -35,13 +35,13 @@ NORETURN void git_preload_worker_exit(int status)
  */
 static void git_preload_remove_fifos(const char *directory)
 {
-  static const char *const names[4] = {
-    "stdout", "stderr", "exit-code", "stdin"
+  static const char *const names[5] = {
+    "stdout", "stderr", "exit-code", "stdin", "param-env-cwd"
   };
   char path[1024];
   int i;
 
-  for (i = 0; i < 4; i++) {
+  for (i = 0; i < 5; i++) {
     if (snprintf(path, sizeof(path), "%s/%s", directory, names[i]) <
         sizeof(path))
       unlink(path);
@@ -108,15 +108,15 @@ static int git_preload_start_owner_watch(const char *directory)
 
 int git_preload_unix_worker(const char *directory)
 {
-  static const char *const suffixes[4] = {
-    "stdout", "stderr", "exit-code", "stdin"
+  static const char *const suffixes[5] = {
+    "stdout", "stderr", "exit-code", "stdin", "param-env-cwd"
   };
-  char paths[4][1024];
+  char paths[5][1024];
   char *frame = NULL;
   char result[64];
   const size_t frame_capacity = 131072;
   const char *args[33] = { NULL };
-  int fd[4] = { -1, -1, -1, -1 };
+  int fd[5] = { -1, -1, -1, -1, -1 };
   int i, count, pos, rc = 120;
   size_t used = 0;
   ssize_t n;
@@ -128,7 +128,7 @@ int git_preload_unix_worker(const char *directory)
   frame = malloc(frame_capacity);
   if (!frame)
     return 121;
-  for (i = 0; i < 4; i++) {
+  for (i = 0; i < 5; i++) {
     if (snprintf(paths[i], sizeof(paths[i]), "%s/%s",
                  directory, suffixes[i]) >= sizeof(paths[i]))
       return 121;
@@ -150,9 +150,14 @@ int git_preload_unix_worker(const char *directory)
     rc = 123;
     goto cleanup;
   }
+  fd[4] = open(paths[4], O_RDONLY);
+  if (fd[4] < 0) {
+    rc = 123;
+    goto cleanup;
+  }
 
   while (used < frame_capacity) {
-    n = read(fd[3], frame + used, frame_capacity - used);
+    n = read(fd[4], frame + used, frame_capacity - used);
     if (n < 0) {
       if (errno == EINTR)
         continue;
@@ -163,6 +168,7 @@ int git_preload_unix_worker(const char *directory)
       break;
     used += (size_t)n;
   }
+  close(fd[4]); fd[4] = -1;
   if (used < 4 || used == frame_capacity) {
     rc = 125;
     goto cleanup;
@@ -240,7 +246,7 @@ cleanup:
     close(fd[2]);
     fd[2] = -1;
   }
-  for (i = 0; i < 4; i++)
+  for (i = 0; i < 5; i++)
     if (fd[i] >= 0)
       close(fd[i]);
   git_preload_remove_fifos(directory);
