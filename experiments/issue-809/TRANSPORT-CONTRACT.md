@@ -22,28 +22,26 @@ The allocated worker has **five distinct logical channels**: `stdin` and `param-
 
 Linux/macOS use ordinary unidirectional FIFOs, with **no** `T` marker.
 
-### Standard-input payload and fast path
+### Standard-input limitation: no additional relay processes
 
-The `stdin` channel is for application stdin bytes, not for the argument,
-cwd or environment frame. On Windows, Git Bash writes `T` first and the
-worker consumes it before exposing that handle as Git's stdin. On Unix,
-stdin carries application bytes without a marker. Redirected file or FIFO
-stdin is copied from git-ipc to the stdin channel by a short-lived shell
-child; the child must not inherit the `param-env-cwd` writer, because that
-would prevent the worker from observing the command frame's EOF. The shell
-reaps this child on success or error.
+The `stdin` logical channel remains separately established, and on Windows
+the Git worker consumes the initial `T` marker before application I/O.
+However, **application stdin forwarding is not implemented**: the Bash client
+closes the stdin writer after connection setup, and the worker sees EOF.
+This applies to interactive terminals, redirected regular files, and pipes.
 
-When stdin is the same descriptor the owning shell had when git-manager was
-sourced, the client does not spawn a copy process. This keeps normal
-no-input commands on the low-overhead path. **Interactive terminal input
-forwarding is not implemented in this experiment**; it must not be claimed
-to work until a separate interactive-input acceptance test passes.
+An attempted implementation used a per-command background `cat` relay.
+That design has been removed because `cat` is an external executable and
+a new process per Git invocation defeats the experiment's startup-performance
+objective. The client must not spawn a helper process to forward stdin.
+Do not claim that `git hash-object --stdin` or interactive Git commands
+work through this experimental transport.
 
-Native acceptance must verify binary bytes crossing the separate stdin
-channel, including an input larger than one Windows pipe buffer, and confirm
-the normal no-input benchmark does not add a per-command forwarding process.
-
-
+A future process-free implementation requires transfer of the caller's
+actual standard handles to the prestarted worker, or a demonstrated
+equivalent that introduces **no new process per command**, and native
+verification on all three platforms. The existing worker/manager design
+has not established that mechanism.
 
 ## Windows-only connection identification
 
@@ -81,8 +79,7 @@ The current Bash client drains stdout/stderr using Bash `read -d ''` into
 shell strings. Bash variables cannot contain NUL bytes. Consequently the
 existing Git IPC experiment is **not yet a byte-transparent stdout/stderr
 transport for binary Git output**. This pre-existing limitation is separate
-from, and is not corrected by, Windows `T` identification or by the new
-binary stdin forwarding. No full-Git-compatibility claim is permitted until
+from, and is not corrected by, Windows `T` identification. No full-Git-compatibility claim is permitted until
 binary stdout/stderr and interactive stdin tests are implemented and pass.
 
 ## Acceptance criteria
