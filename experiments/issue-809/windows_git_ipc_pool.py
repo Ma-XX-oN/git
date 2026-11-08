@@ -198,7 +198,7 @@ def select_transport(address, request_id=None):
         marker=C.create_string_buffer(1)
         n=W.DWORD()
         if not K.ReadFile(handles[i],marker,1,C.byref(n),None) or (
-          n.value!=1 or marker.raw!=expected)::
+          n.value!=1 or marker.raw!=expected):
           raise RuntimeError("bad reply transport marker")
         selected=handles[i]
         if request_id is not None:
