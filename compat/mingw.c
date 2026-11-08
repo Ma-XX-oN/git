@@ -4089,6 +4089,16 @@ static int git_preinit_worker(void)
         call_marker = observed_marker;
       pipes[channel][1] = selected;
       git809_trace_worker_stage(suffixes[channel]);
+      /*
+       * A Bash redirection can close before this worker selects its pipe.
+       * Acknowledge marker consumption before the client proceeds. This
+       * one-byte connection handshake is not application output.
+       */
+      if (!WriteFile(selected, "A", 1, &n, NULL) || n != 1) {
+        rc = 137;
+        goto cleanup;
+      }
+      git809_trace_worker_stage("channel-acknowledged");
     }
   }
   while (used < frame_capacity) {
