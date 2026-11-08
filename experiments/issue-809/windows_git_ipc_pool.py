@@ -476,7 +476,7 @@ def allocation_server(owner_pid:int,pool:Pool):
       raise ValueError("reply identity out of range")
     if frame[0]-ord("0")!=sequence%10:
       raise ValueError("GET marker does not match request sequence")
-    reply=(r"\\\\.\\pipe\\git809-allocate-reply-"+str(owner_pid)+
+    reply=(r"\\.\pipe\git809-allocate-reply-"+str(owner_pid)+
            "-"+str(client_pid)+"-"+str(sequence))
     start_reply(reply,sequence%10)
 
