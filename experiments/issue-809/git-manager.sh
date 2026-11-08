@@ -85,19 +85,19 @@ git-ipc() {
   # subshells. Duplex handles carry only the Windows T identification byte
   # in the reverse direction of each application's data flow.
   local allocator reply client_pid=$BASHPID
-  printf -v allocator '%s%s' '\\\\.\\pipe\\git809-allocate-req-' "$_GIT809_OWNER_WINPID"
-  printf -v reply '%s%s-%s' '\\\\.\\pipe\\git809-allocate-reply-' "$_GIT809_OWNER_WINPID" "$client_pid"
+  printf -v allocator '%s%s' '\\.\pipe\git809-allocate-req-' "$_GIT809_OWNER_WINPID"
+  printf -v reply '%s%s-%s' '\\.\pipe\git809-allocate-reply-' "$_GIT809_OWNER_WINPID" "$client_pid"
   local pid i count header arg status line
   for ((i=0;i<400;i++)); do
     if { exec 3<>"$allocator"; } 2>/dev/null; then break; fi
     sleep .005
   done
   if (( i == 400 )); then
-    printf 'GIT-IPC ERROR: allocation request pipe unavailable\\n' >&2; return 255
+    printf 'GIT-IPC ERROR: allocation request pipe unavailable\n' >&2; return 255
   fi
-  if ! printf 'TGET %s\\n' "$client_pid" >&3; then
+  if ! printf 'TGET %s\n' "$client_pid" >&3; then
     exec 3>&-
-    printf 'GIT-IPC ERROR: allocation request write failed\\n' >&2; return 255
+    printf 'GIT-IPC ERROR: allocation request write failed\n' >&2; return 255
   fi
   exec 3>&-
   for ((i=0;i<400;i++)); do
@@ -105,10 +105,10 @@ git-ipc() {
     sleep .005
   done
   if (( i == 400 )); then
-    printf 'GIT-IPC ERROR: allocation reply pipe unavailable\\n' >&2; return 255
+    printf 'GIT-IPC ERROR: allocation reply pipe unavailable\n' >&2; return 255
   fi
-  printf T >&3 || { exec 3>&-; printf 'GIT-IPC ERROR: reply marker write failed\\n' >&2; return 255; }
-  IFS= read -r pid <&3 || { exec 3>&-; printf 'GIT-IPC ERROR: allocation response failed\\n' >&2; return 255; }
+  printf T >&3 || { exec 3>&-; printf 'GIT-IPC ERROR: reply marker write failed\n' >&2; return 255; }
+  IFS= read -r pid <&3 || { exec 3>&-; printf 'GIT-IPC ERROR: allocation response failed\n' >&2; return 255; }
   exec 3>&-
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE allocated pid=%s bashpid=%s\n' "$pid" "$BASHPID" >>"$_GIT809_MANAGER_LOG"
   if [[ $pid == WAIT ]]; then
