@@ -181,17 +181,29 @@ def select_transport(address, request_id=None):
               if request_id is not None else b"T")
     while time.monotonic()<deadline:
       candidates=[]
+      snapshot=[]
       for i,h in enumerate(handles):
-        # A completed client connection can become readable before its
-        # separate blocking ConnectNamedPipe thread publishes connected[i].
-        # Peek both native handles, not the thread's lagging bookkeeping.
+        # Inspect both connections without consuming either marker.
+        # Do not trust lagging ConnectNamedPipe thread bookkeeping.
+        peek=C.create_string_buffer(1)
+        read=W.DWORD()
         available=W.DWORD()
-        if K.PeekNamedPipe(h,None,0,None,C.byref(available),None) and available.value:
+        ok=bool(K.PeekNamedPipe(h,peek,1,C.byref(read),
+                                C.byref(available),None))
+        snapshot.append((int(ok),available.value if ok else 0,
+                         peek.raw[:read.value].hex() if ok else "-"))
+        if ok and available.value:
           candidates.append(i)
+      if candidates and request_id is not None:
+        print(f"REPLY_PAIR_TRACE request_id={request_id} "
+              f"slot0={snapshot[0][0]}:{snapshot[0][1]}:{snapshot[0][2]} "
+              f"slot1={snapshot[1][0]}:{snapshot[1][1]}:{snapshot[1][2]}",
+              flush=True)
       if len(candidates)==2:
         if request_id is not None:
           print(f"REPLY_DOUBLE_MARKER request_id={request_id} "
-                f"handles={handles} expected={expected.decode('ascii')}",flush=True)
+                f"first={snapshot[0][2]} second={snapshot[1][2]} "
+                f"expected={expected.hex()}",flush=True)
         raise RuntimeError("two markers on one reply channel")
       if candidates:
         i=candidates[0]
