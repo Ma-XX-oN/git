@@ -1,12 +1,13 @@
 name: Git 809 patched NtQueryAttributesFile Detours decision trace
 on:
   push:
-    branches: [experiment-809-query-detours-diagnostic]
+    branches: [investigation-809-query-control-flow-logging]
     paths:
       - experiments/issue-809/patch_msys2_upstream_handlefree_query.py
       - .github/workflows/issue-809-query-detours-diagnostic.yml
       - experiments/issue-809/detours_pipe_trace.cpp
       - experiments/issue-809/analyze_query_detours.py
+      - experiments/issue-809/windows_pipe_open_trace.py
   workflow_dispatch:
 permissions:
   contents: read
