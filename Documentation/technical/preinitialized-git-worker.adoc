@@ -1,7 +1,7 @@
-Preinitialized Git worker (Windows experimental)
-=============================================
+Preinitialized Git worker (experimental)
+=========================================
 
-This document describes the Windows-only `git --preload` process contract.
+This document describes the native `git --preload` worker process contract.
 It is not the ordinary Git CLI interface. The initial upstream proposal
 must separately demonstrate binary, error, timeout and security acceptance
 before this behavior can be called production-ready.
@@ -9,8 +9,10 @@ before this behavior can be called production-ready.
 Launch and ownership
 --------------------
 
-The only valid invocation is `git --preload`, with no additional
-options, commands or positional arguments. In particular,
+On Windows, the only valid invocation is `git --preload`, with no additional
+options, commands or positional arguments. On Linux/macOS the existing Unix
+manager launches `git --preload <private-worker-directory>`, which contains
+its precreated 0600 FIFOs. In particular,
 `git -C DIR --preload`, `git --preload status` and
 `git --preload --workers 4` fail with exit status 129 without starting
 a worker. The external manager configures the worker count and lifecycle;
@@ -47,8 +49,10 @@ The stdin frame consists of a little-endian uint32 argument count
 UTF-8 byte strings concatenated without padding. The frame must contain
 1..32 strings, be no more than 4096 bytes total, and name `git` as its
 first string. The worker rejects malformed lengths and malformed UTF-8.
-This `stdin` endpoint is a command *frame*, not general forwarding of
-the Git command's standard input.
+This `stdin` endpoint currently carries a command *frame*, not streamed
+standard input. When the request writer closes, the worker installs the
+remaining readable endpoint as Git's stdin (EOF after draining). Full
+interactive/piped stdin forwarding remains outstanding.
 
 The worker executes Git once. stdout and stderr are raw byte streams
 without framing and are required to preserve bytes including embedded
@@ -65,19 +69,23 @@ rather than Bash variables. The original Git process's native status is
 returned for successfully completed commands; the Bash IPC wrapper
 returns 255 and prints `GIT-IPC ERROR: ...` on a transport failure.
 
-Scope and lifecycle restrictions
---------------------------------
+Request context, scope and lifecycle
+-----------------------------------
 
 Ordinary `git <command>` and every non-`--preload` invocation must stay
-unchanged on all operating systems. Only Windows enters this worker
-mode. The experimental Linux/macOS FIFOs are not part of the proposed
-Windows public switch; both continue to use ordinary Git by default.
+unchanged on all operating systems. The permanent Unix worker now uses four
+private FIFOs, and Windows uses native Win32 named pipes. The Bash managers
+allocate a single-use worker and do not relay command bytes.
 
-Current request scope is a single, noninteractive command, executed in
-the worker's inherited working directory and environment. Interactive
-stdin, per-request cwd/env changes, general terminal usage, concurrent
-requests to the same worker, arbitrary signals and cancellation, and
-full Git command parity are **not** promised.
+A request is a little-endian argument count and its NUL-separated UTF-8
+arguments, optionally followed by tagged fields: `cwd\0<UTF-8-directory>\0`
+and `env\0<uint32-length><NUL-separated-UTF-8-environment-block>`.
+The latter is a complete effective environment snapshot. The worker applies
+both before Git command initialization, and terminates after that one command;
+the caller's environment remains unchanged. Native acceptance for these fields
+is pending. Interactive/piped stdin forwarding, general terminal usage,
+concurrent requests to the same worker, arbitrary signals and cancellation,
+and full Git command parity remain outstanding.
 
 Security and recovery acceptance remains mandatory. Production use
 requires verifying access control for PID-addressed pipes, ownership
@@ -91,7 +99,7 @@ has separate lifecycle cleanup requirements.
 Native acceptance checks
 ------------------------
 
-The Windows CI must compile this *normal source checkout* without
+Native CI must compile this *normal source checkout* without
 the temporary `GIT809_WORKER_PROBE` instrumentation, test the READY/PID
 handshake, four pipe channels, framing and statuses, compare stdout,
 stderr and status against direct Git (including NUL-containing binary
