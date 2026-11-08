@@ -79,7 +79,7 @@ jobs:
           from pathlib import Path
           bash=shutil.which('bash')
           assert bash
-          script='''
+          script=r'''
           source "$GIT809_SHELL_LIBRARY" 3 || exit 51
           printf 'GET\n' > "$_GIT809_UNIX_DIRECTORY/allocate-req" || exit 52
           IFS= read -r worker <&"$_GIT809_UNIX_REPLY_FD" || exit 53
