@@ -3928,9 +3928,9 @@ static int git_preinit_start_owner_watch(void)
 
 static int git_preinit_worker(void)
 {
-  char names[4][96];
-  const char *suffixes[4] = {"stdin", "stdout", "stderr", "exit-code"};
-  HANDLE pipes[4][2];
+  char names[5][96];
+  const char *suffixes[5] = {"stdin", "stdout", "stderr", "exit-code", "param-env-cwd"};
+  HANDLE pipes[5][2];
   char *frame = NULL;
   char result[64];
   const DWORD frame_capacity = 131072;
@@ -3945,7 +3945,7 @@ static int git_preinit_worker(void)
   SECURITY_DESCRIPTOR security_descriptor;
   SECURITY_ATTRIBUTES security_attributes;
 
-  for (i = 0; i < 4; i++)
+  for (i = 0; i < 5; i++)
     for (j = 0; j < 2; j++)
       pipes[i][j] = INVALID_HANDLE_VALUE;
   if (git_preinit_start_owner_watch()) {
@@ -3988,7 +3988,7 @@ static int git_preinit_worker(void)
   security_attributes.lpSecurityDescriptor = &security_descriptor;
   security_attributes.bInheritHandle = FALSE;
 
-  for (i = 0; i < 4; i++) {
+  for (i = 0; i < 5; i++) {
     if (snprintf(names[i], sizeof(names[i]), "\\\\.\\pipe\\%lu-%s",
                  (unsigned long)pid, suffixes[i]) >= sizeof(names[i]))
       goto cleanup;
@@ -4012,8 +4012,8 @@ static int git_preinit_worker(void)
    * the client marker, not by the index of the pipe instance.
    */
   {
-    const int order[4] = {1, 2, 3, 0};
-    for (i = 0; i < 4; i++) {
+    const int order[5] = {1, 2, 3, 0, 4};
+    for (i = 0; i < 5; i++) {
       int channel = order[i];
       HANDLE selected = git809_select_transport(pipes[channel]);
       if (selected == INVALID_HANDLE_VALUE) {
@@ -4024,7 +4024,7 @@ static int git_preinit_worker(void)
     }
   }
   while (used < frame_capacity) {
-    if (!ReadFile(pipes[0][1], frame + used, frame_capacity - used, &n, NULL)) {
+    if (!ReadFile(pipes[4][1], frame + used, frame_capacity - used, &n, NULL)) {
       if (GetLastError() != ERROR_BROKEN_PIPE) {
         rc = 123;
         goto cleanup;
@@ -4035,6 +4035,8 @@ static int git_preinit_worker(void)
       break;
     used += n;
   }
+  CloseHandle(pipes[4][1]);
+  pipes[4][1] = INVALID_HANDLE_VALUE;
   if (used < 4 || used == frame_capacity) {
     rc = 124;
     goto cleanup;
@@ -4149,7 +4151,7 @@ cleanup:
     CloseHandle(pipes[3][1]);
     pipes[3][1] = INVALID_HANDLE_VALUE;
   }
-  for (i = 0; i < 4; i++)
+  for (i = 0; i < 5; i++)
     for (j = 0; j < 2; j++)
       if (pipes[i][j] != INVALID_HANDLE_VALUE)
         CloseHandle(pipes[i][j]);
