@@ -3818,21 +3818,40 @@ static void git809_finish_connect(struct git809_connect_state *state)
  * Consume the marker, never forwarding it to Git or its caller.
  * Unused probe handles are closed only after their connect waits finish.
  */
-static HANDLE git809_select_transport(HANDLE pair[2])
+enum transport_result {
+  TRANSPORT_OK = 0,
+  TRANSPORT_TIMEOUT = 1,
+  TRANSPORT_INVALID_MARKER = 2,
+  TRANSPORT_DUPLICATE_MARKER = 3,
+  TRANSPORT_WIN32_ERROR = 4
+};
+
+/*
+ * Takes ownership of pair[0] and pair[1]. On success, only *transport
+ * remains open. On any error, both instances are closed and *transport
+ * remains INVALID_HANDLE_VALUE.
+ */
+static int select_transport(HANDLE pair[2], DWORD timeout_ms,
+                            HANDLE *transport)
 {
   struct git809_connect_state state[2] = {0};
   DWORD start = GetTickCount(), available, n;
   HANDLE chosen = INVALID_HANDLE_VALUE;
-  int i, marked[2];
+  int i, marked[2], result = TRANSPORT_TIMEOUT;
 
+  if (!transport || !timeout_ms)
+    return TRANSPORT_WIN32_ERROR;
+  *transport = INVALID_HANDLE_VALUE;
   for (i = 0; i < 2; i++) {
     state[i].pipe = pair[i];
     state[i].thread = CreateThread(NULL, 0, git809_connect_thread,
                                    &state[i], 0, NULL);
-    if (!state[i].thread)
+    if (!state[i].thread) {
+      result = TRANSPORT_WIN32_ERROR;
       goto done;
+    }
   }
-  while (GetTickCount() - start < 2000) {
+  while (GetTickCount() - start < timeout_ms) {
     for (i = 0; i < 2; i++) {
       marked[i] = 0;
       if (!InterlockedCompareExchange(&state[i].complete, 0, 0))
@@ -3845,18 +3864,23 @@ static HANDLE git809_select_transport(HANDLE pair[2])
           available)
         marked[i] = 1;
     }
-    if (marked[0] && marked[1])
-      goto done; /* two transports for one logical channel */
+    if (marked[0] && marked[1]) {
+      result = TRANSPORT_DUPLICATE_MARKER;
+      goto done;
+    }
     if (marked[0] || marked[1]) {
       i = marked[1] ? 1 : 0;
       {
         char marker;
         if (!ReadFile(pair[i], &marker, 1, &n, NULL) ||
-            n != 1 || marker != 'T')
+            n != 1 || marker != 'T') {
+          result = TRANSPORT_INVALID_MARKER;
           goto done;
+        }
       }
       chosen = pair[i];
       pair[i] = INVALID_HANDLE_VALUE;
+      result = TRANSPORT_OK;
       break;
     }
     Sleep(1);
@@ -3871,7 +3895,9 @@ done:
       pair[i] = INVALID_HANDLE_VALUE;
     }
   }
-  return chosen;
+  if (result == TRANSPORT_OK)
+    *transport = chosen;
+  return result;
 }
 
 /*
@@ -4015,8 +4041,9 @@ static int git_preinit_worker(void)
     const int order[5] = {1, 2, 3, 0, 4};
     for (i = 0; i < 5; i++) {
       int channel = order[i];
-      HANDLE selected = git809_select_transport(pipes[channel]);
-      if (selected == INVALID_HANDLE_VALUE) {
+      HANDLE selected;
+      int transport_rc = select_transport(pipes[channel], 2000, &selected);
+      if (transport_rc != TRANSPORT_OK) {
         rc = 122;
         goto cleanup;
       }
