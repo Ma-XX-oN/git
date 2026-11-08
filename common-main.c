@@ -14,7 +14,8 @@ int main(int argc, const char **argv)
 			exit(129);
 		}
 		result = git_preload_unix_worker(argv[2]);
-		exit(result);
+		/* The worker has already reported and flushed its own status. */
+		_exit(result);
 	}
 #endif
 
