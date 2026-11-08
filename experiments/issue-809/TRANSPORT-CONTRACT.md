@@ -37,6 +37,21 @@ For every logical channel, the Windows server/receiving endpoint creates a pair 
 
 For the allocation channels, the GET request and worker-ID reply travel over distinct logical named-pipe names, and the same marker rule applies to each. Concurrent clients must have correctly correlated replies; a shared reply stream without correlation is not sufficient.
 
+## Transport-selection API
+
+The Windows C Git worker exposes the internal helper
+`int select_transport(HANDLE instances[2], DWORD timeout_ms, HANDLE *transport)`.
+The return value is an error code: `TRANSPORT_OK=0`,
+`TRANSPORT_TIMEOUT=1`, `TRANSPORT_INVALID_MARKER=2`,
+`TRANSPORT_DUPLICATE_MARKER=3`, or `TRANSPORT_WIN32_ERROR=4`.
+The output handle is valid only on success. The function owns both input
+handles and closes all unselected handles; the caller owns the selected handle.
+
+The Python `git-manager` implements `select_transport(address)` separately.
+It returns the selected native handle, raising on failure. No cross-language
+C library is introduced: GET and ID connect Bash with Python, while the five
+Git worker channels connect Bash with C.
+
 ## Acceptance criteria
 
 - Windows: identify selected pipe by `T`, not `NtQueryInformationFile` state or probe close; test both possible instance orders, two markers, no marker, probe remaining open, and client disconnect mid-handshake.
