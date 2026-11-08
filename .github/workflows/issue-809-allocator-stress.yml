@@ -32,6 +32,7 @@ jobs:
           export GIT809_WORKER_GIT="$(cygpath -w "$PWD/git.exe")"
           export GIT809_DRAIN_MODE=chunk100
           mkdir -p git809-stream-results
+          "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_git_ipc_pool.py experiments/issue-809/test_allocator_probe_hold.py
           bash -n experiments/issue-809/git-ipc-request.sh || exit 21
           source experiments/issue-809/git-manager.sh 3 || exit 22
           trap 'rc=$?; if [[ -n ${_GIT809_MANAGER_LOG:-} && -f $_GIT809_MANAGER_LOG ]]; then cp -- "$_GIT809_MANAGER_LOG" git809-stream-results/manager.log; fi; exit "$rc"' EXIT
@@ -75,7 +76,15 @@ jobs:
           script=r'''
           source "$GIT809_SHELL_LIBRARY" 3 || exit 51
           printf -v local_pipe '%s%s' '\\.\pipe\git809-allocate-' "$_GIT809_OWNER_WINPID"
-          exec 3<>"$local_pipe" || exit 52
+          for ((attempt=0;attempt<200;attempt++)); do
+            if { exec 3<>"$local_pipe"; } 2>/dev/null; then break; fi
+            sleep .005
+          done
+          if (( attempt == 200 )); then
+            printf 'OWNER_ALLOCATOR_UNAVAILABLE log=%s\n' "$_GIT809_MANAGER_LOG" >&2
+            cat "$_GIT809_MANAGER_LOG" >&2
+            exit 52
+          fi
           printf 'GET\n' >&3 || exit 53
           IFS= read -r allocated <&3 || exit 54
           exec 3>&-
