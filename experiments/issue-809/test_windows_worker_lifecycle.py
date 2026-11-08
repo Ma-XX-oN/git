@@ -7,6 +7,7 @@ from pathlib import Path
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 
 if os.name != "nt":
@@ -62,7 +63,8 @@ def read_to_eof(handle):
 
 def run_case(git, name, arguments, expected_status, expected_output,
              stdin_marker=b"1", malformed=False, fragmented=False,
-             missing_end=False):
+             missing_end=False, delayed_request=False, delayed_output=False,
+             abandoned_probes=False, duplicate_control=False, held_probes=False):
     """Run a worker with stdin held open while output and status are drained."""
     env = os.environ.copy()
     env["GIT809_PRELOAD_OWNER_WINPID"] = str(os.getpid())
@@ -75,20 +77,41 @@ def run_case(git, name, arguments, expected_status, expected_output,
         worker.stdout.close()
         for channel in ("stdout", "stderr", "exit-code", "stdin", "param-env-cwd"):
             address = rf"\\.\pipe\{worker.pid}-{channel}"
+            if abandoned_probes or held_probes:
+                probe = K.CreateFileW(address, 0xc0000000, 0, None, 3, 0, None)
+                assert probe != INVALID
+                if held_probes:
+                    handles[channel + "-probe"] = probe
+                else:
+                    K.CloseHandle(probe)
             handle = K.CreateFileW(address, 0xc0000000, 0, None, 3, 0, None)
             if handle == INVALID:
                 raise C.WinError(C.get_last_error())
             handles[channel] = handle
-            write(handle, stdin_marker if channel == "stdin" else b"1")
+            if channel != "stdin" or not duplicate_control:
+                write(handle, stdin_marker if channel == "stdin" else b"1")
             if channel == "stdin" and stdin_marker != b"1":
                 break
-        if "param-env-cwd" in handles:
+        if duplicate_control:
+            # Hold the preceding channel so both markers precede selection.
+            address = rf"\\.\pipe\{worker.pid}-param-env-cwd"
+            duplicate = K.CreateFileW(address, 0xc0000000, 0, None, 3, 0, None)
+            assert duplicate != INVALID
+            handles["duplicate-control"] = duplicate
+            write(duplicate, b"1")
+            write(handles["stdin"], b"1")
+        elif "param-env-cwd" in handles:
             frame = struct.pack("<I", len(arguments) + 1) + b"git\0"
             frame += b"".join(arg.encode() + b"\0" for arg in arguments) + b"end\0"
             payload = b"\0" if malformed else frame
             if missing_end:
                 payload = payload[:-4]
-            if fragmented:
+            if delayed_request:
+                write(handles["param-env-cwd"], payload[:4])
+                assert K.FlushFileBuffers(handles["param-env-cwd"])
+                time.sleep(.05)
+                write(handles["param-env-cwd"], payload[4:])
+            elif fragmented:
                 for byte in payload:
                     write(handles["param-env-cwd"], bytes([byte]))
             else:
@@ -96,6 +119,8 @@ def run_case(git, name, arguments, expected_status, expected_output,
             if malformed or missing_end:
                 assert K.FlushFileBuffers(handles["param-env-cwd"])
                 K.CloseHandle(handles.pop("param-env-cwd"))
+        if delayed_output:
+            time.sleep(.1)
         output = read_to_eof(handles["stdout"])
         errors = read_to_eof(handles["stderr"])
         status = read_to_eof(handles["exit-code"])
@@ -113,16 +138,52 @@ def run_case(git, name, arguments, expected_status, expected_output,
         worker.stdout.close()
 
 
+def test_marker_timeout(git):
+    """A missing marker must cancel both connection threads and exit promptly."""
+    env = os.environ.copy()
+    env["GIT809_PRELOAD_OWNER_WINPID"] = str(os.getpid())
+    worker = subprocess.Popen([git, "--preload"], env=env,
+                              stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL)
+    try:
+        assert worker.stdout.readline() == f"READY {worker.pid}\n".encode()
+        assert worker.wait(timeout=4) == 122
+        print("GIT809_WORKER_LIFECYCLE_PASS missing-marker-timeout", flush=True)
+    finally:
+        if worker.poll() is None:
+            worker.kill()
+        worker.wait(timeout=5)
+        worker.stdout.close()
+
+
 if __name__ == "__main__":
     git = str(Path(sys.argv[1] if len(sys.argv) > 1 else
                    os.environ["GIT809_WORKER_GIT"]).resolve())
     version = subprocess.check_output([git, "--version"])
     run_case(git, "stdin-held-open", ["--version"], 0, version)
+    run_case(git, "abandoned-probes-on-every-channel", ["--version"],
+             0, version, abandoned_probes=True)
+    run_case(git, "probes-stay-open-on-every-channel", ["--version"],
+             0, version, held_probes=True)
+    run_case(git, "request-read-pends-between-fragments", ["--version"],
+             0, version, delayed_request=True)
+    with tempfile.TemporaryDirectory(prefix="git809-output-") as directory:
+        config = Path(directory) / "large.config"
+        value = b"x" * (1024 * 1024)
+        config.write_bytes(b"[large]\nvalue = " + value + b"\n")
+        run_case(git, "output-exceeds-pipe-buffer", ["config", "--file",
+                 str(config), "--get", "large.value"], 0, value + b"\n",
+                 delayed_output=True)
     run_case(git, "end-is-an-argument", ["--version", "end"], 0, version,
              fragmented=True)
     run_case(git, "stdin-produces-eof", ["hash-object", "--stdin"], 0,
              b"e69de29bb2d1d6434b8b29ae775ad8c2e48c5391\n")
     run_case(git, "invalid-stdin-marker-closes-output", [], 122, b"", stdin_marker=b"X")
+    run_case(git, "nul-stdin-marker-closes-output", [], 122, b"", stdin_marker=b"\0")
     run_case(git, "malformed-request-closes-output", [], 124, b"", malformed=True)
     run_case(git, "missing-end-tag-closes-output", ["--version"], 124, b"",
              missing_end=True)
+    for iteration in range(10):
+        run_case(git, f"duplicate-control-markers-{iteration}", [], 122, b"",
+                 duplicate_control=True)
+    test_marker_timeout(git)

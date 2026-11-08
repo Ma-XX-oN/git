@@ -37,14 +37,6 @@ K.ReadFile.argtypes=[W.HANDLE,W.LPVOID,W.DWORD,C.POINTER(W.DWORD),W.LPVOID]
 K.ReadFile.restype=W.BOOL
 K.WriteFile.argtypes=[W.HANDLE,W.LPCVOID,W.DWORD,C.POINTER(W.DWORD),W.LPVOID]
 K.WriteFile.restype=W.BOOL
-K.PeekNamedPipe.argtypes=[W.HANDLE,W.LPVOID,W.DWORD,C.POINTER(W.DWORD),C.POINTER(W.DWORD),C.POINTER(W.DWORD)]
-K.PeekNamedPipe.restype=W.BOOL
-K.FlushFileBuffers.argtypes=[W.HANDLE]
-K.FlushFileBuffers.restype=W.BOOL
-K.OpenThread.argtypes=[W.DWORD,W.BOOL,W.DWORD]
-K.OpenThread.restype=W.HANDLE
-K.CancelSynchronousIo.argtypes=[W.HANDLE]
-K.CancelSynchronousIo.restype=W.BOOL
 K.CloseHandle.argtypes=[W.HANDLE]
 K.CloseHandle.restype=W.BOOL
 K.GetCurrentProcess.restype=W.HANDLE
@@ -65,119 +57,238 @@ ERROR_IO_PENDING=997
 ERROR_OPERATION_ABORTED=995
 ERROR_BROKEN_PIPE=109
 ERROR_NOT_FOUND=1168
-WAIT_OBJECT_0=0
-WAIT_FAILED=0xffffffff
 
 class OVERLAPPED(C.Structure):
   _fields_=[("Internal",C.c_size_t),("InternalHigh",C.c_size_t),
             ("Offset",W.DWORD),("OffsetHigh",W.DWORD),("hEvent",W.HANDLE)]
 
-K.CreateEventW.argtypes=[W.LPVOID,W.BOOL,W.BOOL,W.LPCWSTR]
-K.CreateEventW.restype=W.HANDLE
-K.ResetEvent.argtypes=[W.HANDLE]
-K.ResetEvent.restype=W.BOOL
-K.WaitForMultipleObjects.argtypes=[W.DWORD,C.POINTER(W.HANDLE),W.BOOL,W.DWORD]
-K.WaitForMultipleObjects.restype=W.DWORD
-K.GetOverlappedResult.argtypes=[W.HANDLE,C.POINTER(OVERLAPPED),
-                                C.POINTER(W.DWORD),W.BOOL]
-K.GetOverlappedResult.restype=W.BOOL
 K.CancelIoEx.argtypes=[W.HANDLE,C.POINTER(OVERLAPPED)]
 K.CancelIoEx.restype=W.BOOL
 
-def _start_async(state,operation,data=None,size=1):
-  """Start one pending connect/read/write on a named-pipe instance."""
-  state["pending"]=False
-  K.ResetEvent(state["event"])
-  state["ov"].Internal=0
-  state["ov"].InternalHigh=0
-  n=W.DWORD()
-  if operation=="connect":
-    ok=bool(K.ConnectNamedPipe(state["h"],C.byref(state["ov"])))
-  elif operation=="read":
-    assert 1<=size<=64
-    state["buffer"]=C.create_string_buffer(size)
-    ok=bool(K.ReadFile(state["h"],state["buffer"],size,C.byref(n),
-                       C.byref(state["ov"])))
-  else:
-    assert operation=="write" and data is not None
-    state["buffer"]=C.create_string_buffer(data)
-    ok=bool(K.WriteFile(state["h"],state["buffer"],len(data),
-                        C.byref(n),C.byref(state["ov"])))
-  if ok:
-    return n.value
-  error=C.get_last_error()
-  if operation=="connect" and error==ERROR_PIPE_CONNECTED:
-    return 0
-  if error==ERROR_IO_PENDING:
-    state["pending"]=True
-    return None
-  if error in (ERROR_BROKEN_PIPE,ERROR_NO_DATA,233):
-    return -1
-  raise OSError(error,operation)
+K.CreateIoCompletionPort.argtypes = [W.HANDLE, W.HANDLE, C.c_size_t, W.DWORD]
+K.CreateIoCompletionPort.restype = W.HANDLE
+K.GetQueuedCompletionStatus.argtypes = [
+  W.HANDLE, C.POINTER(W.DWORD), C.POINTER(C.c_size_t),
+  C.POINTER(C.POINTER(OVERLAPPED)), W.DWORD]
+K.GetQueuedCompletionStatus.restype = W.BOOL
+K.PostQueuedCompletionStatus.argtypes = [
+  W.HANDLE, W.DWORD, C.c_size_t, C.POINTER(OVERLAPPED)]
+K.PostQueuedCompletionStatus.restype = W.BOOL
 
-def _finish_async(state):
-  n=W.DWORD()
-  if not K.GetOverlappedResult(state["h"],C.byref(state["ov"]),
-                               C.byref(n),False):
-    error=C.get_last_error()
-    if error in (ERROR_BROKEN_PIPE,ERROR_NO_DATA,233,ERROR_OPERATION_ABORTED):
-      state["pending"]=False
-      return -1
-    raise OSError(error,"GetOverlappedResult")
-  state["pending"]=False
-  return n.value
 
-def _close_async(state,close_pipe=True):
-  if state["pending"]:
-    if not K.CancelIoEx(state["h"],C.byref(state["ov"])) and (
-        C.get_last_error()!=ERROR_NOT_FOUND):
-      raise OSError(C.get_last_error(),"CancelIoEx")
-    n=W.DWORD()
-    # Keep OVERLAPPED storage and its event alive through cancellation.
-    K.GetOverlappedResult(state["h"],C.byref(state["ov"]),C.byref(n),True)
-    state["pending"]=False
-  K.CloseHandle(state["event"])
-  if close_pipe:
-    K.DisconnectNamedPipe(state["h"])
-    K.CloseHandle(state["h"])
+class CompletionPort:
+  """Own the allocator's completion queue and its live pipe operations."""
 
-def _wait_async(states,deadline):
-  waiting=[x for x in states if x["pending"]]
-  if not waiting:
-    return None
-  remaining=deadline-time.monotonic()
-  if remaining<=0:
-    return None
-  handles=(W.HANDLE*len(waiting))(*(x["event"] for x in waiting))
-  result=K.WaitForMultipleObjects(len(waiting),handles,False,
-                                  max(1,int(remaining*1000)))
-  if result==WAIT_TIMEOUT:
-    return None
-  if result==WAIT_FAILED or result>=len(waiting):
-    raise OSError(C.get_last_error(),"WaitForMultipleObjects")
-  return waiting[result]
+  def __init__(self):
+    """Create a queue that can wait for any number of pipe instances."""
+    self.handle = K.CreateIoCompletionPort(INVALID, None, 0, 1)
+    if not self.handle:
+      raise C.WinError(C.get_last_error())
+    self.pipes = {}
 
-def _write_reply(handle,data):
-  """Write on a FILE_FLAG_OVERLAPPED handle without a helper thread."""
-  event=K.CreateEventW(None,True,False,None)
-  if not event:
-    raise OSError(C.get_last_error(),"CreateEvent(reply write)")
-  state={"h":handle,"event":event,"ov":OVERLAPPED(),
-         "pending":False,"buffer":None}
-  state["ov"].hEvent=event
-  try:
-    n=_start_async(state,"write",data)
-    if n is None:
-      result=K.WaitForSingleObject(event,2000)
-      if result!=WAIT_OBJECT_0:
-        raise TimeoutError("reply write timeout")
-      n=_finish_async(state)
-    if n!=len(data):
-      raise OSError("short allocation reply write")
-  finally:
-    _close_async(state,False)
+  def wake(self):
+    """Wake the allocator when a worker becomes ready or shutdown starts."""
+    if not K.PostQueuedCompletionStatus(self.handle, 0, 0, None):
+      raise C.WinError(C.get_last_error())
+
+  def wait(self, milliseconds):
+    """Dispatch one completion, returning False when the wait expires."""
+    count = W.DWORD()
+    key = C.c_size_t()
+    overlap = C.POINTER(OVERLAPPED)()
+    ok = K.GetQueuedCompletionStatus(
+      self.handle, C.byref(count), C.byref(key), C.byref(overlap), milliseconds)
+    error = 0 if ok else C.get_last_error()
+    if not overlap:
+      if error == WAIT_TIMEOUT:
+        return False
+      if error:
+        raise C.WinError(error)
+      return True  # Worker readiness/shutdown notification.
+    pipe = self.pipes[key.value]
+    assert pipe.pending and C.addressof(overlap.contents) == C.addressof(pipe.overlap)
+    pipe.pending = False
+    pipe.result = count.value if ok else -1
+    if error not in (0, ERROR_BROKEN_PIPE, ERROR_NO_DATA, 233, ERROR_OPERATION_ABORTED):
+      pipe.error = error
+    return True
+
+  def drain(self):
+    """Dispatch all completions already queued, without a timer wait."""
+    while self.wait(0):
+      pass
+
+  def close(self):
+    """Close the queue after every pipe operation has been drained."""
+    assert not self.pipes
+    K.CloseHandle(self.handle)
+
+
+class Pipe:
+  """Own one pipe handle, OVERLAPPED, buffer, and pending operation."""
+
+  def __init__(self, port, address, instances=255, first=False):
+    """Publish an instance and associate it with the allocator queue."""
+    self.port = port
+    self.handle = K.CreateNamedPipeW(
+      address, PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED |
+      (FILE_FLAG_FIRST_PIPE_INSTANCE if first else 0),
+      PIPE_TYPE_BYTE | PIPE_WAIT, instances, 256, 256, 2000, None)
+    if self.handle == INVALID:
+      raise C.WinError(C.get_last_error())
+    self.overlap = OVERLAPPED()
+    self.buffer = None
+    self.pending = False
+    self.result = None
+    self.error = None
+    self.phase = "connect"
+    self.marker = None
+    if not K.CreateIoCompletionPort(self.handle, port.handle, id(self), 0):
+      error = C.get_last_error()
+      K.CloseHandle(self.handle)
+      raise C.WinError(error)
+    port.pipes[id(self)] = self
+    try:
+      self.issue("connect")
+    except BaseException:
+      self.close()
+      raise
+
+  def issue(self, operation, data=None, size=1):
+    """Submit one operation; retain its storage until completion is dequeued."""
+    assert not self.pending
+    self.overlap = OVERLAPPED()
+    self.result = None
+    self.error = None
+    count = W.DWORD()
+    if operation == "connect":
+      ok = K.ConnectNamedPipe(self.handle, C.byref(self.overlap))
+    elif operation == "read":
+      self.buffer = C.create_string_buffer(size)
+      ok = K.ReadFile(self.handle, self.buffer, size, C.byref(count),
+                      C.byref(self.overlap))
+    elif operation == "write":
+      self.buffer = C.create_string_buffer(data)
+      ok = K.WriteFile(self.handle, self.buffer, len(data), C.byref(count),
+                       C.byref(self.overlap))
+    else:
+      raise ValueError("invalid pipe operation")
+    error = 0 if ok else C.get_last_error()
+    if ok or error == ERROR_IO_PENDING:
+      # Even immediate success queues a completion. Consume it before reuse.
+      self.pending = True
+    elif operation == "connect" and error == ERROR_PIPE_CONNECTED:
+      self.result = 0
+    elif error in (ERROR_BROKEN_PIPE, ERROR_NO_DATA, 233):
+      self.result = -1
+    else:
+      raise C.WinError(error)
+
+  def take(self):
+    """Consume an operation result, raising an unexpected Win32 error."""
+    if self.error is not None:
+      raise C.WinError(self.error)
+    result, self.result = self.result, None
+    return result
+
+  def reconnect(self):
+    """Reuse a disconnected probe instance without creating a third instance."""
+    assert not self.pending
+    if not K.DisconnectNamedPipe(self.handle) and C.get_last_error() not in (
+        ERROR_NO_DATA, 233):
+      raise C.WinError(C.get_last_error())
+    self.phase = "connect"
+    self.issue("connect")
+
+  def close(self):
+    """Cancel and drain pending I/O before releasing its handle and storage."""
+    if self.handle == INVALID:
+      return
+    if self.pending:
+      if not K.CancelIoEx(self.handle, C.byref(self.overlap)):
+        error = C.get_last_error()
+        if error != ERROR_NOT_FOUND:
+          raise C.WinError(error)
+      # The OVERLAPPED storage must outlive cancellation completion.
+      while self.pending:
+        self.port.wait(0xffffffff)
+    K.DisconnectNamedPipe(self.handle)
+    K.CloseHandle(self.handle)
+    self.handle = INVALID
+    del self.port.pipes[id(self)]
+
+
+class TransportPair:
+  """Select one marked transport; share this selector with production tests."""
+
+  def __init__(self, port, address, marker):
+    """Publish both candidates for one private logical channel."""
+    if marker not in range(10):
+      raise ValueError("invalid decimal reply marker")
+    self.port = port
+    self.address = address
+    self.expected = ord("0") + marker
+    self.pipes = []
+    self.selected = None
+    self.deadline = time.monotonic() + 2
+    try:
+      for index in range(2):
+        self.pipes.append(Pipe(port, address, instances=2, first=index == 0))
+    except BaseException:
+      self.close()
+      raise
+
+  def advance(self):
+    """Inspect both marker results before selecting either candidate."""
+    while True:
+      for pipe in self.pipes:
+        if pipe.result is None:
+          continue
+        count = pipe.take()
+        if count < 0:
+          pipe.reconnect()
+        elif pipe.phase == "connect":
+          pipe.phase = "marker"
+          pipe.issue("read")
+        elif pipe.phase == "marker":
+          if count != 1:
+            raise RuntimeError("invalid reply marker length")
+          pipe.marker = pipe.buffer.raw[0]
+          pipe.phase = "marked"
+      self.port.drain()
+      if not any(pipe.result is not None for pipe in self.pipes):
+        break
+    marked = [pipe for pipe in self.pipes if pipe.phase == "marked"]
+    if len(marked) > 1:
+      first, second = marked
+      print(f"ALLOCATOR_DUPLICATE_MARKERS reply={self.address} "
+            f"first={first.marker} (0x{first.marker:02x}) "
+            f"second={second.marker} (0x{second.marker:02x}) "
+            f"expected={self.expected} (0x{self.expected:02x})", flush=True)
+      raise RuntimeError("two markers on one reply channel")
+    if marked:
+      chosen = marked[0]
+      if chosen.marker != self.expected:
+        raise RuntimeError("bad reply transport marker")
+      for other in self.pipes:
+        if other is not chosen:
+          other.close()
+      self.pipes = [chosen]
+      self.selected = chosen
+    elif time.monotonic() >= self.deadline:
+      raise TimeoutError("reply marker timeout")
+    return self.selected
+
+  def close(self):
+    """Release both candidates, including pending accepts and marker reads."""
+    for pipe in self.pipes:
+      pipe.close()
+    self.pipes.clear()
+
+
 class Pool:
   def __init__(self, git:Path, target:int):
+    """Track READY workers until allocation transfers ownership to a client."""
     self.git=git
     self.target=target
     self.ready=queue.Queue()
@@ -187,8 +298,10 @@ class Pool:
     self.errors=[]
     self.allocations=0
     self.owner_winpid=None
+    self.notify=None
 
   def spawn(self):
+    """Prepare one replacement and notify the allocator when it is READY."""
     if self.closing.is_set():
       return
     try:
@@ -209,7 +322,7 @@ class Pool:
     try:
       line=p.stdout.readline()
     finally:
-      # READY is the only startup-pipe message. The four native named pipes
+      # READY is the only startup-pipe message. The five native named pipes
       # carry the command; retaining each startup pipe leaks a manager handle.
       p.stdout.close()
     if line != ("READY "+str(p.pid)+"\n").encode("ascii"):
@@ -224,22 +337,27 @@ class Pool:
       return
     # Keep READY queue and tracked process objects in the same ownership set.
     self.ready.put(p)
+    with self.lock:
+      if self.notify:
+        self.notify()
     print("WORKER_READY "+str(p.pid),flush=True)
 
   def alloc(self):
-    try:
-      p=self.ready.get(timeout=5)
-    except queue.Empty:
-      return "WAIT\n"
-    # The client owns this worker after allocation. Retain only workers the
-    # manager is still offering; the native worker watches the shell itself.
-    with self.lock:
-      if p not in self.children:
-        raise RuntimeError("allocated worker missing from ready tracking")
-      self.children.remove(p)
-    if p.poll() is not None:
+    """Transfer a live worker immediately, or return None without waiting."""
+    while True:
+      try:
+        p=self.ready.get_nowait()
+      except queue.Empty:
+        return None
+      # The client owns this worker after allocation. Retain only workers the
+      # manager is still offering; the native worker watches the shell itself.
+      with self.lock:
+        if p not in self.children:
+          raise RuntimeError("allocated worker missing from ready tracking")
+        self.children.remove(p)
+      if p.poll() is None:
+        break
       threading.Thread(target=self.spawn,daemon=True).start()
-      return "WAIT\n"
     # Start replacement before replying to client. Never join this thread.
     threading.Thread(target=self.spawn,daemon=True).start()
     self.allocations+=1
@@ -255,8 +373,11 @@ class Pool:
     return str(p.pid)+"\n"
 
   def close(self):
+    """Wake the allocator and terminate workers still owned by the manager."""
     self.closing.set()
     with self.lock:
+      if self.notify:
+        self.notify()
       children=list(self.children)
     for p in children:
       if p.poll() is None:
@@ -269,81 +390,6 @@ class Pool:
     for p in children:
       if p.stdout:
         p.stdout.close()
-
-def select_transport(address, marker):
-  """Select a marked reply instance, event-driven on this thread only."""
-  expected=str(marker).encode("ascii")
-  if len(expected)!=1 or expected not in tuple(bytes([i]) for i in range(48,58)):
-    raise ValueError("invalid decimal reply marker")
-  states=[]
-  selected=None
-  deadline=time.monotonic()+2
-  try:
-    for i in range(2):
-      h=K.CreateNamedPipeW(address,PIPE_ACCESS_DUPLEX|FILE_FLAG_OVERLAPPED|
-        (FILE_FLAG_FIRST_PIPE_INSTANCE if i==0 else 0),
-        PIPE_TYPE_BYTE|PIPE_WAIT,2,256,256,2000,None)
-      if h==INVALID:
-        raise OSError(C.get_last_error(),"CreateNamedPipe(reply)")
-      event=K.CreateEventW(None,True,False,None)
-      if not event:
-        K.CloseHandle(h)
-        raise OSError(C.get_last_error(),"CreateEvent(reply)")
-      state={"h":h,"event":event,"ov":OVERLAPPED(),"pending":False,
-             "buffer":None,"phase":"connect","marked":False}
-      state["ov"].hEvent=event
-      states.append(state)
-      n=_start_async(state,"connect")
-      if n is not None:
-        state["phase"]="read"
-        n=_start_async(state,"read")
-        if n is not None:
-          state["phase"]="done"
-          state["marked"]=n==1
-    while time.monotonic()<deadline:
-      # Observe all completed markers before selecting either transport.
-      for state in states:
-        if not state["pending"] or K.WaitForSingleObject(
-            state["event"],0)!=WAIT_OBJECT_0:
-          continue
-        n=_finish_async(state)
-        if state["phase"]=="connect":
-          if n<0:
-            state["phase"]="done"
-          else:
-            state["phase"]="read"
-            n=_start_async(state,"read")
-            if n is not None:
-              state["phase"]="done"
-              state["marked"]=n==1
-        elif state["phase"]=="read":
-          state["phase"]="done"
-          state["marked"]=n==1
-      candidates=[x for x in states if x["marked"]]
-      if len(candidates)>1:
-        first,second=candidates[:2]
-        print(f"ALLOCATOR_DUPLICATE_MARKERS reply={address} "
-              f"first={first['buffer'].raw[0]} (0x{first['buffer'].raw[0]:02x}) "
-              f"second={second['buffer'].raw[0]} (0x{second['buffer'].raw[0]:02x}) "
-              f"expected={expected[0]} (0x{expected[0]:02x})",
-              flush=True)
-        raise RuntimeError("two markers on one reply channel")
-      if candidates:
-        state=candidates[0]
-        if state["buffer"].raw!=expected:
-          raise RuntimeError("bad reply transport marker")
-        selected=state
-        break
-      if not any(x["pending"] for x in states):
-        break
-      _wait_async(states,deadline)
-    if selected is None:
-      raise TimeoutError("reply marker timeout")
-    return selected["h"]
-  finally:
-    for state in states:
-      _close_async(state,state is not selected)
-
 
 def parse_get_request(frame):
   """Validate GET and return client PID, sequence and actual marker."""
@@ -363,280 +409,131 @@ def parse_get_request(frame):
 
 
 def allocation_server(owner_pid:int,pool:Pool):
-  """Event-driven GET service: no per-connection threads or 1 ms polling.
+  """Serve concurrent GET/reply channels without blocking other clients.
 
-  Each connection gets its own OVERLAPPED connect/read event. The single
-  allocator loop retains a backlog of listeners while distinguishing real
-  GET requests from the short-lived Git Bash open probes. Replies use their
-  separate per-request named-pipe channel.
+  Each connection owns its pending connect/read/write. The completion queue
+  retains a backlog of listeners while distinguishing real GET requests from
+  the short-lived Git Bash open probes. Replies use their separate per-request
+  named-pipe channel.
   """
-  address=r"\\.\pipe\git809-allocate-req-"+str(owner_pid)
-  unlimited=255
-  backlog=min(64,max(4,2*pool.target))
-  max_active=56  # Keep the event set normally below the Win32 wait limit.
-  active=[]
-  replies=[]
-  first=True
-  cap_reported=False
-  print(f"ALLOCATOR_START {address} backlog={backlog}",flush=True)
+  port = CompletionPort()
+  pool.notify = port.wake
+  address = r"\\.\pipe\git809-allocate-req-" + str(owner_pid)
+  backlog = max(4, 2 * pool.target)
+  requests = []
+  replies = []
+  first = True
+  print(f"ALLOCATOR_START {address} backlog={backlog}", flush=True)
 
-  def make_listener():
-    nonlocal first
-    h=K.CreateNamedPipeW(
-      address,PIPE_ACCESS_DUPLEX|FILE_FLAG_OVERLAPPED|
-      (FILE_FLAG_FIRST_PIPE_INSTANCE if first else 0),
-      PIPE_TYPE_BYTE|PIPE_WAIT,unlimited,256,256,5000,None)
-    if h==INVALID:
-      raise OSError(C.get_last_error(),"CreateNamedPipe(allocation)")
-    first=False
-    event=K.CreateEventW(None,True,False,None)
-    if not event:
-      K.CloseHandle(h)
-      raise OSError(C.get_last_error(),"CreateEvent(allocation)")
-    state={"h":h,"event":event,"ov":OVERLAPPED(),"pending":False,
-           "buffer":None,"phase":"connect","ready":None,
-           "frame":bytearray(),"deadline":None}
-    state["ov"].hEvent=event
-    active.append(state)
-    state["ready"]=_start_async(state,"connect")
-    return state
-
-  def start_reply(address,marker):
-    """Publish both reply instances without stalling the GET event loop."""
-    pair={"states":[],"address":address,
-          "expected":str(marker).encode("ascii"),
-          "deadline":time.monotonic()+2,"selected":None}
-    replies.append(pair)
-    try:
-      for i in range(2):
-        h=K.CreateNamedPipeW(address,PIPE_ACCESS_DUPLEX|FILE_FLAG_OVERLAPPED|
-          (FILE_FLAG_FIRST_PIPE_INSTANCE if i==0 else 0),
-          PIPE_TYPE_BYTE|PIPE_WAIT,2,256,256,2000,None)
-        if h==INVALID:
-          raise OSError(C.get_last_error(),"CreateNamedPipe(reply)")
-        event=K.CreateEventW(None,True,False,None)
-        if not event:
-          K.CloseHandle(h)
-          raise OSError(C.get_last_error(),"CreateEvent(reply)")
-        state={"h":h,"event":event,"ov":OVERLAPPED(),"pending":False,
-               "buffer":None,"phase":"connect","ready":None,"answer":None,
-               "probe_retries":0}
-        state["ov"].hEvent=event
-        pair["states"].append(state)
-        state["ready"]=_start_async(state,"connect")
-    except Exception:
-      finish_reply(pair)
-      raise
-
-  def finish_reply(pair):
-    for state in pair["states"]:
-      _close_async(state)
-    replies.remove(pair)
-
-  def recycle_reply_probe(state):
-    """Reuse a disconnected probe instance; never create a third instance."""
-    state["probe_retries"]+=1
-    if state["probe_retries"]>32:
-      raise RuntimeError("reply probe reconnect limit")
-    if not K.DisconnectNamedPipe(state["h"]):
-      error=C.get_last_error()
-      if error not in (ERROR_NO_DATA,233):
-        raise OSError(error,"DisconnectNamedPipe(reply probe)")
-    state["phase"]="connect"
-    state["ready"]=_start_async(state,"connect")
-
-  def check_reply_marker(state):
-    """Return the actual marker byte; None means I/O remains pending."""
-    while state["ready"] is not None:
-      received=state["ready"]
-      state["ready"]=None
-      if state["phase"]=="connect":
-        if received<0:
-          recycle_reply_probe(state)
-        else:
-          state["phase"]="marker"
-          state["ready"]=_start_async(state,"read")
-      elif state["phase"]=="marker":
-        if received<0:
-          recycle_reply_probe(state)
-        elif received!=1:
-          raise RuntimeError("invalid reply marker length")
-        else:
-          return state["buffer"].raw[0]
-      else:
-        raise RuntimeError("invalid reply marker phase")
-    return None
-
-  def advance_reply(pair):
-    """Inspect both markers, choose one instance, then send the worker ID."""
-    for state in pair["states"]:
-      if state["pending"] and K.WaitForSingleObject(
-          state["event"],0)==WAIT_OBJECT_0:
-        state["ready"]=_finish_async(state)
-      if state["phase"]=="write":
-        if state["ready"] is None:
-          continue
-        written=state["ready"]
-        state["ready"]=None
-        if written!=len(state["answer"]):
-          raise RuntimeError("short allocation reply write")
-        if not K.FlushFileBuffers(state["h"]):
-          error=C.get_last_error()
-          if error not in (ERROR_BROKEN_PIPE,ERROR_NO_DATA,233):
-            raise OSError(error,"FlushFileBuffers(reply)")
-        return False
-      if state["phase"]=="marked":
-        continue
-      marker=check_reply_marker(state)
-      if marker is not None:
-        state["phase"]="marked"
-        state["marker"]=marker
-
-    marked=[state for state in pair["states"] if state["phase"]=="marked"]
-    if len(marked)>1:
-      first,second=marked[:2]
-      print(f"ALLOCATOR_DUPLICATE_MARKERS reply={pair['address']} "
-            f"first={first['marker']} (0x{first['marker']:02x}) "
-            f"second={second['marker']} (0x{second['marker']:02x}) "
-            f"expected={pair['expected'][0]} (0x{pair['expected'][0]:02x})",
-            flush=True)
-      raise RuntimeError("two markers on one reply channel")
-    if marked and pair["selected"] is None:
-      chosen=marked[0]
-      if bytes([chosen["marker"]])!=pair["expected"]:
-        raise RuntimeError("bad reply transport marker")
-      for other in pair["states"]:
-        if other is not chosen:
-          _close_async(other)
-      pair["states"]=[chosen]
-      pair["selected"]=chosen
-      chosen["answer"]=pool.alloc().encode("ascii")
-      if pool.allocations % 50 == 0:
-        print(f"ALLOCATOR_STATE count={pool.allocations} active_get={len(active)} "
-              f"get_listeners={sum(s['phase']=='connect' for s in active)} "
-              f"reply_pairs={len(replies)}",flush=True)
-      chosen["phase"]="write"
-      pair["deadline"]=time.monotonic()+2
-      chosen["ready"]=_start_async(chosen,"write",chosen["answer"])
-
-    if time.monotonic()>=pair["deadline"]:
-      raise TimeoutError("reply marker/write timeout")
-    if not any(s["pending"] or s["ready"] is not None for s in pair["states"]):
-      raise TimeoutError("no connected reply transport")
-    return True
-
-  def parse_and_reply(frame):
-    client_pid,sequence,marker=parse_get_request(frame)
-    address=(r"\\.\pipe\git809-allocate-reply-"+str(owner_pid)+
-             "-"+str(client_pid)+"-"+str(sequence))
-    start_reply(address,marker)
-
-  def advance(state):
-    """Consume completed operations and submit the next read immediately."""
-    while state["ready"] is not None:
-      n=state["ready"]
-      state["ready"]=None
-      if state["phase"]=="connect":
-        if n<0:
-          return False
-        state["phase"]="read"
-        state["deadline"]=time.monotonic()+2
-      elif state["phase"]=="read":
-        if n<=0:
-          return False
-        state["frame"].extend(state["buffer"].raw[:n])
-        if len(state["frame"])>64:
-          raise ValueError("oversized request")
-        if b"\n" in state["frame"]:
-          parse_and_reply(bytes(state["frame"]))
-          return False
-        if len(state["frame"])==64:
-          raise ValueError("oversized request")
-      else:
-        raise RuntimeError("invalid GET state")
-      state["ready"]=_start_async(state,"read",
-                                  size=64-len(state["frame"]))
-    return True
-
-  def dispose(state):
-    _close_async(state)
-    active.remove(state)
+  def finish_reply(reply):
+    """Release one private reply channel after completion or failure."""
+    reply["pair"].close()
+    replies.remove(reply)
 
   try:
-    for _ in range(backlog):
-      make_listener()
     while not pool.closing.is_set():
-      now=time.monotonic()
-      for state in list(active):
+      port.drain()
+      now = time.monotonic()
+      for pipe in list(requests):
         try:
-          if state["pending"] and K.WaitForSingleObject(
-              state["event"],0)==WAIT_OBJECT_0:
-            state["ready"]=_finish_async(state)
-          if state["ready"] is not None:
-            if not advance(state):
-              dispose(state)
+          while pipe.result is not None:
+            count = pipe.take()
+            if count < 0 or (pipe.phase == "read" and count == 0):
+              break
+            if pipe.phase == "connect":
+              pipe.phase = "read"
+              pipe.deadline = now + 2
+            else:
+              pipe.frame.extend(pipe.buffer.raw[:count])
+              if b"\n" in pipe.frame:
+                client_pid, sequence, marker = parse_get_request(bytes(pipe.frame))
+                reply_address = (rf"\\.\pipe\git809-allocate-reply-{owner_pid}"
+                                 rf"-{client_pid}-{sequence}")
+                replies.append({"pair": TransportPair(port, reply_address, marker),
+                                "phase": "select", "deadline": now + 2})
+                break
+              if len(pipe.frame) >= 64:
+                raise ValueError("oversized request")
+            pipe.issue("read", size=64 - len(pipe.frame))
+          else:
+            if pipe.deadline is None or now < pipe.deadline:
               continue
-          if state["deadline"] is not None and now>=state["deadline"]:
-            print("ALLOCATOR_IDLE_PROBE_EXPIRED",flush=True)
-            dispose(state)
+            print("ALLOCATOR_IDLE_PROBE_EXPIRED", flush=True)
         except Exception as error:
-          print("ALLOCATOR_CONNECTION_ERROR "+repr(error),flush=True)
-          dispose(state)
-      for pair in list(replies):
+          print("ALLOCATOR_CONNECTION_ERROR " + repr(error), flush=True)
+        pipe.close()
+        requests.remove(pipe)
+
+      for reply in list(replies):
         try:
-          if not advance_reply(pair):
-            finish_reply(pair)
+          pair = reply["pair"]
+          if reply["phase"] == "select":
+            chosen = pair.advance()
+            if chosen is None:
+              continue
+            reply["phase"] = "worker"
+            reply["deadline"] = now + 5
+          chosen = pair.selected
+          if reply["phase"] == "worker":
+            answer = pool.alloc()
+            if answer is None and now < reply["deadline"]:
+              continue
+            reply["answer"] = (answer or "WAIT\n").encode("ascii")
+            chosen.issue("write", reply["answer"])
+            reply["phase"] = "write"
+            reply["deadline"] = now + 2
+          if chosen.result is not None:
+            count = chosen.take()
+            if reply["phase"] == "write":
+              if count != len(reply["answer"]):
+                raise RuntimeError("short allocation reply write")
+              # Keep the server open until the client consumes its reply and
+              # closes. A pending read observes disconnect without blocking
+              # the allocator in FlushFileBuffers.
+              chosen.issue("read")
+              reply["phase"] = "disconnect"
+            else:
+              if count > 0:
+                raise RuntimeError("unexpected bytes after reply marker")
+              finish_reply(reply)
+              continue
+          if now >= reply["deadline"]:
+            raise TimeoutError("allocation reply timeout")
         except Exception as error:
-          print("ALLOCATOR_CONNECTION_ERROR "+repr(error),flush=True)
-          finish_reply(pair)
+          print("ALLOCATOR_CONNECTION_ERROR " + repr(error), flush=True)
+          finish_reply(reply)
+
       # Keep ready listeners available before servicing the next request.
-      listeners=sum(s["phase"]=="connect" for s in active)
-      while listeners<backlog and len(active)<max_active:
-        make_listener()
-        listeners+=1
-      if listeners<backlog and len(active)>=max_active:
-        if not cap_reported:
-          print(f"ALLOCATOR_LISTENER_CAP active_get={len(active)} "
-                f"listeners={listeners} reply_pairs={len(replies)}",
-                flush=True)
-        cap_reported=True
-      else:
-        cap_reported=False
-      pending=[s for s in active if s["pending"]]
-      pending.extend(s for pair in replies for s in pair["states"]
-                     if s["pending"])
-      if not pending:
+      listeners = sum(pipe.phase == "connect" for pipe in requests)
+      while listeners < backlog:
+        pipe = Pipe(port, address, first=first)
+        first = False
+        pipe.frame = bytearray()
+        pipe.deadline = None
+        requests.append(pipe)
+        listeners += 1
+      if any(pipe.result is not None for pipe in port.pipes.values()):
         continue
-      deadlines=[s["deadline"] for s in active
-                 if s["deadline"] is not None]
-      deadlines.extend(p["deadline"] for p in replies)
-      remaining=min(0.25,max(0,min(deadlines)-time.monotonic())) if (
-        deadlines) else 0.25
-      # Win32 has a 64-handle wait limit. A saturated burst is split
-      # across iterations; regular operation waits on all ready events.
-      count=min(len(pending),64)
-      handles=(W.HANDLE*count)(*(s["event"] for s in pending[:count]))
-      wait=K.WaitForMultipleObjects(count,handles,False,
-                          max(1,int(min(remaining,0.01 if len(pending)>64
-                                        else remaining)*1000)))
-      if wait==WAIT_FAILED:
-        raise OSError(C.get_last_error(),"WaitForMultipleObjects(allocation)")
+      deadlines = [pipe.deadline for pipe in requests if pipe.deadline is not None]
+      deadlines.extend(reply["pair"].deadline if reply["phase"] == "select"
+                       else reply["deadline"] for reply in replies)
+      wait = max(0, int((min(deadlines) - time.monotonic()) * 1000) + 1) if (
+        deadlines) else 0xffffffff
+      port.wait(wait)
   except Exception as error:
     with pool.lock:
-      pool.errors.append("allocation listener failed: "+repr(error))
-    print("ALLOCATOR_FATAL "+repr(error),flush=True)
+      pool.errors.append("allocation listener failed: " + repr(error))
+    print("ALLOCATOR_FATAL " + repr(error), flush=True)
     raise
   finally:
-    for pair in list(replies):
-      try:
-        finish_reply(pair)
-      except Exception as error:
-        print("ALLOCATOR_CLEANUP_ERROR "+repr(error),flush=True)
-    for state in list(active):
-      try:
-        dispose(state)
-      except Exception as error:
-        print("ALLOCATOR_CLEANUP_ERROR "+repr(error),flush=True)
+    # Serialize readiness notifications with queue teardown.
+    with pool.lock:
+      pool.notify = None
+    for reply in list(replies):
+      finish_reply(reply)
+    for pipe in requests:
+      pipe.close()
+    port.close()
 
 
 def main():

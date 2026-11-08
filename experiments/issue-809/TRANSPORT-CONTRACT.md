@@ -82,17 +82,36 @@ connection, or stream-handling change is introduced.
 ## Transport-selection API
 
 The Windows C Git worker exposes the internal helper
-`int select_transport(HANDLE instances[2], DWORD timeout_ms, HANDLE *transport)`.
+`int select_transport(struct git809_candidate candidates[2], HANDLE instances[2], DWORD timeout_ms, HANDLE *transport, char expected, char *observed)`.
 The return value is an error code: `TRANSPORT_OK=0`,
 `TRANSPORT_TIMEOUT=1`, `TRANSPORT_INVALID_MARKER=2`,
 `TRANSPORT_DUPLICATE_MARKER=3`, or `TRANSPORT_WIN32_ERROR=4`.
 The output handle is valid only on success. The function owns both input
 handles and closes all unselected handles; the caller owns the selected handle.
+An expected marker of zero accepts any decimal digit; subsequent channels
+must match the observed digit. Two connection threads are created before
+READY, reused across all five channels, then joined before request processing.
+They connect and consume exactly one marker, without relaying application
+bytes. The selected handles remain synchronous for Git's CRT streams.
+Unselected operations are canceled and completed before their handles close
+or their threads receive another channel. Cancellation retries cover only the
+race between submitting a synchronous call and acknowledging cancellation;
+connection readiness uses blocking event waits, without timed polling.
 
-The Python `git-manager` implements `select_transport(address)` separately.
-It returns the selected native handle, raising on failure. No cross-language
+The Python `git-manager` implements `TransportPair(port, address, marker)`.
+Its `advance()` returns the selected `Pipe` or None while selection is pending,
+and raises on failure. Production replies and selector tests use this same
+implementation. Each `Pipe` owns its native handle, OVERLAPPED, buffer, and
+operation result until completion or cancellation has been dequeued. A shared
+I/O completion port waits for all GET and reply operations without the
+64-event limit. No cross-language
 C library is introduced: GET and ID connect Bash with Python, while the five
 Git worker channels connect Bash with C.
+
+Worker allocation is nonblocking: an empty READY queue leaves that request
+waiting for a readiness notification, with a five-second deadline before WAIT.
+After writing a reply, the manager waits asynchronously for client disconnect
+before closing the instance. It does not block other clients in a pipe flush.
 
 ## Existing output limitation
 
@@ -117,7 +136,7 @@ binary stdout/stderr and interactive stdin tests are implemented and pass.
 The current Python git-manager request side retains a **replenished pool of
 listener instances for the shared GET pipe name**, and identifies each real
 request by its `T` prefix. It does **not** call the same two-instance
-`select_transport()` used for each unique ID reply pipe. This is **not
+`TransportPair` used for each unique ID reply pipe. This is **not
 yet verified as satisfying the agreed pair-selection contract**. Unlike a
 private worker channel, GET accepts concurrent independent git-ipc clients:
 two distinct GET connections can both carry valid `T` markers without

@@ -35,7 +35,7 @@ jobs:
           mkdir -p git809-stream-results
           export GIT_TRACE_GIT809_PRELOAD="$(cygpath -w "$PWD/git809-stream-results/worker-trace.log")"
           "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_git_ipc_pool.py experiments/issue-809/test_allocator_probe_hold.py experiments/issue-809/test_windows_transport_selection.py
-          "$PYTHON_EXE" experiments/issue-809/test_windows_transport_selection.py
+          "$PYTHON_EXE" experiments/issue-809/test_windows_transport_selection.py || exit 19
           "$PYTHON_EXE" experiments/issue-809/test_windows_worker_lifecycle.py "$GIT809_WORKER_GIT" || exit 20
           bash -n experiments/issue-809/git-ipc-request.sh || exit 21
           source experiments/issue-809/git-manager.sh 3 || exit 22
