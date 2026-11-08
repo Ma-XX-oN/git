@@ -1,7 +1,7 @@
 name: RWF 809 native Windows direct export stream validation
 on:
   push:
-    branches: [investigation-809-direct-stream-export]
+    branches: [tmp1]
   workflow_dispatch:
 permissions:
   contents: read
@@ -44,28 +44,36 @@ jobs:
           done
           [[ ! -v GIT_EDITOR ]] || exit 33
           printf 'GIT809_STREAM_ROUNDTRIP_PASS\n'
-          printf 'sample,begin_direct,end_direct,begin_ipc,end_ipc\n' >git809-stream-results/pairs.csv
-          for ((i=0;i<120;i++)); do
-            if ((i % 2 == 0)); then
-              a=$EPOCHREALTIME; "$GIT809_WORKER_GIT" --version >/dev/null || exit 41; b=$EPOCHREALTIME
-              c=$EPOCHREALTIME; git-ipc --version >/dev/null || exit 42; d=$EPOCHREALTIME
+          printf 'mode,sample,start_direct,end_direct,start_ipc,end_ipc\n' >git809-stream-results/pairs.csv
+          for mode in chunk100 alternate1ms; do
+            if [[ $mode == chunk100 ]]; then
+              export GIT809_DRAIN_MODE=chunk100
             else
-              c=$EPOCHREALTIME; git-ipc --version >/dev/null || exit 43; d=$EPOCHREALTIME
-              a=$EPOCHREALTIME; "$GIT809_WORKER_GIT" --version >/dev/null || exit 44; b=$EPOCHREALTIME
+              unset GIT809_DRAIN_MODE
             fi
-            printf '%s,%s,%s,%s,%s\n' "$i" "$a" "$b" "$c" "$d" >>git809-stream-results/pairs.csv
+            for ((i=0;i<20;i++)); do
+              if (( i % 2 == 0 )); then
+                a=$EPOCHREALTIME; "$GIT809_WORKER_GIT" --version >/dev/null || exit 41; b=$EPOCHREALTIME
+                c=$EPOCHREALTIME; git-ipc --version >/dev/null || exit 42; d=$EPOCHREALTIME
+              else
+                c=$EPOCHREALTIME; git-ipc --version >/dev/null || exit 43; d=$EPOCHREALTIME
+                a=$EPOCHREALTIME; "$GIT809_WORKER_GIT" --version >/dev/null || exit 44; b=$EPOCHREALTIME
+              fi
+              printf '%s,%s,%s,%s,%s,%s\n' "$mode" "$i" "$a" "$b" "$c" "$d" >>git809-stream-results/pairs.csv
+            done
           done
           "$PYTHON_EXE" - <<'PY'
-          import csv,math,statistics,os
+          import csv, os, statistics
           from decimal import Decimal
-          records=list(csv.DictReader(open('git809-stream-results/pairs.csv',newline='',encoding='utf-8')))
-          assert len(records)==120
-          for name,begin,end in [('direct','begin_direct','end_direct'),('stream_ipc','begin_ipc','end_ipc')]:
-            v=sorted(float((Decimal(x[end])-Decimal(x[begin]))*1000) for x in records)
-            assert v[0]>0
-            print('GIT809_STREAM_BENCH',name,'median_ms',round(statistics.median(v),4),
-                  'p95_ms',round(v[math.ceil(.95*len(v))-1],4),flush=True)
-          print('GIT809_STREAM_SHA',os.environ['GITHUB_SHA'])
+          rows=list(csv.DictReader(open('git809-stream-results/pairs.csv',newline='',encoding='utf-8')))
+          for mode in ('chunk100','alternate1ms'):
+            subset=[r for r in rows if r['mode']==mode]
+            assert len(subset)==20, (mode,len(subset))
+            for kind,begin,end in (('direct','start_direct','end_direct'),('ipc','start_ipc','end_ipc')):
+              values=[float((Decimal(r[end])-Decimal(r[begin]))*1000) for r in subset]
+              assert min(values)>0,(mode,kind,values)
+              print('GIT809_DRAIN_AB',mode,kind,'median_ms',round(statistics.median(values),4),flush=True)
+          print('GIT809_DRAIN_SHA',os.environ['GITHUB_SHA'])
           PY
       - name: Preserve timings
         if: always()
