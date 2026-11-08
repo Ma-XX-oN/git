@@ -58,6 +58,51 @@ jobs:
             if (( i % 500 == 0 )); then printf 'GIT809_STRESS_PROGRESS %s\n' "$i"; fi
           done
           git-ipc rev-parse --show-toplevel >/dev/null || exit 43
+          # Hand a worker to a second Bash; kill the shell and assert the worker exits.
+          export GIT809_SHELL_LIBRARY="$PWD/experiments/issue-809/git-manager.sh"
+          "$PYTHON_EXE" - <<'PY'
+          import ctypes as C, os, shutil, subprocess
+          from ctypes import wintypes as W
+          k=C.WinDLL("kernel32",use_last_error=True)
+          k.OpenProcess.argtypes=[W.DWORD,W.BOOL,W.DWORD]
+          k.OpenProcess.restype=W.HANDLE
+          k.WaitForSingleObject.argtypes=[W.HANDLE,W.DWORD]
+          k.WaitForSingleObject.restype=W.DWORD
+          k.CloseHandle.argtypes=[W.HANDLE]
+          k.CloseHandle.restype=W.BOOL
+          bash=shutil.which("bash")
+          assert bash
+          script=r'''
+          source "$GIT809_SHELL_LIBRARY" 3 || exit 51
+          local_pipe="\\.\pipe\git809-allocate-${_GIT809_OWNER_WINPID}"
+          exec 3<>"$local_pipe" || exit 52
+          printf 'GET\n' >&3 || exit 53
+          IFS= read -r allocated <&3 || exit 54
+          exec 3>&-
+          printf 'ALLOCATED_PID %s\n' "$allocated"
+          sleep 120
+          '''
+          child=subprocess.Popen([bash,"--noprofile","--norc","-c",script],
+            stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=os.environ.copy(),
+            text=True,encoding="utf-8")
+          handle=None
+          try:
+            line=child.stdout.readline().strip()
+            assert line.startswith("ALLOCATED_PID "),line
+            pid=int(line.split()[1])
+            handle=k.OpenProcess(0x00100000,False,pid)
+            assert handle,f"allocated worker {pid} not found"
+            assert k.WaitForSingleObject(handle,0)==258,"worker exited before shell"
+            child.kill()
+            child.wait(timeout=5)
+            state=k.WaitForSingleObject(handle,5000)
+            assert state==0,f"worker {pid} survived owner shell: wait={state}"
+            print("GIT809_OWNER_DEATH_PASS allocated_worker_pid",pid,flush=True)
+          finally:
+            if child.poll() is None: child.kill()
+            child.wait(timeout=5)
+            if handle: k.CloseHandle(handle)
+          PY
           cp -- "$_GIT809_MANAGER_LOG" git809-stream-results/manager.log
           "$PYTHON_EXE" - <<'PY'
           import csv,statistics,os,re
