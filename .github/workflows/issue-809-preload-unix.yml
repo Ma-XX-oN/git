@@ -9,6 +9,9 @@ on:
       - Makefile
       - experiments/issue-809/unix_git_ipc_pool.py
       - experiments/issue-809/git-manager-unix.sh
+      - preload-context.c
+      - preload-context.h
+      - experiments/issue-809/git-ipc-request.sh
       - .github/workflows/issue-809-preload-unix.yml
   workflow_dispatch:
 permissions:
@@ -44,3 +47,10 @@ jobs:
           set -e
           [[ $rc -ne 0 && -s failed.err ]] || { printf 'invalid error response: rc=%s\n' "$rc" >&2; exit 1; }
           printf 'PASS Unix --preload four-FIFO stdout/stderr/exit: %s\n' "$result"
+          cd experiments/issue-809
+          prefix="$(git-ipc rev-parse --show-prefix)"
+          [[ "$prefix" == "experiments/issue-809/" ]] || { printf 'cwd not forwarded: %s\n' "$prefix" >&2; exit 1; }
+          editor="$(GIT_EDITOR=git809-inline git-ipc var GIT_EDITOR)"
+          [[ "$editor" == git809-inline ]] || { printf 'environment not forwarded: %s\n' "$editor" >&2; exit 1; }
+          [[ ! ${GIT_EDITOR+x} ]] || { printf 'parent environment was mutated\n' >&2; exit 1; }
+          printf 'PASS cwd, inline environment, and parent isolation\n'
