@@ -154,8 +154,8 @@ class Pool:
       if p.stdout:
         p.stdout.close()
 
-def select_transport(address, request_id=None):
-  """Two pipe instances; a per-call decimal marker identifies the reply."""
+def select_transport(address):
+  """Two Windows instances, one T-qualified unidirectional reply channel."""
   handles=[]
   threads=[]
   connected=[False,False]
@@ -177,47 +177,24 @@ def select_transport(address, request_id=None):
       threads.append(t)
     deadline=time.monotonic()+2
     selected=None
-    expected=(str(int(request_id.rsplit("-",1)[1])%10).encode("ascii")
-              if request_id is not None else b"T")
     while time.monotonic()<deadline:
       candidates=[]
-      snapshot=[]
       for i,h in enumerate(handles):
-        # Inspect both connections without consuming either marker.
-        # Do not trust lagging ConnectNamedPipe thread bookkeeping.
-        peek=C.create_string_buffer(1)
-        read=W.DWORD()
+        if not connected[i]:
+          continue
         available=W.DWORD()
-        ok=bool(K.PeekNamedPipe(h,peek,1,C.byref(read),
-                                C.byref(available),None))
-        snapshot.append((int(ok),available.value if ok else 0,
-                         (peek.raw[:read.value].hex() or "-") if ok else "-"))
-        if ok and available.value:
+        if K.PeekNamedPipe(h,None,0,None,C.byref(available),None) and available.value:
           candidates.append(i)
-      if candidates and request_id is not None:
-        print(f"REPLY_PAIR_TRACE request_id={request_id} "
-              f"slot0={snapshot[0][0]}:{snapshot[0][1]}:{snapshot[0][2]} "
-              f"slot1={snapshot[1][0]}:{snapshot[1][1]}:{snapshot[1][2]}",
-              flush=True)
       if len(candidates)==2:
-        if request_id is not None:
-          print(f"REPLY_DOUBLE_MARKER request_id={request_id} "
-                f"first={snapshot[0][2]} second={snapshot[1][2]} "
-                f"expected={expected.hex()}",flush=True)
-        raise RuntimeError("two markers on one reply channel")
+        raise RuntimeError("two T markers on one reply channel")
       if candidates:
         i=candidates[0]
         marker=C.create_string_buffer(1)
         n=W.DWORD()
         if not K.ReadFile(handles[i],marker,1,C.byref(n),None) or (
-          n.value!=1 or marker.raw!=expected):
+          n.value!=1 or marker.raw!=b"T"):
           raise RuntimeError("bad reply transport marker")
         selected=handles[i]
-        if request_id is not None:
-          # Instance number is diagnostic only; request-id names the reply.
-          print(f"REPLY_T_SELECTED request_id={request_id} digit={expected.decode('ascii')} instance={i} "
-                f"handle={selected} connected={int(connected[0])},{int(connected[1])}",
-                flush=True)
         handles[i]=None
         break
       time.sleep(.001)
@@ -253,8 +230,6 @@ def allocation_server(owner_pid:int,pool:Pool):
   pending=queue.Queue()
   first=True
   backlog=min(64,max(4,2*pool.target))
-  observed_requests=set()
-  identity_lock=threading.Lock()
   print(f"ALLOCATOR_START {address} backlog={backlog}",flush=True)
 
   def accept(h):
@@ -304,32 +279,21 @@ def allocation_server(owner_pid:int,pool:Pool):
       else:
         print("ALLOCATOR_IDLE_PROBE_EXPIRED",flush=True)
         return
-      if len(frame)<7 or frame[0] not in b"0123456789" or not frame[1:].startswith(b"GET ") or not frame.endswith(b"\n"):
-        raise ValueError("bad GET frame or missing decimal marker")
-      observed_digit=frame[0]-ord("0")
-      raw_id=bytes(frame[5:-1])
+      if not frame.startswith(b"TGET ") or not frame.endswith(b"\n"):
+        raise ValueError("bad GET frame or missing T marker")
+      raw_id=frame[5:-1]
       parts=raw_id.split(b"-")
       if len(parts)!=2 or any(not p.isdigit() or len(p)>10 for p in parts):
         raise ValueError("invalid reply identity")
       client_pid,sequence=(int(p) for p in parts)
       if not 1<=client_pid<=0xffffffff or not 1<=sequence<=0xffffffff:
         raise ValueError("reply identity out of range")
-      if observed_digit!=sequence%10:
-        raise ValueError("GET marker does not match request sequence")
-      with identity_lock:
-        if raw_id in observed_requests:
-          raise ValueError("duplicate GET request identity")
-        observed_requests.add(raw_id)
-      print(f"GET_ACCEPT request_id={raw_id.decode('ascii')} "
-            f"digit={observed_digit} instance_handle={h}",flush=True)
       # A unique reply pipe is required per request, not just per client.
       reply=(r"\\.\pipe\git809-allocate-reply-"+str(owner_pid)+
              "-"+str(client_pid)+"-"+str(sequence))
-      response=select_transport(reply,raw_id.decode("ascii"))
+      response=select_transport(reply)
       try:
         answer=pool.alloc().encode("ascii")
-        print(f"ALLOC_REPLY request_id={raw_id.decode('ascii')} "
-              f"worker_pid={answer.decode('ascii').strip()}",flush=True)
         n=W.DWORD()
         if not K.WriteFile(response,answer,len(answer),C.byref(n),None):
           raise OSError(C.get_last_error(),"WriteFile(reply)")

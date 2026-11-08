@@ -3778,9 +3778,8 @@ NORETURN void git_preinit_worker_exit(int status)
  */
 /*
  * Git Bash can open a throwaway pipe instance during redirection.
- * Each instance is connected independently; the client-sent per-command
- * digit identifies the transport. The same digit is required on each channel.
- * Never rely on instance number or probe EOF.
+ * Each instance is connected independently, and only a client-sent 'T'
+ * identifies the transport. Never rely on instance number or probe EOF.
  *
  * ConnectNamedPipe is synchronous for these handles. Put both connection
  * waits on cancellable threads; the selected handle remains synchronous
@@ -3833,18 +3832,16 @@ enum transport_result {
  * remains INVALID_HANDLE_VALUE.
  */
 static int select_transport(HANDLE pair[2], DWORD timeout_ms,
-                            HANDLE *transport, char expected_marker,
-                            char *actual_marker)
+                            HANDLE *transport)
 {
   struct git809_connect_state state[2] = {0};
   DWORD start = GetTickCount(), available, n;
   HANDLE chosen = INVALID_HANDLE_VALUE;
   int i, marked[2], result = TRANSPORT_TIMEOUT;
 
-  if (!transport || !actual_marker || !timeout_ms)
+  if (!transport || !timeout_ms)
     return TRANSPORT_WIN32_ERROR;
   *transport = INVALID_HANDLE_VALUE;
-  *actual_marker = 0;
   for (i = 0; i < 2; i++) {
     state[i].pipe = pair[i];
     state[i].thread = CreateThread(NULL, 0, git809_connect_thread,
@@ -3876,12 +3873,10 @@ static int select_transport(HANDLE pair[2], DWORD timeout_ms,
       {
         char marker;
         if (!ReadFile(pair[i], &marker, 1, &n, NULL) ||
-            n != 1 || marker < '0' || marker > '9' ||
-            (expected_marker && marker != expected_marker)) {
+            n != 1 || marker != 'T') {
           result = TRANSPORT_INVALID_MARKER;
           goto done;
         }
-        *actual_marker = marker;
       }
       chosen = pair[i];
       pair[i] = INVALID_HANDLE_VALUE;
@@ -3957,38 +3952,10 @@ static int git_preinit_start_owner_watch(void)
   return 0;
 }
 
-/*
- * Windows-only, opt-in startup diagnosis. A normal worker never opens a
- * diagnostic file. The experiment's CI supplies an absolute path explicitly.
- */
-static void git809_trace_worker_stage(const char *stage)
-{
-  char path[1024], line[160];
-  DWORD size = GetEnvironmentVariableA("GIT809_PRELOAD_TRACE_FILE",
-                                       path, sizeof(path));
-  DWORD written;
-  HANDLE file;
-  int count;
-
-  if (!size || size >= sizeof(path))
-    return;
-  file = CreateFileA(path, FILE_APPEND_DATA,
-                     FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS,
-                     FILE_ATTRIBUTE_NORMAL, NULL);
-  if (file == INVALID_HANDLE_VALUE)
-    return;
-  count = snprintf(line, sizeof(line), "worker=%lu stage=%s\n",
-                   (unsigned long)GetCurrentProcessId(), stage);
-  if (count > 0 && count < sizeof(line))
-    WriteFile(file, line, count, &written, NULL);
-  CloseHandle(file);
-}
-
 static int git_preinit_worker(void)
 {
   char names[5][96];
   const char *suffixes[5] = {"stdin", "stdout", "stderr", "exit-code", "param-env-cwd"};
-  char call_marker = 0;
   HANDLE pipes[5][2];
   char *frame = NULL;
   char result[64];
@@ -4004,7 +3971,6 @@ static int git_preinit_worker(void)
   SECURITY_DESCRIPTOR security_descriptor;
   SECURITY_ATTRIBUTES security_attributes;
 
-  git809_trace_worker_stage("started");
   for (i = 0; i < 5; i++)
     for (j = 0; j < 2; j++)
       pipes[i][j] = INVALID_HANDLE_VALUE;
@@ -4065,7 +4031,6 @@ static int git_preinit_worker(void)
     }
   }
   /* READY is an initialization handshake, not Git command output. */
-  git809_trace_worker_stage("ready");
   printf("READY %lu\n", (unsigned long)pid);
   fflush(stdout);
   /*
@@ -4077,28 +4042,12 @@ static int git_preinit_worker(void)
     for (i = 0; i < 5; i++) {
       int channel = order[i];
       HANDLE selected;
-      char observed_marker = 0;
-      int transport_rc = select_transport(pipes[channel], 2000,
-                                          &selected, call_marker,
-                                          &observed_marker);
+      int transport_rc = select_transport(pipes[channel], 2000, &selected);
       if (transport_rc != TRANSPORT_OK) {
         rc = 122;
         goto cleanup;
       }
-      if (!call_marker)
-        call_marker = observed_marker;
       pipes[channel][1] = selected;
-      git809_trace_worker_stage(suffixes[channel]);
-      /*
-       * A Bash redirection can close before this worker selects its pipe.
-       * Acknowledge marker consumption before the client proceeds. This
-       * one-byte connection handshake is not application output.
-       */
-      if (!WriteFile(selected, "A", 1, &n, NULL) || n != 1) {
-        rc = 137;
-        goto cleanup;
-      }
-      git809_trace_worker_stage("channel-acknowledged");
     }
   }
   while (used < frame_capacity) {
@@ -4113,7 +4062,6 @@ static int git_preinit_worker(void)
       break;
     used += n;
   }
-  git809_trace_worker_stage("request-frame-received");
   CloseHandle(pipes[4][1]);
   pipes[4][1] = INVALID_HANDLE_VALUE;
   if (used < 4 || used == frame_capacity) {
@@ -4149,7 +4097,6 @@ static int git_preinit_worker(void)
     rc = 128;
     goto cleanup;
   }
-  git809_trace_worker_stage("context-applied");
   args[count] = NULL;
   /*
    * The request writer has closed. Its bytes have already been read;
@@ -4198,15 +4145,11 @@ static int git_preinit_worker(void)
     rc = 134;
     goto cleanup;
   }
-  git809_trace_worker_stage("stdio-redirected");
   git_preinit_active = 1;
   set_preload_exit_callback(git_preinit_worker_exit);
   if (!setjmp(git_preinit_jump)) {
-    git809_trace_worker_stage("init-git-begin");
     init_git(args);
-    git809_trace_worker_stage("cmd-main-begin");
     rc = cmd_main(count, args);
-    git809_trace_worker_stage("cmd-main-returned");
     set_preload_exit_callback(NULL);
     rc = common_exit(__FILE__, __LINE__, rc);
   } else {
@@ -4214,26 +4157,18 @@ static int git_preinit_worker(void)
   }
   set_preload_exit_callback(NULL);
   git_preinit_active = 0;
-  git809_trace_worker_stage("command-complete");
   fflush(stdout);
   fflush(stderr);
-  git809_trace_worker_stage("stdio-flushed");
   /*
    * Windows waits until readers consume all pipe bytes. Closing each
    * descriptor then provides EOF. The client drains both concurrently.
    */
-  git809_trace_worker_stage("stdout-flush-begin");
   FlushFileBuffers((HANDLE)_get_osfhandle(_fileno(stdout)));
-  git809_trace_worker_stage("stdout-flush-done");
-  git809_trace_worker_stage("stderr-flush-begin");
   FlushFileBuffers((HANDLE)_get_osfhandle(_fileno(stderr)));
-  git809_trace_worker_stage("stderr-flush-done");
   _close(_fileno(stdout));
   _close(_fileno(stderr));
   _close(0);
-  git809_trace_worker_stage("stdio-closed");
 cleanup:
-  git809_trace_worker_stage("cleanup");
   written = snprintf(result, sizeof(result), "EXIT %d\n", rc);
   if (pipes[3][1] != INVALID_HANDLE_VALUE) {
     if (written > 0 && written < sizeof(result) &&

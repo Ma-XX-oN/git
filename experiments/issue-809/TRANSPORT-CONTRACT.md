@@ -18,14 +18,14 @@ Allocation uses two distinct logical channels on **all** platforms:
 1. `allocate-req`: git-ipc -> git-manager, carrying `GET\n`.
 2. `allocate-reply`: git-manager -> git-ipc, carrying one worker identifier followed by newline (or a defined error).
 
-The allocated worker has **five distinct logical channels**: `stdin` and `param-env-cwd` (git-ipc -> worker); `stdout`, `stderr`, and `exit-code` (worker -> git-ipc). Arguments, cwd and environment are carried exclusively by `param-env-cwd`; stdin is a separate stream. Windows sends and consumes the call-specific decimal marker separately on each channel, including stdin. No handshake byte enters application data.
+The allocated worker has **five distinct logical channels**: `stdin` and `param-env-cwd` (git-ipc -> worker); `stdout`, `stderr`, and `exit-code` (worker -> git-ipc). Arguments, cwd and environment are carried exclusively by `param-env-cwd`; stdin is a separate stream. Windows sends and consumes `T` separately on each channel, including stdin. No handshake byte enters application data.
 
 Linux/macOS use ordinary unidirectional FIFOs, with **no** `T` marker.
 
 ### Standard-input limitation: no additional relay processes
 
 The `stdin` logical channel remains separately established, and on Windows
-the Git worker consumes the initial decimal marker before application I/O.
+the Git worker consumes the initial `T` marker before application I/O.
 However, **application stdin forwarding is not implemented**: the Bash client
 closes the stdin writer after connection setup, and the worker sees EOF.
 This applies to interactive terminals, redirected regular files, and pipes.
@@ -43,48 +43,20 @@ equivalent that introduces **no new process per command**, and native
 verification on all three platforms. The existing worker/manager design
 has not established that mechanism.
 
-## Windows allocation markers and instance identity
+## Windows-only connection identification
 
-The Windows allocation protocol has distinct request and reply pipe names.
-The request channel is shared by the manager; its data frame is now
-`<digit>GET <BashPID>-<sequence>\\n`, where `digit = sequence % 10`.
-The manager validates the digit against the complete request sequence.
-The reply name includes the manager PID, Bash PID, and complete request
-sequence. The caller writes the same decimal digit immediately after opening
-that reply connection. The manager validates that digit before replying with
-the allocated worker PID.
+**Why Windows needs the marker:** In this Git Bash/MSYS2 named-pipe redirection path, tests observed an additional connection that does not carry the application's transport bytes (the *probe*), alongside the actual transport connection. The earlier allocator tried to identify the real connection by assuming the probe closed first. That assumption failed in native stress testing: two instances reached the same closing state, and allocation timed out. The `T` marker identifies the connection explicitly instead of guessing from connection order or disconnection state. This is a documented Git Bash/MSYS2 interoperability defect in our experimental transport; the evidence does **not** establish an upstream Git Bash bug or its root cause. Linux and macOS do not require this Windows-specific workaround.
 
-The digit cycles through 0–9 for **successive git-ipc calls**. It is a
-diagnostic marker, not a request ID and not the worker ID. Each reply pipe
-still has a unique name. This allows the manager to detect unexpected bytes
-or mismatched call markers; a repeated digit alone is not a duplicate
-allocation.
+For every logical channel, the Windows server/receiving endpoint creates a pair of named-pipe instances for the same pipe name. The instances are created using duplex capability **only so git-ipc can write a connection marker even on normal server-to-client channels** (including stdout, stderr, and exit-code). This capability must not be used for reverse-direction application traffic.
 
-On Windows Git Bash, opening a named pipe has been observed to consume an
-additional *probe* connection that does not carry protocol data. To select
-the correct connection, the server creates two native instances of the
-same uniquely named reply pipe. The instance receiving the expected digit
-is the transport; the other must remain unmarked. If both instances have
-pending bytes, selection fails rather than silently choosing an arbitrary
-instance. The manager records the full request ID, chosen instance, actual
-marker, and returned worker PID.
+1. git-ipc opens the actual transport instance and immediately sends the single byte ASCII `T` on that instance, **including when its subsequent role is only to read**.
+2. The endpoint reads and validates exactly one `T` before forwarding or reading any application bytes. The marker is consumed; it must not enter stdin, stdout, stderr, status, parameter, environment, or cwd payloads.
+3. The instance receiving `T` is selected as that logical channel's transport. Close the unused probe instance of **that pair only**, not other clients' independent connections.
+4. No marker within the connection establishment deadline (initially two seconds) is a connection-establishment failure. A valid marker must be processed immediately, without waiting for the deadline.
+5. Two `T` markers on distinct instances of a pair indicate a protocol violation; report an error, do not arbitrarily select one.
+6. Close and release all handles, pending accept operations, and per-connection state on success, error, cancellation, and owner death.
 
-The **five Git worker data channels** (`stdin`, `param-env-cwd`,
-`stdout`, `stderr`, `exit-code`) also use the same rotating decimal
-marker **in place of `T`**. The native Windows worker accepts the first
-channel's decimal marker and requires the identical marker on each of the
-remaining four channels. After consuming each marker, the worker sends a
-single ASCII `A` **connection acknowledgment on that same native duplex
-instance**. Bash waits for `A` before opening the next worker channel
-or closing stdin. This avoids losing the stdin connection before the
-worker has selected it. The acknowledgment is handshake metadata, not
-application stdout/stderr or reverse-direction Git data. A different
-digit or invalid acknowledgment fails closed. No extra helper process
-is launched per Git command.
-
-No simultaneous `git-ipc` calls are authorized in this experiment.
-A single request completes before the next starts; the manager may
-replenish its worker pool asynchronously.
+For allocation, GET and ID travel over distinct logical named-pipe names. The Windows reply name is unique for **every request**, identified by the Bash process ID and a monotonically increasing shell-local sequence; the GET frame carries that identity. Both the request parser and reply-name constructor validate its two unsigned decimal components. PID-only reply names are prohibited because successive calls from one Bash process overlap server-side close/recreation. The same T identification rule applies to both channels; concurrent clients must receive only their own replies.
 
 ## Transport-selection API
 
@@ -96,7 +68,7 @@ The return value is an error code: `TRANSPORT_OK=0`,
 The output handle is valid only on success. The function owns both input
 handles and closes all unselected handles; the caller owns the selected handle.
 
-The Python `git-manager` implements `select_transport(address, request_id=None)` separately.
+The Python `git-manager` implements `select_transport(address)` separately.
 It returns the selected native handle, raising on failure. No cross-language
 C library is introduced: GET and ID connect Bash with Python, while the five
 Git worker channels connect Bash with C.
@@ -107,27 +79,34 @@ The current Bash client drains stdout/stderr using Bash `read -d ''` into
 shell strings. Bash variables cannot contain NUL bytes. Consequently the
 existing Git IPC experiment is **not yet a byte-transparent stdout/stderr
 transport for binary Git output**. This pre-existing limitation is separate
-from, and is not corrected by, Windows connection-marker identification. No full-Git-compatibility claim is permitted until
+from, and is not corrected by, Windows `T` identification. No full-Git-compatibility claim is permitted until
 binary stdout/stderr and interactive stdin tests are implemented and pass.
 
 ## Acceptance criteria
 
-- Windows: reply-pipe selection must identify the actual connection by
-  its decimal marker, independently of probe disconnection timing; invalid,
-  missing, and simultaneous markers must fail safely.
-- Windows: record both reply-instance identities and which one carried
-  the marker. For every serial GET, verify a unique request identity,
-  exactly one matching reply and reply-instance selection, the expected
-  digit, and a valid allocated worker PID.
-- Windows: verify the actual Git Bash GET/reply behaviour and the native
-  selector regression, including 0 and 9 and the synthetic double-marker
-  case. A synthetic double-marker test alone is not evidence that two real
-  Git Bash calls were mixed.
-- All platforms: cwd, environment, text stdout/stderr, and exit status
-  must be verified against the same tested SHA. stdin forwarding and binary
-  output remain explicitly unsupported.
-- Native same-SHA acceptance on Windows, Linux, and macOS: correctness,
-  6,000 serial commands, bounded manager handles, cleanup and owner death.
-  Do not add parallel Git commands to the test workload.
+- Windows: identify selected pipe by `T`, not `NtQueryInformationFile` state or probe close; test both possible instance orders, two markers, no marker, probe remaining open, and client disconnect mid-handshake.
+- All OSes: GET/ID use separate logical unidirectional channels; every channel carries exactly the intended application bytes with no `T` contamination; cwd/environment and stdin/stdout/stderr/exit-code semantics preserved.
+- Native same-SHA tests on Windows, Linux, macOS: command correctness, UTF-8 and environment isolation, distinct cwd, 6,000-command stress, concurrent requests, allocation/wait behaviour, bounded manager handles and FIFO cleanup, and owner-shell death.
+- Starting worker count is unchanged unless shortage is measured. Replacement on allocation remains asynchronous; do not introduce speculative grow-only pool sizing.
+
+## Implementation notes
+
+### Open design discrepancy: shared GET listener
+
+The current Python git-manager request side retains a **replenished pool of
+listener instances for the shared GET pipe name**, and identifies each real
+request by its `T` prefix. It does **not** call the same two-instance
+`select_transport()` used for each unique ID reply pipe. This is **not
+yet verified as satisfying the agreed pair-selection contract**. Unlike a
+private worker channel, GET accepts concurrent independent git-ipc clients:
+two distinct GET connections can both carry valid `T` markers without
+representing a duplicate marker on one client's transport pair.
+
+Do not replace the shared request listener with a single global two-instance
+pair without preserving concurrent-client isolation. The exact GET
+pair/acceptance model must be reconciled with this concurrency requirement
+before claiming full protocol acceptance.
+
+
 
 The original Windows single duplex GET/PID pipe and instance-order selection are superseded. The implementation branch introduces separate GET/ID names, T-based selection, and a separate command/context channel; native CI must verify all changes at the same SHA. Unix now uses separate FIFO descriptors rather than `O_RDWR` for its manager request FIFO.
