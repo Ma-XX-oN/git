@@ -16,12 +16,15 @@ _git809_unix_source() {
     printf 'GIT-IPC ERROR: GIT809_WORKER_GIT not set\n' >&2
     return 255
   }
+  # BASHPID changes in the subshell created for the background launch.
+  # Capture the actual sourcing shell's PID before starting the manager.
+  local owner_pid=$BASHPID
   local script_dir directory py
   script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) || return 255
   directory=$(mktemp -d) || return 255
   py=${GIT809_MANAGER_PYTHON:-python3}
   "$py" "$script_dir/unix_git_ipc_pool.py" --git "$GIT809_WORKER_GIT" \
-    --workers "$requested" --directory "$directory" --owner-pid "$BASHPID" \
+    --workers "$requested" --directory "$directory" --owner-pid "$owner_pid" \
     >"$directory/manager.log" 2>&1 </dev/null &
   local launched=$! i
   for ((i=0;i<200;i++)); do
