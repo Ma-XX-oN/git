@@ -3931,12 +3931,14 @@ static int select_transport(HANDLE pair[2], DWORD timeout_ms,
 
   for (;;) {
     HANDLE waiting[2];
+    int markers[2] = {0, 0};
     int count = 0, seen = 0;
     DWORD elapsed, wait_result;
 
     /* Inspect both candidates before selecting: two markers are an error. */
     for (i = 0; i < 2; i++) {
       int marker = git809_check_marker(&state[i]);
+      markers[i] = marker;
       if (marker == -2) {
         result = TRANSPORT_WIN32_ERROR;
         goto done;
@@ -3949,6 +3951,11 @@ static int select_transport(HANDLE pair[2], DWORD timeout_ms,
         waiting[count++] = state[i].event;
     }
     if (seen == 2) {
+      trace_printf_key(&git809_preload_trace,
+        "pid=%lu duplicate markers first=%d (0x%02x) second=%d (0x%02x) expected=%d (0x%02x) pipe0=%p pipe1=%p\n",
+        GetCurrentProcessId(), markers[0], markers[0],
+        markers[1], markers[1], (unsigned char)expected,
+        (unsigned char)expected, pair[0], pair[1]);
       result = TRANSPORT_DUPLICATE_MARKER;
       goto done;
     }
