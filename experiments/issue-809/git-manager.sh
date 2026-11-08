@@ -74,12 +74,6 @@ fi
 
 # Request a worker PID, then talk directly to its four pipe endpoints.
 # The Python manager only allocates IDs; it never forwards Git output.
-# Preserve the shell's original stdin so ordinary Git commands do not
-# spawn a pump just because the invoking environment itself uses a FIFO.
-if [[ -z ${_GIT809_BASE_STDIN_FD:-} ]]; then
-  exec {_GIT809_BASE_STDIN_FD}<&0 || return 255
-fi
-
 _git809_git_ipc_impl() {
   if [[ -z ${_GIT809_OWNER_WINPID:-} || $# -gt 31 ]]; then
     printf 'git-ipc requires a running manager and at most 31 arguments\n' >&2
@@ -153,16 +147,8 @@ _git809_git_ipc_impl() {
   printf T >&8 || { printf 'GIT-IPC ERROR: channel 8 marker failed\n' >&2; return 255; }
   exec 7<>"$pcontrol" || { exec 4<&- 5<&- 6<&- 8>&-; printf 'GIT-IPC ERROR: control pipe open failed\n' >&2; return 255; }
   printf T >&7 || { printf 'GIT-IPC ERROR: channel 7 marker failed\n' >&2; return 255; }
-  # The Windows stdin pipe is duplex only for its T marker. Forward
-  # subsequent application bytes in the client->worker direction. No extra
-  # child is started for the normal no-input case.
-  if [[ ( -p /dev/fd/0 || -f /dev/fd/0 ) &&
-          ! /dev/fd/0 -ef /dev/fd/$_GIT809_BASE_STDIN_FD ]]; then
-    # Close the control writer in the pump: the worker waits for its EOF.
-    # Also drop unrelated worker channels inherited by the child.
-    cat <&0 >&8 8>&- 7>&- 4<&- 5<&- 6<&- &
-    stdin_forward_pid=$!
-  fi
+  # No relay process: stdin is unavailable pending process-free handle
+  # transfer. Close the worker channel after Windows has consumed T.
   exec 8>&-
 
 
@@ -174,7 +160,7 @@ _git809_git_ipc_impl() {
     printf '%s\x00' "$arg" >&7 || { printf 'GIT-IPC ERROR: worker request write failed\n' >&2; return 255; }
   done
   _git809_write_context windows >&7 || {
-    exec 7>&- 8>&-
+    exec 7>&-
     printf 'GIT-IPC ERROR: context frame write failed\n' >&2
     return 255
   }
@@ -265,16 +251,8 @@ _git809_git_ipc_impl() {
   printf 'Invalid Git exit-code response: %s\n' "$status" >&2
   printf 'GIT-IPC ERROR: malformed exit status\n' >&2; return 255
 }
-# Reap the stdin forwarder even if Git fails after its worker is assigned.
 git-ipc() {
-  local stdin_forward_pid= rc=0
-  # Run under an explicit error guard so Bash errexit cannot skip cleanup.
-  _git809_git_ipc_impl "$@" || rc=$?
-  if [[ -n $stdin_forward_pid ]]; then
-    kill "$stdin_forward_pid" 2>/dev/null || :
-    wait "$stdin_forward_pid" 2>/dev/null || :
-  fi
-  return "$rc"
+  _git809_git_ipc_impl "$@"
 }
 alias git='git-ipc'
 return 0
