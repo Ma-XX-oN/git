@@ -397,7 +397,8 @@ def allocation_server(owner_pid:int,pool:Pool):
 
   def start_reply(address,marker):
     """Publish both reply instances without stalling the GET event loop."""
-    pair={"states":[],"expected":str(marker).encode("ascii"),
+    pair={"states":[],"address":address,
+          "expected":str(marker).encode("ascii"),
           "deadline":time.monotonic()+2,"selected":None}
     replies.append(pair)
     try:
@@ -487,6 +488,12 @@ def allocation_server(owner_pid:int,pool:Pool):
 
     marked=[state for state in pair["states"] if state["phase"]=="marked"]
     if len(marked)>1:
+      first,second=marked[:2]
+      print(f"ALLOCATOR_DUPLICATE_MARKERS reply={pair['address']} "
+            f"first={first['marker']} (0x{first['marker']:02x}) "
+            f"second={second['marker']} (0x{second['marker']:02x}) "
+            f"expected={pair['expected'][0]} (0x{pair['expected'][0]:02x})",
+            flush=True)
       raise RuntimeError("two markers on one reply channel")
     if marked and pair["selected"] is None:
       chosen=marked[0]
