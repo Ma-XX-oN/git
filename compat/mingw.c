@@ -3781,223 +3781,306 @@ NORETURN void git_preinit_worker_exit(int status)
  */
 /*
  * Git Bash can open a throwaway pipe instance during redirection.
- * Two threads, created before READY and reused for all five channels, connect
- * and read one marker each. The pipes remain synchronous for Git's CRT I/O.
+ * Two threads, created before READY, traverse all five channels themselves.
+ * They connect and read one marker each; pipes remain synchronous for Git I/O.
  */
 enum git809_candidate_result {
-  CANDIDATE_WAITING,
-  CANDIDATE_MARKED,
-  CANDIDATE_CANCELED,
-  CANDIDATE_ERROR
+	CANDIDATE_CANCELED,
+	CANDIDATE_MARKED,
+	CANDIDATE_ERROR
 };
-
-struct git809_candidate {
-  HANDLE thread, job, done, pipe;
-  LONG canceled;
-  enum git809_candidate_result result;
-  DWORD error;
-  char marker;
-};
-
-/** @brief Connect and consume a marker; never read application bytes. */
-static DWORD WINAPI git809_connect_candidate(LPVOID context)
-{
-  struct git809_candidate *candidate = context;
-
-  while (WaitForSingleObject(candidate->job, INFINITE) == WAIT_OBJECT_0) {
-    if (candidate->pipe == INVALID_HANDLE_VALUE)
-      break;
-    candidate->result = CANDIDATE_CANCELED;
-    while (!InterlockedCompareExchange(&candidate->canceled, 0, 0)) {
-      DWORD n = 0, error = 0;
-      if (!ConnectNamedPipe(candidate->pipe, NULL))
-	error = GetLastError();
-      if (!error || error == ERROR_PIPE_CONNECTED) {
-	if (InterlockedCompareExchange(&candidate->canceled, 0, 0))
-	  break;
-	if (ReadFile(candidate->pipe, &candidate->marker, 1, &n, NULL)) {
-	  if (n == 1) {
-	    candidate->result = CANDIDATE_MARKED;
-	    break;
-	  }
-	  error = ERROR_BROKEN_PIPE;
-	} else {
-	  error = GetLastError();
-	}
-      }
-      if (InterlockedCompareExchange(&candidate->canceled, 0, 0))
-	break;
-      if (error != ERROR_BROKEN_PIPE && error != ERROR_NO_DATA &&
-	  error != ERROR_PIPE_NOT_CONNECTED) {
-	candidate->error = error;
-	candidate->result = CANDIDATE_ERROR;
-	break;
-      }
-      /* A disconnected open probe is not a failed application connection. */
-      DisconnectNamedPipe(candidate->pipe);
-    }
-    SetEvent(candidate->done);
-  }
-  return 0;
-}
-
-/** @brief Join idle connection threads and release their synchronization. */
-static void git809_stop_candidates(struct git809_candidate candidates[2])
-{
-  int i;
-
-  for (i = 0; i < 2; i++) {
-    struct git809_candidate *candidate = &candidates[i];
-    if (candidate->thread) {
-      candidate->pipe = INVALID_HANDLE_VALUE;
-      SetEvent(candidate->job);
-      WaitForSingleObject(candidate->thread, INFINITE);
-      CloseHandle(candidate->thread);
-    }
-    if (candidate->job)
-      CloseHandle(candidate->job);
-    if (candidate->done)
-      CloseHandle(candidate->done);
-    memset(candidate, 0, sizeof(*candidate));
-  }
-}
-
-/** @brief Prestart the two connection threads before publishing READY. */
-static int git809_start_candidates(struct git809_candidate candidates[2])
-{
-  int i;
-
-  for (i = 0; i < 2; i++) {
-    struct git809_candidate *candidate = &candidates[i];
-    candidate->job = CreateEvent(NULL, FALSE, FALSE, NULL);
-    candidate->done = CreateEvent(NULL, TRUE, TRUE, NULL);
-    candidate->pipe = INVALID_HANDLE_VALUE;
-    if (!candidate->job || !candidate->done)
-      goto fail;
-    candidate->thread = CreateThread(NULL, 0, git809_connect_candidate,
-				     candidate, 0, NULL);
-    if (!candidate->thread)
-      goto fail;
-  }
-  return 0;
-fail:
-  git809_stop_candidates(candidates);
-  return -1;
-}
 
 enum transport_result {
-  TRANSPORT_OK = 0,
-  TRANSPORT_TIMEOUT = 1,
-  TRANSPORT_INVALID_MARKER = 2,
-  TRANSPORT_DUPLICATE_MARKER = 3,
-  TRANSPORT_WIN32_ERROR = 4
+	TRANSPORT_OK = 0,
+	TRANSPORT_TIMEOUT = 1,
+	TRANSPORT_INVALID_MARKER = 2,
+	TRANSPORT_DUPLICATE_MARKER = 3,
+	TRANSPORT_WIN32_ERROR = 4
 };
 
-/**
- * @brief Take ownership of both instances and return one synchronous transport.
- *
- * Inspect both completed markers before selecting. Close the unused probe,
- * cancel its blocking operation, and wait for completion before reusing the
- * threads. No application bytes pass through the connection threads.
- */
-static int select_transport(struct git809_candidate candidates[2],
-			    HANDLE pair[2], DWORD timeout_ms,
-			    HANDLE *transport, char expected, char *observed)
+static const char *const git809_channel_names[5] = {
+	"stdin", "stdout", "stderr", "exit-code", "param-env-cwd"
+};
+
+struct git809_channel {
+	LONG winner;
+	enum git809_candidate_result result[2];
+	char marker[2];
+};
+
+struct git809_connections;
+
+struct git809_connector {
+	struct git809_connections *connections;
+	int index;
+};
+
+struct git809_connections {
+	HANDLE (*pipes)[2];
+	HANDLE accepted[5], threads[2];
+	struct git809_channel channels[5];
+	struct git809_connector connectors[2];
+	LONG arrived[2], completed, failure, deadline;
+	char expected_marker;
+};
+
+/** @brief Read shared progress without modifying it. */
+static LONG git809_atomic_read(LONG *value)
 {
-  HANDLE done[2];
-  DWORD wait;
-  int i, seen = 0, chosen = -1, result = TRANSPORT_TIMEOUT;
+	return InterlockedCompareExchange(value, 0, 0);
+}
 
-  *transport = INVALID_HANDLE_VALUE;
-  *observed = 0;
-  for (i = 0; i < 2; i++) {
-    struct git809_candidate *candidate = &candidates[i];
-    candidate->pipe = pair[i];
-    candidate->result = CANDIDATE_WAITING;
-    candidate->error = 0;
-    InterlockedExchange(&candidate->canceled, 0);
-    ResetEvent(candidate->done);
-    done[i] = candidate->done;
-    SetEvent(candidate->job);
-  }
-  wait = WaitForMultipleObjects(2, done, FALSE, timeout_ms);
-  if (wait == WAIT_OBJECT_0 || wait == WAIT_OBJECT_0 + 1) {
-    for (i = 0; i < 2; i++)
-      if (WaitForSingleObject(done[i], 0) == WAIT_OBJECT_0 &&
-	  candidates[i].result == CANDIDATE_MARKED)
-	chosen = i;
-    result = chosen < 0 ? TRANSPORT_WIN32_ERROR : TRANSPORT_OK;
-  } else if (wait != WAIT_TIMEOUT) {
-    result = TRANSPORT_WIN32_ERROR;
-  }
+/** @brief Connect one candidate and consume exactly one marker byte. */
+static void git809_connect_candidate(struct git809_connections *connections,
+				    int channel, int index)
+{
+	struct git809_channel *state = &connections->channels[channel];
+	HANDLE pipe = connections->pipes[channel][index];
 
-  for (i = 0; i < 2; i++) {
-    if (i == chosen)
-      continue;
-    InterlockedExchange(&candidates[i].canceled, 1);
-    /*
-     * Cancellation can land between connect and read, or before the job
-     * starts. Retry only this submission race until an operation is canceled
-     * or the thread acknowledges completion. Closing a synchronous pipe
-     * first can itself block behind its outstanding operation.
-     */
-    while (WaitForSingleObject(done[i], 0) == WAIT_TIMEOUT) {
-      if (CancelSynchronousIo(candidates[i].thread))
-	break;
-      if (GetLastError() != ERROR_NOT_FOUND) {
-	result = TRANSPORT_WIN32_ERROR;
-	break;
-      }
-      SwitchToThread();
-    }
-  }
-  WaitForMultipleObjects(2, done, TRUE, INFINITE);
+	state->result[index] = CANDIDATE_CANCELED;
+	while (!git809_atomic_read(&connections->failure) &&
+	       !git809_atomic_read(&state->winner)) {
+		DWORD n = 0, error = 0;
 
-  for (i = 0; i < 2; i++) {
-    if (candidates[i].result == CANDIDATE_CANCELED) {
-      DWORD available = 0, n = 0;
-      /*
-       * Cancellation may beat a read whose marker is already buffered.
-       * With the thread idle, inspect that byte once before closing the
-       * candidate; this is not a readiness polling loop.
-       */
-      if (PeekNamedPipe(pair[i], NULL, 0, NULL, &available, NULL) &&
-	  available && ReadFile(pair[i], &candidates[i].marker, 1, &n, NULL) &&
-	  n == 1)
-	candidates[i].result = CANDIDATE_MARKED;
-    }
-    if (candidates[i].result == CANDIDATE_MARKED)
-      seen++;
-    if (candidates[i].result == CANDIDATE_ERROR) {
-      trace_printf_key(&git809_preload_trace,
-	"pid=%lu connection error=%lu index=%d\n",
-	GetCurrentProcessId(), candidates[i].error, i);
-      result = TRANSPORT_WIN32_ERROR;
-    }
-  }
-  if (seen == 2) {
-    trace_printf_key(&git809_preload_trace,
-      "pid=%lu duplicate markers first=%u second=%u expected=%u\n",
-      GetCurrentProcessId(), (unsigned char)candidates[0].marker,
-      (unsigned char)candidates[1].marker, (unsigned char)expected);
-    result = TRANSPORT_DUPLICATE_MARKER;
-  } else if (result == TRANSPORT_OK) {
-    char marker = candidates[chosen].marker;
-    if (marker < '0' || marker > '9' || (expected && marker != expected)) {
-      result = TRANSPORT_INVALID_MARKER;
-    } else {
-      *observed = marker;
-      *transport = pair[chosen];
-      pair[chosen] = INVALID_HANDLE_VALUE;
-    }
-  }
-  for (i = 0; i < 2; i++) {
-    if (pair[i] != INVALID_HANDLE_VALUE) {
-      CloseHandle(pair[i]);
-      pair[i] = INVALID_HANDLE_VALUE;
-    }
-  }
-  return result;
+		if (!ConnectNamedPipe(pipe, NULL))
+			error = GetLastError();
+		if (!error || error == ERROR_PIPE_CONNECTED) {
+			if (git809_atomic_read(&connections->failure) ||
+			    git809_atomic_read(&state->winner))
+				return;
+			if (ReadFile(pipe, &state->marker[index], 1, &n, NULL)) {
+				if (n == 1) {
+					state->result[index] = CANDIDATE_MARKED;
+					InterlockedCompareExchange(&state->winner,
+								   index + 1, 0);
+					return;
+				}
+				error = ERROR_BROKEN_PIPE;
+			} else {
+				error = GetLastError();
+			}
+		}
+		if (git809_atomic_read(&connections->failure) ||
+		    git809_atomic_read(&state->winner))
+			return;
+		if (error != ERROR_BROKEN_PIPE && error != ERROR_NO_DATA &&
+		    error != ERROR_PIPE_NOT_CONNECTED) {
+			state->result[index] = CANDIDATE_ERROR;
+			InterlockedCompareExchange(&connections->failure,
+						   TRANSPORT_WIN32_ERROR, 0);
+			trace_printf_key(&git809_preload_trace,
+				"pid=%lu connection error=%lu channel=%s index=%d\n",
+				GetCurrentProcessId(), error,
+				git809_channel_names[channel], index);
+			return;
+		}
+		/* A disconnected open probe is not a failed application connection. */
+		DisconnectNamedPipe(pipe);
+	}
+}
+
+/** @brief Inspect both completed candidates and publish this channel's result. */
+static void git809_finish_channel(struct git809_connections *connections,
+				 int channel)
+{
+	struct git809_channel *state = &connections->channels[channel];
+	int index, seen = 0, chosen = -1, result = TRANSPORT_OK;
+
+	for (index = 0; index < 2; index++) {
+		if (state->result[index] == CANDIDATE_CANCELED) {
+			DWORD available = 0, n = 0;
+			HANDLE pipe = connections->pipes[channel][index];
+
+			/*
+			 * Cancellation may beat a read whose marker is buffered.
+			 * Both operations have returned: inspect that byte once,
+			 * without readiness polling or reading application bytes.
+			 */
+			if (PeekNamedPipe(pipe, NULL, 0, NULL, &available, NULL) &&
+			    available &&
+			    ReadFile(pipe, &state->marker[index], 1, &n, NULL) &&
+			    n == 1)
+				state->result[index] = CANDIDATE_MARKED;
+		}
+		if (state->result[index] == CANDIDATE_MARKED) {
+			seen++;
+			chosen = index;
+		}
+	}
+	if (seen == 2) {
+		trace_printf_key(&git809_preload_trace,
+			"pid=%lu duplicate markers first=%u second=%u expected=%u channel=%s\n",
+			GetCurrentProcessId(), (unsigned char)state->marker[0],
+			(unsigned char)state->marker[1],
+			(unsigned char)connections->expected_marker,
+			git809_channel_names[channel]);
+		result = TRANSPORT_DUPLICATE_MARKER;
+	} else if (seen == 1) {
+		char marker = state->marker[chosen];
+
+		if (marker < '0' || marker > '9' ||
+		    (connections->expected_marker &&
+		     marker != connections->expected_marker)) {
+			result = TRANSPORT_INVALID_MARKER;
+		} else {
+			connections->expected_marker = marker;
+			connections->accepted[channel] =
+				connections->pipes[channel][chosen];
+			InterlockedExchange(&connections->deadline,
+					    (LONG)(GetTickCount() + 2000));
+		}
+	} else {
+		result = TRANSPORT_WIN32_ERROR;
+	}
+	if (result != TRANSPORT_OK)
+		InterlockedCompareExchange(&connections->failure, result, 0);
+	trace_printf_key(&git809_preload_trace,
+		"pid=%lu select done channel=%s result=%d selected=%d marker=%u\n",
+		GetCurrentProcessId(), git809_channel_names[channel],
+		result, chosen, chosen < 0 ? 0 : (unsigned char)state->marker[chosen]);
+}
+
+/**
+ * @brief Rendezvous after both candidate operations, without main-thread dispatch.
+ *
+ * Both threads publish their arrival. The marker winner cancels the peer and
+ * spins until the peer arrives; if no operation is pending yet, retry until
+ * cancellation is accepted or the peer arrives. The winner then inspects both
+ * results and publishes completion. Keeping cancellation and marker inspection
+ * on one thread prevents a late cancel from interrupting duplicate inspection.
+ */
+static int git809_rendezvous(struct git809_connections *connections,
+			    int channel, int step, int index)
+{
+	int cancellation_requested = 0;
+
+	InterlockedExchange(&connections->arrived[index], step);
+	if (git809_atomic_read(&connections->channels[channel].winner) == index + 1) {
+		while (git809_atomic_read(&connections->arrived[1 - index]) < step) {
+			if (git809_atomic_read(&connections->failure))
+				return -1;
+			if (!cancellation_requested) {
+				if (CancelIoEx(connections->pipes[channel][1 - index],
+					       NULL)) {
+					cancellation_requested = 1;
+				} else if (GetLastError() != ERROR_NOT_FOUND) {
+					InterlockedCompareExchange(&connections->failure,
+								   TRANSPORT_WIN32_ERROR, 0);
+					return -1;
+				}
+			}
+			YieldProcessor();
+		}
+		git809_finish_channel(connections, channel);
+		InterlockedExchange(&connections->completed, step);
+	} else {
+		while (git809_atomic_read(&connections->completed) < step) {
+			if (git809_atomic_read(&connections->failure))
+				return -1;
+			YieldProcessor();
+		}
+	}
+	return git809_atomic_read(&connections->failure) ? -1 : 0;
+}
+
+/** @brief Traverse every channel, then return normally to signal thread completion. */
+static DWORD WINAPI git809_connect_channels(LPVOID data)
+{
+	struct git809_connector *connector = data;
+	struct git809_connections *connections = connector->connections;
+	const int order[5] = {1, 2, 3, 0, 4};
+	int step;
+
+	for (step = 0; step < 5; step++) {
+		git809_connect_candidate(connections, order[step], connector->index);
+		if (git809_atomic_read(&connections->failure) ||
+		    git809_rendezvous(connections, order[step], step + 1,
+				      connector->index))
+			break;
+	}
+	return 0;
+}
+
+/** @brief Pass the complete handle table to two threads before publishing READY. */
+static int git809_start_connections(struct git809_connections *connections,
+				   HANDLE pipes[5][2])
+{
+	int index;
+
+	connections->pipes = pipes;
+	connections->deadline = (LONG)(GetTickCount() + 2000);
+	for (index = 0; index < 5; index++)
+		connections->accepted[index] = INVALID_HANDLE_VALUE;
+	for (index = 0; index < 2; index++) {
+		connections->connectors[index].connections = connections;
+		connections->connectors[index].index = index;
+		connections->threads[index] = CreateThread(NULL, 0,
+			git809_connect_channels, &connections->connectors[index], 0, NULL);
+		if (!connections->threads[index]) {
+			InterlockedCompareExchange(&connections->failure,
+						   TRANSPORT_WIN32_ERROR, 0);
+			return -1;
+		}
+	}
+	return 0;
+}
+
+/**
+ * @brief Join both threads, close probes, and transfer accepted handles to the caller.
+ *
+ * Main waits for final completion. A deadline recheck is needed only if a wait
+ * expires after the workers have advanced to another channel. On failure, retry
+ * handle-targeted cancellation until both threads exit; storage and handles stay
+ * alive throughout cancellation, including a call submitted just after a retry.
+ */
+static int git809_finish_connections(struct git809_connections *connections)
+{
+	HANDLE threads[2];
+	DWORD count = 0;
+	int channel, index;
+
+	for (index = 0; index < 2; index++)
+		if (connections->threads[index])
+			threads[count++] = connections->threads[index];
+	while (count) {
+		DWORD wait, timeout = 1;
+
+		if (git809_atomic_read(&connections->failure)) {
+			for (channel = 0; channel < 5; channel++)
+				for (index = 0; index < 2; index++)
+					CancelIoEx(connections->pipes[channel][index], NULL);
+		} else {
+			LONG remaining = (LONG)((DWORD)git809_atomic_read(
+				&connections->deadline) - GetTickCount());
+
+			if (remaining <= 0) {
+				InterlockedCompareExchange(&connections->failure,
+							   TRANSPORT_TIMEOUT, 0);
+				continue;
+			}
+			timeout = remaining;
+		}
+		wait = WaitForMultipleObjects(count, threads, TRUE, timeout);
+		if (wait == WAIT_OBJECT_0)
+			break;
+		if (wait != WAIT_TIMEOUT)
+			BUG("cannot join Git IPC connection threads: %lu", GetLastError());
+	}
+	for (index = 0; index < 2; index++) {
+		if (connections->threads[index])
+			CloseHandle(connections->threads[index]);
+		connections->threads[index] = NULL;
+	}
+	/* Keep handles stable until both threads have stopped using them. */
+	for (channel = 0; channel < 5; channel++) {
+		for (index = 0; index < 2; index++)
+			if (connections->pipes[channel][index] != INVALID_HANDLE_VALUE &&
+			    connections->pipes[channel][index] != connections->accepted[channel])
+				CloseHandle(connections->pipes[channel][index]);
+		connections->pipes[channel][0] = INVALID_HANDLE_VALUE;
+		connections->pipes[channel][1] = connections->accepted[channel];
+	}
+	return git809_atomic_read(&connections->failure);
 }
 
 /*
@@ -4112,10 +4195,9 @@ static int git_preinit_request_complete(const char *frame, size_t used)
 static int git_preinit_worker(void)
 {
   char names[5][96];
-  const char *suffixes[5] = {"stdin", "stdout", "stderr", "exit-code", "param-env-cwd"};
-  char expected_marker = 0;
+  const char *const *suffixes = git809_channel_names;
   HANDLE pipes[5][2];
-  struct git809_candidate candidates[2] = {{0}};
+  struct git809_connections connections = {0};
   char *frame = NULL;
   char result[64];
   const DWORD frame_capacity = 131072;
@@ -4190,7 +4272,7 @@ static int git_preinit_worker(void)
       }
     }
   }
-  if (git809_start_candidates(candidates)) {
+  if (git809_start_connections(&connections, pipes)) {
     rc = 121;
     goto cleanup;
   }
@@ -4198,35 +4280,11 @@ static int git_preinit_worker(void)
   printf("READY %lu\n", (unsigned long)pid);
   fflush(stdout);
   trace_printf_key(&git809_preload_trace, "pid=%lu ready\n", pid);
-  /*
-   * Keep the established channel-open order. Each channel is selected by
-   * the client marker, not by the index of the pipe instance.
-   */
-  {
-    const int order[5] = {1, 2, 3, 0, 4};
-    for (i = 0; i < 5; i++) {
-      int channel = order[i];
-      HANDLE selected;
-      char received = 0;
-      int transport_rc;
-      trace_printf_key(&git809_preload_trace,
-        "pid=%lu select begin channel=%s expected=%d\n",
-        pid, suffixes[channel], expected_marker);
-      transport_rc = select_transport(candidates, pipes[channel], 2000, &selected,
-                                      expected_marker, &received);
-      trace_printf_key(&git809_preload_trace,
-        "pid=%lu select done channel=%s result=%d marker=%d\n",
-        pid, suffixes[channel], transport_rc, received);
-      if (transport_rc != TRANSPORT_OK) {
-        rc = 122;
-        goto cleanup;
-      }
-      if (!expected_marker)
-        expected_marker = received;
-      pipes[channel][1] = selected;
-    }
+  /* The connection threads retain the established channel-open order. */
+  if (git809_finish_connections(&connections) != TRANSPORT_OK) {
+    rc = 122;
+    goto cleanup;
   }
-  git809_stop_candidates(candidates);
   while (used < frame_capacity) {
     int complete;
     trace_printf_key(&git809_preload_trace,
@@ -4375,7 +4433,8 @@ static int git_preinit_worker(void)
   _close(_fileno(stderr));
   _close(0);
 cleanup:
-  git809_stop_candidates(candidates);
+  if (connections.threads[0] || connections.threads[1])
+    git809_finish_connections(&connections);
   trace_printf_key(&git809_preload_trace, "pid=%lu cleanup rc=%d\n", pid, rc);
   /* The client drains output before reading status, including on failure. */
   for (i = 0; i < 5; i++) {

@@ -81,22 +81,32 @@ connection, or stream-handling change is introduced.
 
 ## Transport-selection API
 
-The Windows C Git worker exposes the internal helper
-`int select_transport(struct git809_candidate candidates[2], HANDLE instances[2], DWORD timeout_ms, HANDLE *transport, char expected, char *observed)`.
+The Windows C Git worker uses `git809_start_connections(context, instances)`
+before publishing READY and `git809_finish_connections(context)` to join the
+two connection threads and transfer their accepted handles into `instances`.
 The return value is an error code: `TRANSPORT_OK=0`,
 `TRANSPORT_TIMEOUT=1`, `TRANSPORT_INVALID_MARKER=2`,
 `TRANSPORT_DUPLICATE_MARKER=3`, or `TRANSPORT_WIN32_ERROR=4`.
-The output handle is valid only on success. The function owns both input
-handles and closes all unselected handles; the caller owns the selected handle.
-An expected marker of zero accepts any decimal digit; subsequent channels
-must match the observed digit. Two connection threads are created before
-READY, reused across all five channels, then joined before request processing.
+Each accepted handle is owned by the caller. Unselected handles close after
+both threads finish; the shared context remains alive until both joins complete.
+The first channel accepts any decimal digit; subsequent channels must match
+that digit. Two connection threads are created before READY, traverse all five
+channels themselves, and are joined before request processing.
 They connect and consume exactly one marker, without relaying application
 bytes. The selected handles remain synchronous for Git's CRT streams.
-Unselected operations are canceled and completed before their handles close
-or their threads receive another channel. Cancellation retries cover only the
-race between submitting a synchronous call and acknowledging cancellation;
-connection readiness uses blocking event waits, without timed polling.
+After each candidate operation returns, the threads publish their arrival
+generation. The first thread to read a marker atomically becomes the winner,
+cancels the other instance with `CancelIoEx`, and spins with `YieldProcessor()`
+until the peer arrives. `ERROR_NOT_FOUND` causes cancellation to be retried
+while the peer has not acknowledged completion. Once cancellation is accepted,
+only the acknowledgement is awaited. The winner checks both marker results and
+publishes the accepted handle or error, then advances the completed generation
+so both threads can continue. Cancellation and duplicate-marker inspection
+stay on the same thread, so cancellation cannot interrupt that final inspection.
+Monotonically increasing arrival/completion generations preserve acknowledgements
+across successive channels. Connect and marker reads remain blocking; the
+main thread does not dispatch or acknowledge individual pairs. Connection
+deadlines and owner death still terminate stalled handshakes.
 
 The Python `git-manager` implements `TransportPair(port, address, marker)`.
 Its `advance()` returns the selected `Pipe` or None while selection is pending,

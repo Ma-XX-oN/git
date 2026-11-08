@@ -64,7 +64,8 @@ def read_to_eof(handle):
 def run_case(git, name, arguments, expected_status, expected_output,
              stdin_marker=b"1", malformed=False, fragmented=False,
              missing_end=False, delayed_request=False, delayed_output=False,
-             abandoned_probes=False, duplicate_control=False, held_probes=False):
+             abandoned_probes=False, duplicate_control=False, held_probes=False,
+             marker_order=None):
     """Run a worker with stdin held open while output and status are drained."""
     env = os.environ.copy()
     env["GIT809_PRELOAD_OWNER_WINPID"] = str(os.getpid())
@@ -75,18 +76,20 @@ def run_case(git, name, arguments, expected_status, expected_output,
     try:
         assert worker.stdout.readline() == f"READY {worker.pid}\n".encode()
         worker.stdout.close()
-        for channel in ("stdout", "stderr", "exit-code", "stdin", "param-env-cwd"):
+        for index, channel in enumerate(("stdout", "stderr", "exit-code", "stdin", "param-env-cwd")):
             address = rf"\\.\pipe\{worker.pid}-{channel}"
-            if abandoned_probes or held_probes:
+            if abandoned_probes or held_probes or marker_order is not None:
                 probe = K.CreateFileW(address, 0xc0000000, 0, None, 3, 0, None)
                 assert probe != INVALID
-                if held_probes:
+                if held_probes or marker_order is not None:
                     handles[channel + "-probe"] = probe
                 else:
                     K.CloseHandle(probe)
             handle = K.CreateFileW(address, 0xc0000000, 0, None, 3, 0, None)
             if handle == INVALID:
                 raise C.WinError(C.get_last_error())
+            if marker_order is not None and marker_order[index] == 0:
+                handle, handles[channel + "-probe"] = handles[channel + "-probe"], handle
             handles[channel] = handle
             if channel != "stdin" or not duplicate_control:
                 write(handle, stdin_marker if channel == "stdin" else b"1")
@@ -165,6 +168,10 @@ if __name__ == "__main__":
              0, version, abandoned_probes=True)
     run_case(git, "probes-stay-open-on-every-channel", ["--version"],
              0, version, held_probes=True)
+    run_case(git, "alternating-marked-connections", ["--version"],
+             0, version, marker_order=(0, 1, 0, 1, 0))
+    run_case(git, "reverse-alternating-marked-connections", ["--version"],
+             0, version, marker_order=(1, 0, 1, 0, 1))
     run_case(git, "request-read-pends-between-fragments", ["--version"],
              0, version, delayed_request=True)
     with tempfile.TemporaryDirectory(prefix="git809-output-") as directory:
