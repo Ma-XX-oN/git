@@ -113,6 +113,11 @@ def main():
     code, out, err = run(git, ["nonexistent-git809-command"])
     assert code != 0 and err, (code, out, err)
     print("PASS: nonzero command exit and stderr delivery")
+    code, out, err = run(git, ["-c", "rwf809.binary=école",
+                               "config", "--null", "--get", "rwf809.binary"])
+    assert code == 0 and out == "école\0".encode("utf-8") and not err, (
+        code, out, err)
+    print("PASS: UTF-8 and NUL-containing stdout preserved byte-for-byte")
 
 if __name__ == "__main__":
     main()
