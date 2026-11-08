@@ -9,17 +9,6 @@
 #include "trace2.h"
 #include "strbuf.h"
 
-#ifdef GIT_WINDOWS_NATIVE
-/*
- * Fatal Git commands can terminate from usage.c rather than returning
- * through git.c's builtin dispatcher. The worker must still drain its
- * output and deliver the genuine failure status.
- */
-extern NORETURN void git_preinit_worker_exit(int status);
-#undef exit
-#define exit(status) git_preinit_worker_exit(common_exit(__FILE__, __LINE__, (status)))
-#endif
-
 static void vfreportf(FILE *f, const char *prefix, const char *err, va_list params)
 {
 	char msg[4096];
