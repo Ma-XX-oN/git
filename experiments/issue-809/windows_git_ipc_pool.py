@@ -66,11 +66,6 @@ class Pool:
     self.allocations=0
     self.owner_winpid=None
 
-  def reap_completed(self):
-    """Release completed worker process objects while retaining live workers."""
-    with self.lock:
-      self.children=[child for child in self.children if child.poll() is None]
-
   def spawn(self):
     if self.closing.is_set():
       return
@@ -105,7 +100,7 @@ class Pool:
       if p.poll() is None:
         p.kill()
       return
-    self.reap_completed()
+    # Keep READY queue and tracked process objects in the same ownership set.
     self.ready.put(p)
     print("WORKER_READY "+str(p.pid),flush=True)
 
