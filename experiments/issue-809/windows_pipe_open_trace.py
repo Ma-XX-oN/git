@@ -196,6 +196,20 @@ def main() -> int:
           record(f"RUNTIME {line}")
         if not runtime_lines:
           raise RuntimeError(f"No instrumented runtime events captured: {trace_path}")
+      # Capture the instrumented runtime's exact branch markers in the same
+      # artifact as the native API events; keep the original stderr intact.
+      runtime_markers = [line for line in
+        child.stderr.decode("utf-8", "strict").splitlines()
+        if line.startswith("GIT809_PATH ")]
+      if injected_log:
+        with injected_log.open("a", encoding="utf-8", newline="\n") as log:
+          for marker in runtime_markers:
+            log.write(marker + "\n")
+        record(f"MSYS_PATH_MARKERS count={len(runtime_markers)}")
+        for marker in runtime_markers:
+          record(f"MSYS {marker}")
+        if not runtime_markers:
+          raise RuntimeError("No MSYS control-flow markers were emitted; the bypass decision was not observed")
       record(f"BASH_DONE rc={child.returncode} stdout={child.stdout!r} stderr={child.stderr!r}")
       if args.expect == "success":
         if child.returncode != 0:
