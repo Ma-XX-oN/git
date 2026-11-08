@@ -92,7 +92,9 @@ _git809_git_ipc_impl() {
   # pipe. Ordinary no-input Git commands do not start a relay process.
   # The child owns the writer after this function closes descriptor 8.
   if [[ -p /dev/fd/0 || -f /dev/fd/0 ]]; then
-    cat <&0 >&8 &
+    # Close the control writer in the pump: the worker waits for its EOF.
+    # Also drop unrelated worker channels inherited by the child.
+    cat <&0 >&8 8>&- 7>&- 4<&- 5<&- 6<&- &
     stdin_forward_pid=$!
   fi
   exec 8>&-
