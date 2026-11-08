@@ -33,7 +33,22 @@ jobs:
           export GIT809_DRAIN_MODE=chunk100
           mkdir -p git809-stream-results
           "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_git_ipc_pool.py experiments/issue-809/test_allocator_probe_hold.py experiments/issue-809/test_windows_transport_selection.py
-          "$PYTHON_EXE" experiments/issue-809/test_windows_transport_selection.py
+          # Bound the selector subprocess separately; a native pipe-handle
+          # cleanup hang must not consume the entire stress-job timeout.
+          "$PYTHON_EXE" - <<'PY'
+          import subprocess,sys
+          cmd=[sys.executable,"experiments/issue-809/test_windows_transport_selection.py"]
+          try:
+            proc=subprocess.run(cmd,capture_output=True,encoding="utf-8",
+                                errors="strict",timeout=25)
+          except subprocess.TimeoutExpired as exc:
+            for chunk in (exc.stdout,exc.stderr):
+              if chunk: sys.stdout.buffer.write(chunk if isinstance(chunk,bytes) else chunk.encode("utf-8"))
+            raise AssertionError("Windows selector process exceeded 25s; see last cleanup marker") from exc
+          print(proc.stdout,end="",flush=True)
+          print(proc.stderr,end="",file=sys.stderr,flush=True)
+          assert proc.returncode==0,("selector exit",proc.returncode)
+          PY
           bash -n experiments/issue-809/git-ipc-request.sh || exit 21
           source experiments/issue-809/git-manager.sh 3 || exit 22
           trap 'rc=$?; if [[ -n ${_GIT809_MANAGER_LOG:-} && -f $_GIT809_MANAGER_LOG ]]; then cp -- "$_GIT809_MANAGER_LOG" git809-stream-results/manager.log; if (( rc != 0 )); then tail -n 120 -- "$_GIT809_MANAGER_LOG" >&2; fi; fi; exit "$rc"' EXIT
