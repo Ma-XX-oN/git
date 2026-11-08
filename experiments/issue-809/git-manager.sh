@@ -1,3 +1,16 @@
+# Source on Git Bash, Linux, or macOS; Bash identifies the transport at startup.
+case ${OSTYPE:-} in
+  linux*|darwin*)
+    source "$(dirname -- "${BASH_SOURCE[0]}")/git-manager-unix.sh" "$@"
+    return $?
+    ;;
+  msys*) ;;
+  *)
+    printf 'Git IPC does not support OSTYPE=%s\n' "${OSTYPE:-unset}" >&2
+    return 2
+    ;;
+esac
+
 source "$(dirname -- "${BASH_SOURCE[0]}")/git-ipc-request.sh" || return 1
 # Source into Git Bash: source /path/to/git-manager.sh [worker-count]
 # IPC client and manager launcher for the native Git --preload worker.
