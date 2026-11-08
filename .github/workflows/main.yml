@@ -1,6 +1,10 @@
 name: CI
 
-on: [push, pull_request]
+on:
+  push:
+    branches-ignore:
+      - experiment-809-unidirectional-t-handshake
+  pull_request:
 
 env:
   DEVELOPER: 1
