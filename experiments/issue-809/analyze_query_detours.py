@@ -22,6 +22,12 @@ def main() -> None:
     assert any("op=HOOK_READY" in line for line in lines), name
     def find(op: str) -> list[str]:
       return [line for line in lines if f"op={op} " in line]
+    markers = [line.strip() for line in lines if line.startswith("GIT809_PATH ")]
+    assert markers, f"{name}: no actual MSYS control-flow markers captured"
+    event_names = [event.split()[1] for event in markers]
+    assert "QUERY_ENTER" in event_names, f"{name}: query path not entered: {markers}"
+    for marker in markers:
+      print(f"GIT809_MSYS_BRANCH file={name} {marker}", flush=True)
     queries = find("NtQueryAttributesFile_END")
     opens = find("NtCreateFile_END")
     closes = find("NtClose_END")
@@ -49,6 +55,17 @@ def main() -> None:
       status = re.search(r"status=0x([0-9a-fA-F]+)", event)
       assert status, event
       print(f"GIT809_CREATE_RESULT file={name} native_status=0x{int(status.group(1),16):08x}",flush=True)
+    if any("QUERY_ACCEPTANCE_CONDITIONS_MET" in reason for reason in [
+        "QUERY_ACCEPTANCE_CONDITIONS_MET" if (
+          (int(re.search(r"status=0x([0-9a-fA-F]+)", q).group(1), 16) < 0x80000000)
+          and not (int(re.search(r"opts=0x([0-9a-fA-F]+)", q).group(1), 16) & BLOCKED)
+        ) else "" for q in queries]):
+      assert "QUERY_ACCEPTED" in event_names, f"{name}: query accepted by NT but not by MSYS"
+      assert "BYPASS_GOTO" in event_names, f"{name}: accepted query missed bypass goto"
+      assert "FILE_NOT_SYMLINK" in event_names, f"{name}: bypass target not executed"
+    print(f"GIT809_CONTROL_FLOW file={name} markers={event_names!r} "
+          f"metadata_fallthrough={'METADATA_OPEN_REACHED' in event_names} "
+          f"fs_update_skipped={'FS_UPDATE_SKIPPED' in event_names}", flush=True)
     print(f"GIT809_CASE_SUMMARY file={name} query_count={len(queries)} "
           f"create_count={len(opens)} close_count={len(closes)} "
           f"query_invoked={int(bool(queries))} "
