@@ -1,0 +1,29 @@
+name: RWF 809 Windows T transport pair unit acceptance
+on:
+  push:
+    branches: [experiment-809-unidirectional-t-handshake]
+    paths:
+      - experiments/issue-809/windows_git_ipc_pool.py
+      - experiments/issue-809/test_windows_transport_selection.py
+      - .github/workflows/issue-809-windows-pipe-selection.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-transport-selection:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Native Win32 T selection and connection-state regression
+        shell: pwsh
+        run: |
+          python -m py_compile experiments/issue-809/windows_git_ipc_pool.py experiments/issue-809/test_windows_transport_selection.py
+          python experiments/issue-809/test_windows_transport_selection.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Output "GIT809_NATIVE_T_SELECTION_PASS SHA=$env:GITHUB_SHA"
