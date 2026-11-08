@@ -5,6 +5,7 @@
 #include "abspath.h"
 #include "alloc.h"
 #include "config.h"
+#include "common-init.h"
 #include "dir.h"
 #include "environment.h"
 #include "repository.h"
@@ -3973,10 +3974,13 @@ static int git_preinit_worker(void)
     goto cleanup;
   }
   git_preinit_active = 1;
-  if (!setjmp(git_preinit_jump))
-    rc = main(count, args);
-  else
+  if (!setjmp(git_preinit_jump)) {
+    init_git(args);
+    rc = cmd_main(count, args);
+    rc = common_exit(__FILE__, __LINE__, rc);
+  } else {
     rc = git_preinit_exit_status;
+  }
   git_preinit_active = 0;
   fflush(stdout);
   fflush(stderr);
