@@ -1,7 +1,7 @@
 name: RWF 809 Linux macOS native context and owner stress
 on:
   push:
-    branches: [investigation-809-allocator-resource-lifecycle]
+    branches: [investigation-809-allocator-resource-lifecycle, experiment-809-unidirectional-t-handshake]
     paths:
       - .github/workflows/issue-809-unix-owner-stress.yml
       - preload-worker-unix.c
@@ -14,6 +14,7 @@ on:
       - experiments/issue-809/windows_git_ipc_pool.py
       - experiments/issue-809/test_allocator_probe_hold.py
       - .github/workflows/issue-809-allocator-stress.yml
+      - experiments/issue-809/TRANSPORT-CONTRACT.md
   workflow_dispatch:
 permissions:
   contents: read
