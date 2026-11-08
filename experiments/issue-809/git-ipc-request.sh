@@ -6,10 +6,16 @@ _git809_write_context() {
   local name i size header
   local -a names=() values=()
 
-  if [[ $platform == windows ]]; then
-    cwd=$(pwd -W) || return 1
+  # Test-only ablation: preserve ordinary defaults when no controls are set.
+  if [[ ${GIT809_ABLATION_CWD:-1} == 1 ]]; then
+    if [[ $platform == windows ]]; then
+      cwd=$(pwd -W) || return 1
+    fi
+    printf 'cwd\0%s\0' "$cwd" || return 1
   fi
-  printf 'cwd\0%s\0' "$cwd" || return 1
+  if [[ ${GIT809_ABLATION_ENV:-1} == 0 ]]; then
+    return 0
+  fi
 
   # Snapshot exports BEFORE changing the locale for byte counts.
   while IFS= read -r name; do
