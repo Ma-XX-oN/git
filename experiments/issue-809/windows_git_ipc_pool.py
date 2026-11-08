@@ -321,6 +321,12 @@ def select_transport(address, marker):
           state["marked"]=n==1
       candidates=[x for x in states if x["marked"]]
       if len(candidates)>1:
+        first,second=candidates[:2]
+        print(f"ALLOCATOR_DUPLICATE_MARKERS reply={address} "
+              f"first={first['buffer'].raw[0]} (0x{first['buffer'].raw[0]:02x}) "
+              f"second={second['buffer'].raw[0]} (0x{second['buffer'].raw[0]:02x}) "
+              f"expected={expected[0]} (0x{expected[0]:02x})",
+              flush=True)
         raise RuntimeError("two markers on one reply channel")
       if candidates:
         state=candidates[0]
