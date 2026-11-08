@@ -84,9 +84,14 @@ git-ipc() {
   # BASHPID correlates the reply to this client, including concurrent Bash
   # subshells. Duplex handles carry only the Windows T identification byte
   # in the reverse direction of each application's data flow.
+  # Each allocation needs a distinct reply name until the previous reply
+  # server has released both instances. Bash PID alone can be reused by
+  # consecutive requests before the prior FlushFileBuffers/close finishes.
+  _GIT809_REQUEST_SEQ=$(( ${_GIT809_REQUEST_SEQ:-0} + 1 ))
   local allocator reply client_pid=$BASHPID
+  local request_id="${client_pid}-${_GIT809_REQUEST_SEQ}"
   printf -v allocator '%s%s' '\\.\pipe\git809-allocate-req-' "$_GIT809_OWNER_WINPID"
-  printf -v reply '%s%s-%s' '\\.\pipe\git809-allocate-reply-' "$_GIT809_OWNER_WINPID" "$client_pid"
+  printf -v reply '%s%s-%s' '\\.\pipe\git809-allocate-reply-' "$_GIT809_OWNER_WINPID" "$request_id"
   local pid i count header arg status line
   for ((i=0;i<400;i++)); do
     if { exec 3<>"$allocator"; } 2>/dev/null; then break; fi
@@ -95,7 +100,7 @@ git-ipc() {
   if (( i == 400 )); then
     printf 'GIT-IPC ERROR: allocation request pipe unavailable\n' >&2; return 255
   fi
-  if ! printf 'TGET %s\n' "$client_pid" >&3; then
+  if ! printf 'TGET %s\n' "$request_id" >&3; then
     exec 3>&-
     printf 'GIT-IPC ERROR: allocation request write failed\n' >&2; return 255
   fi
