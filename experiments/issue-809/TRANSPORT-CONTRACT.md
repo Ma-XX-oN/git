@@ -94,4 +94,22 @@ binary stdout/stderr and interactive stdin tests are implemented and pass.
 
 ## Implementation notes
 
+### Open design discrepancy: shared GET listener
+
+The current Python git-manager request side retains a **replenished pool of
+listener instances for the shared GET pipe name**, and identifies each real
+request by its `T` prefix. It does **not** call the same two-instance
+`select_transport()` used for each unique ID reply pipe. This is **not
+yet verified as satisfying the agreed pair-selection contract**. Unlike a
+private worker channel, GET accepts concurrent independent git-ipc clients:
+two distinct GET connections can both carry valid `T` markers without
+representing a duplicate marker on one client's transport pair.
+
+Do not replace the shared request listener with a single global two-instance
+pair without preserving concurrent-client isolation. The exact GET
+pair/acceptance model must be reconciled with this concurrency requirement
+before claiming full protocol acceptance.
+
+
+
 The original Windows single duplex GET/PID pipe and instance-order selection are superseded. The implementation branch introduces separate GET/ID names, T-based selection, and a separate command/context channel; native CI must verify all changes at the same SHA. Unix now uses separate FIFO descriptors rather than `O_RDWR` for its manager request FIFO.
