@@ -29,13 +29,10 @@ jobs:
         shell: bash
         run: |
           . /etc/profile
-          set -euo pipefail
+          # Bash timed reads return >128 on normal timeout; errexit is incompatible
+          # with the existing git-ipc output-drain contract.
+          set -uo pipefail
           mkdir -p git809-bash-pipe-results
-          exec 8>git809-bash-pipe-results/harness-shell-trace.log
-          export BASH_XTRACEFD=8
-          PS4='+GIT809_PROFILE line=${LINENO} '
-          set -x
-          trap 'rc=$?; echo "GIT809_PROFILE_FAILURE line=$LINENO rc=$rc" >&2; exit "$rc"' ERR
           PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
           export GIT809_MANAGER_PYTHON="$(cygpath -w "$PYTHON_EXE")"
           export GIT809_WORKER_GIT="$(cygpath -w "$PWD/git.exe")"
@@ -45,19 +42,19 @@ jobs:
           bash -n experiments/issue-809/git-manager.sh
           source experiments/issue-809/git-manager.sh 3
           unset GIT809_STAGE_TRACE_FILE
-          for ((i=0;i<10;i++)); do git-ipc --version >/dev/null; done
+          for ((i=0;i<10;i++)); do git-ipc --version >/dev/null || { echo "GIT809_WARMUP_FAILED i=$i" >&2; exit 42; }; done
           export GIT809_STAGE_TRACE_FILE="$PWD/git809-bash-pipe-results/request-stages.csv"
           printf 'mode,start,end\n' >git809-bash-pipe-results/total-times.csv
           for ((i=0;i<120;i++)); do
             a=$EPOCHREALTIME
-            git-ipc --version >/dev/null
+            git-ipc --version >/dev/null || { echo "GIT809_PROFILE_IPC_FAILED i=$i" >&2; exit 43; }
             b=$EPOCHREALTIME
             printf 'traced_ipc,%s,%s\n' "$a" "$b" >>git809-bash-pipe-results/total-times.csv
           done
           unset GIT809_STAGE_TRACE_FILE
           for ((i=0;i<120;i++)); do
             a=$EPOCHREALTIME
-            git-ipc --version >/dev/null
+            git-ipc --version >/dev/null || { echo "GIT809_PROFILE_IPC_FAILED i=$i" >&2; exit 43; }
             b=$EPOCHREALTIME
             printf 'untraced_ipc,%s,%s\n' "$a" "$b" >>git809-bash-pipe-results/total-times.csv
           done
