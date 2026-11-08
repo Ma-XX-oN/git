@@ -65,6 +65,9 @@ jobs:
             fi
             ps -W >&2 || :
             kill -KILL "$smoke_pid" 2>/dev/null || :
+            # This shell can remain blocked in a Windows named-pipe open.
+            # Stop the diagnostic step after preserving its evidence.
+            kill -KILL "$$" 2>/dev/null || :
           ) &
           watchdog_pid=$!
           smoke_rc=0
