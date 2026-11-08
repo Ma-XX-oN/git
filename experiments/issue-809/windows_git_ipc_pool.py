@@ -134,6 +134,12 @@ class Pool:
       p=self.ready.get(timeout=5)
     except queue.Empty:
       return "WAIT\n"
+    # The client owns this worker after allocation. Retain only workers the
+    # manager is still offering; the native worker watches the shell itself.
+    with self.lock:
+      if p not in self.children:
+        raise RuntimeError("allocated worker missing from ready tracking")
+      self.children.remove(p)
     if p.poll() is not None:
       threading.Thread(target=self.spawn,daemon=True).start()
       return "WAIT\n"
