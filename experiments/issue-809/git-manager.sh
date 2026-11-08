@@ -131,7 +131,12 @@ git-ipc() {
     printf 'GIT-IPC ERROR: context frame write failed\n' >&2
     return 255
   }
-  exec 7>&-
+  if [[ ${GIT809_ABLATION_STDIN_CLOSE:-1} == 1 ]]; then
+    exec 7>&-
+  else
+    # Test-only length boundary. Keep the write handle open until exit status.
+    printf 'G809-END-IPC' >&7 || { exec 7>&-; return 255; }
+  fi
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE sent stdin pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
 
   # Experimental second timing mode: stdout accumulates all available
@@ -172,6 +177,7 @@ git-ipc() {
     [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE drained data pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
     IFS= read -r status <&6 || { exec 6<&-; printf 'GIT-IPC ERROR: exit-status read failed\n' >&2; return 255; }
     exec 6<&-
+    if [[ ${GIT809_ABLATION_STDIN_CLOSE:-1} == 0 ]]; then exec 7>&-; fi
     if [[ $status =~ ^EXIT[[:space:]]([0-9]+)$ ]]; then
       return "${BASH_REMATCH[1]}"
     fi
