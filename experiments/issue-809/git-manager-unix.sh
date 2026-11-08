@@ -58,7 +58,7 @@ if (( _git809_unix_source_rc != 0 )); then
   return "$_git809_unix_source_rc"
 fi
 
-_git809_git_ipc_impl() {
+git-ipc() {
   if [[ -z ${_GIT809_UNIX_DIRECTORY:-} || $# -gt 31 ]]; then
     printf 'GIT-IPC ERROR: manager unavailable or too many arguments\n' >&2
     return 255
@@ -149,9 +149,6 @@ _git809_git_ipc_impl() {
   fi
   printf 'GIT-IPC ERROR: invalid worker exit-code response\n' >&2
   return 255
-}
-git-ipc() {
-  _git809_git_ipc_impl "$@"
 }
 alias git='git-ipc'
 return 0
