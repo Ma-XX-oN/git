@@ -1,0 +1,78 @@
+name: Git 809 Windows native preload request overhead RCA
+on:
+  push:
+    branches: [experiment-809-preload-latency-rca]
+    paths:
+      - .github/workflows/issue-809-preload-latency-rca.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-request-overhead:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Build identical native preload Git
+        shell: bash
+        run: |
+          . /etc/profile
+          make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git.exe
+      - name: Compare exact request-path components on same Windows runner
+        shell: bash
+        run: |
+          . /etc/profile
+          set -euo pipefail
+          PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
+          export GIT809_MANAGER_PYTHON="$(cygpath -w "$PYTHON_EXE")"
+          export GIT809_WORKER_GIT="$(cygpath -w "$PWD/git.exe")"
+          source experiments/issue-809/git-manager.sh 3
+          export GIT809_DRAIN_MODE=chunk100
+          mkdir -p git809-bash-pipe-results
+          printf 'component,iteration,start,end\n' >git809-bash-pipe-results/overheads.csv
+          for ((i=0; i<120; i++)); do
+            start=$EPOCHREALTIME
+            cygpath -w "$PWD" >/dev/null
+            end=$EPOCHREALTIME
+            printf 'cygpath,%s,%s,%s\n' "$i" "$start" "$end" >>git809-bash-pipe-results/overheads.csv
+            start=$EPOCHREALTIME
+            _git809_write_context unix >/dev/null
+            end=$EPOCHREALTIME
+            printf 'env_snapshot,%s,%s,%s\n' "$i" "$start" "$end" >>git809-bash-pipe-results/overheads.csv
+            start=$EPOCHREALTIME
+            _git809_write_context windows >/dev/null
+            end=$EPOCHREALTIME
+            printf 'full_context,%s,%s,%s\n' "$i" "$start" "$end" >>git809-bash-pipe-results/overheads.csv
+            start=$EPOCHREALTIME
+            git-ipc --version >/dev/null
+            end=$EPOCHREALTIME
+            printf 'full_ipc,%s,%s,%s\n' "$i" "$start" "$end" >>git809-bash-pipe-results/overheads.csv
+          done
+          "$PYTHON_EXE" - <<'PY'
+          import csv, statistics, math
+          from decimal import Decimal
+          from collections import defaultdict
+          data=defaultdict(list)
+          with open('git809-bash-pipe-results/overheads.csv',newline='',encoding='utf-8') as fh:
+            for item in csv.DictReader(fh):
+              data[item['component']].append(float((Decimal(item['end'])-Decimal(item['start']))*1000))
+          for category,values in sorted(data.items()):
+            assert len(values)==120,(category,len(values))
+            print('GIT809_COMPONENT',category,'median_ms',round(statistics.median(values),3),
+                  'p95_ms',round(sorted(values)[math.ceil(.95*len(values))-1],3),
+                  'min_ms',round(min(values),3),'max_ms',round(max(values),3),flush=True)
+          PY
+          echo "GIT809_COMPONENT_SOURCE_SHA=$GITHUB_SHA"
+      - name: Preserve exact same-runner overhead samples
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-preload-windows-component-overhead
+          path: git809-bash-pipe-results/overheads.csv
+          if-no-files-found: error
