@@ -285,7 +285,7 @@ def allocation_server(owner_pid:int,pool:Pool):
       client_id=int(raw_id)
       if not 1<=client_id<=0xffffffff:
         raise ValueError("reply ID out of range")
-      reply=(r"\\\\.\\pipe\\git809-allocate-reply-"+str(owner_pid)+
+      reply=(r"\\.\pipe\git809-allocate-reply-"+str(owner_pid)+
              "-"+str(client_id))
       response=select_transport(reply)
       try:
