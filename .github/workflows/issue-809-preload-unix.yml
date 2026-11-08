@@ -2,20 +2,12 @@ name: Git 809 native preload Unix IPC smoke
 on:
   push:
     branches: [feature/git-preinit-windows-upstream]
-    paths:
-      - common-main.c
-      - git.c
-      - preload-worker-unix.c
-      - Makefile
-      - experiments/issue-809/unix_git_ipc_pool.py
-      - experiments/issue-809/git-manager-unix.sh
-      - preload-context.c
-      - preload-context.h
-      - experiments/issue-809/git-ipc-request.sh
-      - .github/workflows/issue-809-preload-unix.yml
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: git809-preload-unix-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   unix-preload:
     strategy:
