@@ -41,12 +41,12 @@ def write(h,data):
   assert n.value==len(data)
 
 
-def run_case(name,marker_index=None,marker=b"T",drop_probe=False):
+def run_case(name,marker_index=None,marker=b"T",drop_probe=False,request_id=None):
   address=r"\\.\pipe\git809-select-test-"+uuid.uuid4().hex
   result=[]
   def server():
     try:
-      selected=manager.select_transport(address)
+      selected=manager.select_transport(address,request_id)
       result.append(("selected",selected))
     except Exception as error:
       result.append(("error",error))
@@ -66,7 +66,9 @@ def run_case(name,marker_index=None,marker=b"T",drop_probe=False):
     t.join(timeout=5)
     assert not t.is_alive(),(name,"server stuck")
     assert len(result)==1,(name,result)
-    if marker_index is not None and marker==b"T":
+    expected=(str(int(request_id.rsplit("-",1)[1])%10).encode("ascii")
+              if request_id else b"T")
+    if marker_index is not None and marker==expected:
       assert result[0][0]=="selected",(name,result)
       # Selection consumes only T, preserving the following application byte.
       write(clients[marker_index],b"Z")
@@ -118,7 +120,7 @@ def test_duplicate_markers():
     assert not t.is_alive(),"duplicate marker server stuck"
     assert len(result)==1 and result[0][0]=="error",result
     assert isinstance(result[0][1],RuntimeError),result
-    assert "two T markers" in str(result[0][1]),result
+    assert "two markers" in str(result[0][1]),result
     print("GIT809_SELECT_TRANSPORT_PASS duplicate-markers",flush=True)
   finally:
     go.set()
@@ -132,4 +134,6 @@ run_case("second-instance-marker-probe-held",1)
 run_case("disconnected-probe-other-instance-selected",1,drop_probe=True)
 run_case("invalid-marker",1,b"X")
 run_case("missing-marker-timeout")
+run_case("rotating-marker-zero",0,b"0",request_id="123-10")
+run_case("rotating-marker-nine",1,b"9",request_id="123-19")
 test_duplicate_markers()
