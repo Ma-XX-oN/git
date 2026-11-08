@@ -47,7 +47,7 @@ try:
         handles.append(h)
     # The first pipe stays connected as a probe. The second sends GET.
     # The ID is delivered on a distinct, T-qualified logical channel.
-    client_id = os.getpid()
+    client_id = f"{os.getpid()}-1"
     request = (f"TGET {client_id}\n").encode("ascii")
     n = W.DWORD()
     if not K.WriteFile(handles[1], request, len(request), C.byref(n), None):
