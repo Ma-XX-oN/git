@@ -58,6 +58,7 @@ jobs:
             if (( i % 500 == 0 )); then printf 'GIT809_STRESS_PROGRESS %s\n' "$i"; fi
           done
           git-ipc rev-parse --show-toplevel >/dev/null || exit 43
+          cp -- "$_GIT809_MANAGER_LOG" git809-stream-results/manager.log
           "$PYTHON_EXE" - <<'PY'
           import csv,statistics,os,re
           from decimal import Decimal
