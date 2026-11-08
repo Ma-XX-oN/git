@@ -5,6 +5,19 @@ int main(int argc, const char **argv)
 {
 	int result;
 
+#ifndef GIT_WINDOWS_NATIVE
+	if (argc > 1 && !strcmp(argv[1], "--preload")) {
+		extern int git_preload_unix_worker(const char *directory);
+
+		if (argc != 3) {
+			fprintf(stderr, "error: --preload requires a worker directory\n");
+			exit(129);
+		}
+		result = git_preload_unix_worker(argv[2]);
+		exit(result);
+	}
+#endif
+
 	init_git(argv);
 	result = cmd_main(argc, argv);
 
