@@ -180,8 +180,9 @@ def select_transport(address, request_id=None):
     while time.monotonic()<deadline:
       candidates=[]
       for i,h in enumerate(handles):
-        if not connected[i]:
-          continue
+        # A completed client connection can become readable before its
+        # separate blocking ConnectNamedPipe thread publishes connected[i].
+        # Peek both native handles, not the thread's lagging bookkeeping.
         available=W.DWORD()
         if K.PeekNamedPipe(h,None,0,None,C.byref(available),None) and available.value:
           candidates.append(i)
