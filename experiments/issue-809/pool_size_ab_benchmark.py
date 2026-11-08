@@ -5,7 +5,7 @@ This changes only the configured number of preinitialized workers. Every
 configuration runs 120 sequential paired direct and IPC --version commands.
 The actual Git executable is built from the checked-out source; no historical
 source-injection build script or retired worker startup flag is used.
-Round order 1,2,3,4,5,5,4,3,2,1 reduces time-order bias. Each OS uses one Git build and one native CI runner.
+Round order 1,2,3,4,5,4,3,2,1 reduces time-order bias. Each OS uses one Git build and one native CI runner.
 Startup, manager creation and initial worker preparation are excluded from
 per-command timings but reported separately.
 """
@@ -23,7 +23,7 @@ import sys
 import time
 
 N = 120
-RUN_ORDER = (1, 2, 3, 4, 5, 5, 4, 3, 2, 1)
+RUN_ORDER = (1, 2, 3, 4, 5, 4, 3, 2, 1)
 OUT = Path("git809-bash-pipe-results")
 
 SHELL = r"""
