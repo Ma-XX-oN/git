@@ -1,7 +1,7 @@
 name: RWF 809 Windows allocator lifecycle stress
 on:
   push:
-    branches: [investigation-809-allocator-resource-lifecycle, experiment-809-unidirectional-t-handshake]
+    branches: [tmp1]
   workflow_dispatch:
 permissions:
   contents: read
@@ -33,6 +33,7 @@ jobs:
           export GIT809_DRAIN_MODE=chunk100
           export GIT809_TRACE=1
           mkdir -p git809-stream-results
+          export GIT_TRACE_GIT809_PRELOAD="$(cygpath -w "$PWD/git809-stream-results/worker-trace.log")"
           "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_git_ipc_pool.py experiments/issue-809/test_allocator_probe_hold.py experiments/issue-809/test_windows_transport_selection.py
           "$PYTHON_EXE" experiments/issue-809/test_windows_transport_selection.py
           "$PYTHON_EXE" experiments/issue-809/test_windows_worker_lifecycle.py "$GIT809_WORKER_GIT" || exit 20
@@ -41,7 +42,7 @@ jobs:
           trap 'rc=$?; if [[ -n ${_GIT809_MANAGER_LOG:-} && -f $_GIT809_MANAGER_LOG ]]; then cp -- "$_GIT809_MANAGER_LOG" git809-stream-results/manager.log; if (( rc != 0 )); then tail -n 120 -- "$_GIT809_MANAGER_LOG" >&2; fi; fi; exit "$rc"' EXIT
           # Bound the first allocation so a blocking native connection
           # produces the manager diagnostic instead of consuming the 45m job.
-          git-ipc --version >git809-stream-results/smoke.out &
+          { git-ipc --version >git809-stream-results/smoke.out || exit $?; } &
           smoke_pid=$!
           # MSYS signals do not reliably interrupt a blocked native pipe open.
           # Kill only the smoke subshell by native Windows PID on timeout.
@@ -61,6 +62,12 @@ jobs:
           wait "$watchdog_pid" 2>/dev/null || :
           if (( smoke_rc != 0 )); then
             printf 'GIT809_SMOKE_FAIL rc=%s\\n' "$smoke_rc" >&2
+            printf 'GIT809_SMOKE_OUTPUT_BEGIN\\n' >&2
+            cat git809-stream-results/smoke.out >&2 || :
+            printf 'GIT809_SMOKE_OUTPUT_END\\n' >&2
+            if [[ -f git809-stream-results/worker-trace.log ]]; then
+              tail -n 100 git809-stream-results/worker-trace.log >&2
+            fi
             exit 23
           fi
           [[ "$(cat git809-stream-results/smoke.out)" == "$("$GIT809_WORKER_GIT" --version)" ]] || exit 23
@@ -79,9 +86,9 @@ jobs:
           # without cross-connecting their per-request ID channels.
           expected_version="$("$GIT809_WORKER_GIT" --version)"
           for ((wave=0;wave<12;wave++)); do
-            git-ipc --version >git809-stream-results/concurrent-a.out &
+            { git-ipc --version >git809-stream-results/concurrent-a.out || exit $?; } &
             client_a=$!
-            git-ipc --version >git809-stream-results/concurrent-b.out &
+            { git-ipc --version >git809-stream-results/concurrent-b.out || exit $?; } &
             client_b=$!
             wait "$client_a" || exit 36
             wait "$client_b" || exit 37
