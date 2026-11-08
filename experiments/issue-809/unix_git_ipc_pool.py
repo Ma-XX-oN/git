@@ -15,10 +15,11 @@ import uuid
 
 
 class Pool:
-    def __init__(self, git, directory, target):
+    def __init__(self, git, directory, target, owner_pid):
         self.git = git
         self.directory = directory
         self.target = target
+        self.owner_pid = owner_pid
         self.ready = queue.Queue()
         self.children = []
         self.lock = threading.Lock()
@@ -32,10 +33,12 @@ class Pool:
         channel_dir.mkdir(mode=0o700)
         for name in ("stdout", "stderr", "exit-code", "stdin"):
             os.mkfifo(channel_dir / name, 0o600)
+        worker_env = os.environ.copy()
+        worker_env["GIT809_PRELOAD_OWNER_PID"] = str(self.owner_pid)
         p = subprocess.Popen(
             [str(self.git), "--preload", str(channel_dir)],
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL, bufsize=0)
+            stderr=subprocess.DEVNULL, env=worker_env, bufsize=0)
         with self.lock:
             self.children.append((p, channel_dir))
         line = p.stdout.readline()
@@ -93,7 +96,7 @@ def owner_alive(pid):
 def run(args):
     root = Path(args.directory).resolve(strict=True)
     git = Path(args.git).resolve(strict=True)
-    pool = Pool(git, root, args.workers)
+    pool = Pool(git, root, args.workers, args.owner_pid)
     request = root / "allocate-req"
     response = root / "allocate-reply"
     os.mkfifo(request, 0o600)
