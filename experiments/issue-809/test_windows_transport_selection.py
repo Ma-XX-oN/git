@@ -92,20 +92,20 @@ def run_case(name,marker_index=None,marker=b"1",drop_probe=False):
 def test_duplicate_markers():
   """Force both markers to be pending before selection examines either."""
   address=r"\\.\pipe\git809-select-test-"+uuid.uuid4().hex
-  peek=K.PeekNamedPipe
+  wait_fn=K.WaitForMultipleObjects
   go=threading.Event()
   clients=[]
   result=[]
-  def held_peek(*args):
+  def held_wait(*args):
     if not go.wait(5):
-      raise TimeoutError("test marker gate")
-    return peek(*args)
+      raise TimeoutError("test event-wait gate")
+    return wait_fn(*args)
   def server():
     try:
       result.append(("selected",manager.select_transport(address,1)))
     except Exception as error:
       result.append(("error",error))
-  K.PeekNamedPipe=held_peek
+  K.WaitForMultipleObjects=held_wait
   try:
     t=threading.Thread(target=server,daemon=True)
     t.start()
@@ -122,7 +122,7 @@ def test_duplicate_markers():
     print("GIT809_SELECT_TRANSPORT_PASS duplicate-markers",flush=True)
   finally:
     go.set()
-    K.PeekNamedPipe=peek
+    K.WaitForMultipleObjects=wait_fn
     for h in clients:
       K.CloseHandle(h)
 
