@@ -27,7 +27,7 @@ K.ReadFile.restype = W.BOOL
 K.CloseHandle.argtypes = [W.HANDLE]
 K.CloseHandle.restype = W.BOOL
 INVALID = C.c_void_p(-1).value
-address = r"\\.\pipe\git809-allocate-" + sys.argv[1]
+address = r"\\.\pipe\git809-allocate-req-" + sys.argv[1]
 
 def timeout():
     print("GIT809_PROBE_HOLD_TIMEOUT", flush=True)
@@ -45,14 +45,31 @@ try:
         if h == INVALID:
             raise OSError(C.get_last_error(), "CreateFileW")
         handles.append(h)
-    request = b"GET\n"
+    # The first pipe stays connected as a probe. The second sends GET.
+    # The ID is delivered on a distinct, T-qualified logical channel.
+    client_id = os.getpid()
+    request = (f"TGET {client_id}\n").encode("ascii")
     n = W.DWORD()
     if not K.WriteFile(handles[1], request, len(request), C.byref(n), None):
-        raise OSError(C.get_last_error(), "WriteFile")
+        raise OSError(C.get_last_error(), "WriteFile(request)")
     assert n.value == len(request)
+    reply = (r"\\.\pipe\git809-allocate-reply-" + sys.argv[1] +
+             "-" + str(client_id))
+    for attempt in range(500):
+        if K.WaitNamedPipeW(reply, 10):
+            response_handle = K.CreateFileW(reply, 0xc0000000, 0, None, 3, 0, None)
+            if response_handle != INVALID:
+                handles.append(response_handle)
+                break
+        import time
+        time.sleep(.002)
+    else:
+        raise TimeoutError("separate reply unavailable")
+    if not K.WriteFile(response_handle, b"T", 1, C.byref(n), None):
+        raise OSError(C.get_last_error(), "WriteFile(reply marker)")
     data = C.create_string_buffer(64)
-    if not K.ReadFile(handles[1], data, 64, C.byref(n), None):
-        raise OSError(C.get_last_error(), "ReadFile")
+    if not K.ReadFile(response_handle, data, 64, C.byref(n), None):
+        raise OSError(C.get_last_error(), "ReadFile(reply)")
     response = data.raw[:n.value]
     assert response.endswith(b"\n") and response[:-1].isdigit(), response
     print("GIT809_PROBE_HOLD_PASS allocated_pid", response.decode().strip(),
