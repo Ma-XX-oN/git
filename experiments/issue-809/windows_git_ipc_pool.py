@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """#809 shell-owned Windows worker allocator; no Git command-data relay.
 
-One allocation-only duplex pipe returns the native PID of an already-READY
-native Git --preload worker. A replacement is initiated immediately on allocation,
-independently of command execution, pipe consumption and worker termination.
+Two allocation-only logical channels are used: GET flows from Git Bash to
+git-manager; the worker PID flows back on a per-client reply channel. The
+Windows duplex pipe facility is used only for the T connection-identification
+handshake. A replacement is initiated immediately on allocation, independent
+of command execution, pipe consumption and worker termination.
 """
 from __future__ import annotations
 import argparse
