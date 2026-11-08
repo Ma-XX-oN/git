@@ -350,10 +350,11 @@ def allocation_server(owner_pid:int,pool:Pool):
   address=r"\\.\pipe\git809-allocate-req-"+str(owner_pid)
   unlimited=255
   backlog=min(64,max(4,2*pool.target))
-  max_active=56  # WaitForMultipleObjects supports at most 64 handles.
+  max_active=240  # Win32 permits 255 same-name pipe instances.
   active=[]
   replies=[]
   first=True
+  cap_reported=False
   print(f"ALLOCATOR_START {address} backlog={backlog}",flush=True)
 
   def make_listener():
@@ -452,6 +453,10 @@ def allocation_server(owner_pid:int,pool:Pool):
       pair["states"]=[chosen]
       pair["selected"]=chosen
       chosen["answer"]=pool.alloc().encode("ascii")
+      if pool.allocations % 50 == 0:
+        print(f"ALLOCATOR_STATE count={pool.allocations} active_get={len(active)} "
+              f"get_listeners={sum(s['phase']=='connect' for s in active)} "
+              f"reply_pairs={len(replies)}",flush=True)
       chosen["phase"]="write"
       pair["deadline"]=time.monotonic()+2
       chosen["ready"]=_start_async(chosen,"write",chosen["answer"])
@@ -543,6 +548,14 @@ def allocation_server(owner_pid:int,pool:Pool):
       while listeners<backlog and len(active)<max_active:
         make_listener()
         listeners+=1
+      if listeners<backlog and len(active)>=max_active:
+        if not cap_reported:
+          print(f"ALLOCATOR_LISTENER_CAP active_get={len(active)} "
+                f"listeners={listeners} reply_pairs={len(replies)}",
+                flush=True)
+        cap_reported=True
+      else:
+        cap_reported=False
       pending=[s for s in active if s["pending"]]
       pending.extend(s for pair in replies for s in pair["states"]
                      if s["pending"])
