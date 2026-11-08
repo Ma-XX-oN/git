@@ -74,7 +74,7 @@ jobs:
           assert bash
           script=r'''
           source "$GIT809_SHELL_LIBRARY" 3 || exit 51
-          printf -v local_pipe '%s%s' '\\\\.\\pipe\\git809-allocate-' "$_GIT809_OWNER_WINPID"
+          printf -v local_pipe '%s%s' '\\.\pipe\git809-allocate-' "$_GIT809_OWNER_WINPID"
           exec 3<>"$local_pipe" || exit 52
           printf 'GET\n' >&3 || exit 53
           IFS= read -r allocated <&3 || exit 54
