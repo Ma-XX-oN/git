@@ -36,7 +36,21 @@ jobs:
           bash -n experiments/issue-809/git-ipc-request.sh || exit 21
           source experiments/issue-809/git-manager.sh 3 || exit 22
           trap 'rc=$?; if [[ -n ${_GIT809_MANAGER_LOG:-} && -f $_GIT809_MANAGER_LOG ]]; then cp -- "$_GIT809_MANAGER_LOG" git809-stream-results/manager.log; if (( rc != 0 )); then tail -n 120 -- "$_GIT809_MANAGER_LOG" >&2; fi; fi; exit "$rc"' EXIT
-          [[ "$(git-ipc --version)" == "$("$GIT809_WORKER_GIT" --version)" ]] || exit 23
+          # Bound the first allocation so a blocking native connection
+          # produces the manager diagnostic instead of consuming the 45m job.
+          git-ipc --version >git809-stream-results/smoke.out &
+          smoke_pid=$!
+          ( sleep 30; kill -TERM "$smoke_pid" 2>/dev/null || :; sleep 2; kill -KILL "$smoke_pid" 2>/dev/null || : ) &
+          watchdog_pid=$!
+          smoke_rc=0
+          wait "$smoke_pid" || smoke_rc=$?
+          kill "$watchdog_pid" 2>/dev/null || :
+          wait "$watchdog_pid" 2>/dev/null || :
+          if (( smoke_rc != 0 )); then
+            printf 'GIT809_SMOKE_FAIL rc=%s\\n' "$smoke_rc" >&2
+            exit 23
+          fi
+          [[ "$(cat git809-stream-results/smoke.out)" == "$("$GIT809_WORKER_GIT" --version)" ]] || exit 23
           cd experiments/issue-809
           [[ "$(git-ipc rev-parse --show-prefix)" == "experiments/issue-809/" ]] || exit 24
           cd ../..
