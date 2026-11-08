@@ -1,6 +1,7 @@
 #include "git-compat-util.h"
 #ifndef GIT_WINDOWS_NATIVE
 #include "common-init.h"
+#include "preload-context.h"
 #include <fcntl.h>
 #include <setjmp.h>
 #include <sys/stat.h>
@@ -29,7 +30,9 @@ int git_preload_unix_worker(const char *directory)
     "stdout", "stderr", "exit-code", "stdin"
   };
   char paths[4][1024];
-  char frame[4096], result[64];
+  char *frame = NULL;
+  char result[64];
+  const size_t frame_capacity = 131072;
   const char *args[33] = { NULL };
   int fd[4] = { -1, -1, -1, -1 };
   int i, count, pos, rc = 120;
@@ -37,6 +40,9 @@ int git_preload_unix_worker(const char *directory)
   ssize_t n;
 
   if (!directory || strlen(directory) > 960)
+    return 121;
+  frame = malloc(frame_capacity);
+  if (!frame)
     return 121;
   for (i = 0; i < 4; i++) {
     if (snprintf(paths[i], sizeof(paths[i]), "%s/%s",
@@ -61,8 +67,8 @@ int git_preload_unix_worker(const char *directory)
     goto cleanup;
   }
 
-  while (used < sizeof(frame)) {
-    n = read(fd[3], frame + used, sizeof(frame) - used);
+  while (used < frame_capacity) {
+    n = read(fd[3], frame + used, frame_capacity - used);
     if (n < 0) {
       if (errno == EINTR)
         continue;
@@ -73,7 +79,7 @@ int git_preload_unix_worker(const char *directory)
       break;
     used += (size_t)n;
   }
-  if (used < 4) {
+  if (used < 4 || used == frame_capacity) {
     rc = 125;
     goto cleanup;
   }
@@ -101,7 +107,8 @@ int git_preload_unix_worker(const char *directory)
     args[i] = frame + start;
     pos++;
   }
-  if ((size_t)pos != used || strcmp(args[0], "git")) {
+  if (strcmp(args[0], "git") ||
+      preload_apply_context(frame + pos, used - (size_t)pos)) {
     rc = 129;
     goto cleanup;
   }
@@ -152,6 +159,7 @@ cleanup:
   for (i = 0; i < 4; i++)
     if (fd[i] >= 0)
       close(fd[i]);
+  free(frame);
   return rc;
 }
 #endif
