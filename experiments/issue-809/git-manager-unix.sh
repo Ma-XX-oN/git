@@ -58,7 +58,7 @@ if (( _git809_unix_source_rc != 0 )); then
   return "$_git809_unix_source_rc"
 fi
 
-git-ipc() {
+_git809_git_ipc_impl() {
   if [[ -z ${_GIT809_UNIX_DIRECTORY:-} || $# -gt 31 ]]; then
     printf 'GIT-IPC ERROR: manager unavailable or too many arguments\n' >&2
     return 255
@@ -88,6 +88,15 @@ git-ipc() {
   exec 6<"$worker/exit-code" || { exec 4<&- 5<&-; printf 'GIT-IPC ERROR: exit-code open failed\n' >&2; return 255; }
   exec 8>"$worker/stdin" || { exec 4<&- 5<&- 6<&-; printf 'GIT-IPC ERROR: stdin open failed\n' >&2; return 255; }
   exec 7>"$worker/param-env-cwd" || { exec 4<&- 5<&- 6<&- 8>&-; printf 'GIT-IPC ERROR: control open failed\n' >&2; return 255; }
+  # Forward redirected stdin only when it actually refers to a file or
+  # pipe. Ordinary no-input Git commands do not start a relay process.
+  # The child owns the writer after this function closes descriptor 8.
+  if [[ -p /dev/fd/0 || -f /dev/fd/0 ]]; then
+    cat <&0 >&8 &
+    stdin_forward_pid=$!
+  fi
+  exec 8>&-
+
 
   count=$(( $# + 1 ))
   printf -v header '\\x%02x\\x00\\x00\\x00' "$count"
@@ -101,7 +110,7 @@ git-ipc() {
     printf 'GIT-IPC ERROR: context frame write failed\n' >&2
     return 255
   }
-  exec 7>&- 8>&-
+  exec 7>&-
 
   local stdout_open=1 stderr_open=1
   while (( stdout_open || stderr_open )); do
@@ -145,6 +154,17 @@ git-ipc() {
   fi
   printf 'GIT-IPC ERROR: invalid worker exit-code response\n' >&2
   return 255
+}
+# Always reap a stdin forwarder, including when the Git command fails.
+git-ipc() {
+  local stdin_forward_pid= rc
+  _git809_git_ipc_impl "$@"
+  rc=$?
+  if [[ -n $stdin_forward_pid ]]; then
+    kill "$stdin_forward_pid" 2>/dev/null || :
+    wait "$stdin_forward_pid" 2>/dev/null || :
+  fi
+  return "$rc"
 }
 alias git='git-ipc'
 return 0
