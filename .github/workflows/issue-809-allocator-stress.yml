@@ -31,6 +31,7 @@ jobs:
           export GIT809_MANAGER_PYTHON="$(cygpath -w "$PYTHON_EXE")"
           export GIT809_WORKER_GIT="$(cygpath -w "$PWD/git.exe")"
           export GIT809_DRAIN_MODE=chunk100
+          export GIT809_TRACE=1
           mkdir -p git809-stream-results
           "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_git_ipc_pool.py experiments/issue-809/test_allocator_probe_hold.py experiments/issue-809/test_windows_transport_selection.py
           "$PYTHON_EXE" experiments/issue-809/test_windows_transport_selection.py
@@ -41,7 +42,17 @@ jobs:
           # produces the manager diagnostic instead of consuming the 45m job.
           git-ipc --version >git809-stream-results/smoke.out &
           smoke_pid=$!
-          ( sleep 30; kill -TERM "$smoke_pid" 2>/dev/null || :; sleep 2; kill -KILL "$smoke_pid" 2>/dev/null || : ) &
+          # MSYS signals do not reliably interrupt a blocked native pipe open.
+          # Kill only the smoke subshell by native Windows PID on timeout.
+          ( sleep 30
+            if kill -0 "$smoke_pid" 2>/dev/null; then
+              native_smoke_pid=$(cat "/proc/$smoke_pid/winpid" 2>/dev/null || :)
+              if [[ $native_smoke_pid =~ ^[1-9][0-9]*$ ]]; then
+                taskkill.exe /F /T /PID "$native_smoke_pid" >/dev/null 2>&1 || :
+              fi
+              kill -KILL "$smoke_pid" 2>/dev/null || :
+            fi
+          ) &
           watchdog_pid=$!
           smoke_rc=0
           wait "$smoke_pid" || smoke_rc=$?
