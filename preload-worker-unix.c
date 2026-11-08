@@ -122,12 +122,17 @@ int git_preload_unix_worker(const char *directory)
   close(fd[1]); fd[1] = -1;
 
   /* Defer Git initialization until after the command arrives. */
-  init_git(args);
   preload_exit_active = 1;
-  if (!setjmp(preload_exit_jump))
+  set_preload_exit_callback(git_preload_worker_exit);
+  if (!setjmp(preload_exit_jump)) {
+    init_git(args);
     rc = cmd_main(count, args);
-  else
+    set_preload_exit_callback(NULL);
+    rc = common_exit(__FILE__, __LINE__, rc);
+  } else {
     rc = preload_exit_status;
+  }
+  set_preload_exit_callback(NULL);
   preload_exit_active = 0;
 
   fflush(stdout);
