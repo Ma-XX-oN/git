@@ -39,6 +39,9 @@ K.FlushFileBuffers.argtypes=[W.HANDLE]
 K.FlushFileBuffers.restype=W.BOOL
 K.CloseHandle.argtypes=[W.HANDLE]
 K.CloseHandle.restype=W.BOOL
+K.GetCurrentProcess.restype=W.HANDLE
+K.GetProcessHandleCount.argtypes=[W.HANDLE,C.POINTER(W.DWORD)]
+K.GetProcessHandleCount.restype=W.BOOL
 INVALID=C.c_void_p(-1).value
 WAIT_TIMEOUT=258
 SYNCHRONIZE=0x00100000
@@ -80,18 +83,36 @@ class Pool:
     self.lock=threading.Lock()
     self.closing=threading.Event()
     self.errors=[]
+    self.allocations=0
+
+  def reap_completed(self):
+    """Release completed worker process objects while retaining live workers."""
+    with self.lock:
+      self.children=[child for child in self.children if child.poll() is None]
 
   def spawn(self):
     if self.closing.is_set():
       return
-    p=subprocess.Popen([str(self.git),"--preload"],
-      stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,
-      bufsize=0)
+    try:
+      p=subprocess.Popen([str(self.git),"--preload"],
+        stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,
+        bufsize=0)
+    except OSError as error:
+      with self.lock:
+        self.errors.append("worker spawn failed: "+repr(error))
+      print("WORKER_SPAWN_FAILED "+repr(error),flush=True)
+      return
     with self.lock:
       self.children.append(p)
-    line=p.stdout.readline()
+    try:
+      line=p.stdout.readline()
+    finally:
+      # READY is the only startup-pipe message. The four native named pipes
+      # carry the command; retaining each startup pipe leaks a manager handle.
+      p.stdout.close()
     if line != ("READY "+str(p.pid)+"\n").encode("ascii"):
-      self.errors.append("worker readiness failed: pid="+str(p.pid)+" response="+repr(line))
+      with self.lock:
+        self.errors.append("worker readiness failed: pid="+str(p.pid)+" response="+repr(line))
       if p.poll() is None:
         p.kill()
       return
@@ -99,6 +120,7 @@ class Pool:
       if p.poll() is None:
         p.kill()
       return
+    self.reap_completed()
     self.ready.put(p)
     print("WORKER_READY "+str(p.pid),flush=True)
 
@@ -112,6 +134,15 @@ class Pool:
       return "WAIT\n"
     # Start replacement before replying to client. Never join this thread.
     threading.Thread(target=self.spawn,daemon=True).start()
+    self.allocations+=1
+    if self.allocations % 100 == 0:
+      handles=W.DWORD()
+      if K.GetProcessHandleCount(K.GetCurrentProcess(),C.byref(handles)):
+        with self.lock:
+          retained=len(self.children)
+        print(f"ALLOC_RESOURCE allocations={self.allocations} "
+              f"manager_handles={handles.value} tracked_workers={retained}",
+              flush=True)
     print("ALLOCATED "+str(p.pid),flush=True)
     return str(p.pid)+"\n"
 
