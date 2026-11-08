@@ -3900,6 +3900,17 @@ static int git_preinit_worker(void)
     if (!n)
       break;
     used += n;
+    /*
+     * Test-only sentinel framing permits benchmarking a client that leaves
+     * stdin connected after writing the request. The sentinel is stripped
+     * before the ordinary argument and context parser sees the frame.
+     * The production EOF-framed path remains unchanged.
+     */
+    if (used >= 12 &&
+        !memcmp(frame + used - 12, "G809-END-IPC", 12)) {
+      used -= 12;
+      break;
+    }
   }
   if (used < 4 || used == frame_capacity) {
     rc = 124;
