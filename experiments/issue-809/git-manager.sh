@@ -74,6 +74,12 @@ fi
 
 # Request a worker PID, then talk directly to its four pipe endpoints.
 # The Python manager only allocates IDs; it never forwards Git output.
+# Preserve the shell's original stdin so ordinary Git commands do not
+# spawn a pump just because the invoking environment itself uses a FIFO.
+if [[ -z ${_GIT809_BASE_STDIN_FD:-} ]]; then
+  exec {_GIT809_BASE_STDIN_FD}<&0 || return 255
+fi
+
 _git809_git_ipc_impl() {
   if [[ -z ${_GIT809_OWNER_WINPID:-} || $# -gt 31 ]]; then
     printf 'git-ipc requires a running manager and at most 31 arguments\n' >&2
@@ -150,7 +156,8 @@ _git809_git_ipc_impl() {
   # The Windows stdin pipe is duplex only for its T marker. Forward
   # subsequent application bytes in the client->worker direction. No extra
   # child is started for the normal no-input case.
-  if [[ -p /dev/fd/0 || -f /dev/fd/0 ]]; then
+  if [[ ( -p /dev/fd/0 || -f /dev/fd/0 ) &&
+          ! /dev/fd/0 -ef /dev/fd/$_GIT809_BASE_STDIN_FD ]]; then
     # Close the control writer in the pump: the worker waits for its EOF.
     # Also drop unrelated worker channels inherited by the child.
     cat <&0 >&8 8>&- 7>&- 4<&- 5<&- 6<&- &
