@@ -1,7 +1,5 @@
 name: Git 809 native preload Unix IPC smoke
 on:
-  push:
-    branches: [feature/git-preinit-windows-upstream]
   workflow_dispatch:
 permissions:
   contents: read
