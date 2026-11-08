@@ -3793,6 +3793,58 @@ static int git_preinit_connect(HANDLE h, int probe_instance)
          (probe_instance && error == ERROR_NO_DATA);
 }
 
+/*
+ * The manager transfers each worker to git-ipc at allocation time. Keep an
+ * independent reference to the owning Bash process so an abandoned worker
+ * terminates even if it is blocked on a named pipe.
+ *
+ * Waiting on the process handle is stronger than polling its PID: it wakes
+ * when the original process exits and cannot confuse a reused numeric PID.
+ */
+static DWORD WINAPI git_preinit_watch_owner(LPVOID context)
+{
+  HANDLE owner = (HANDLE)context;
+  WaitForSingleObject(owner, INFINITE);
+  ExitProcess(137);
+  return 0;
+}
+
+static int git_preinit_start_owner_watch(void)
+{
+  char value[32];
+  DWORD count, pid = 0, i;
+  HANDLE owner, thread;
+
+  count = GetEnvironmentVariableA("GIT809_PRELOAD_OWNER_WINPID",
+                                  value, sizeof(value));
+  if (!count || count >= sizeof(value))
+    return -1;
+  for (i = 0; i < count; i++) {
+    unsigned char c = value[i];
+    if (c < '0' || c > '9' ||
+        pid > (0xffffffffUL - (c - '0')) / 10)
+      return -1;
+    pid = pid * 10 + c - '0';
+  }
+  if (!pid)
+    return -1;
+  owner = OpenProcess(SYNCHRONIZE, FALSE, pid);
+  if (!owner)
+    return -1;
+  if (WaitForSingleObject(owner, 0) != WAIT_TIMEOUT) {
+    CloseHandle(owner);
+    return -1;
+  }
+  thread = CreateThread(NULL, 0, git_preinit_watch_owner, owner, 0, NULL);
+  if (!thread) {
+    CloseHandle(owner);
+    return -1;
+  }
+  CloseHandle(thread);
+  /* The watcher owns the process handle until this worker exits. */
+  return 0;
+}
+
 static int git_preinit_worker(void)
 {
   char names[4][96];
@@ -3815,6 +3867,10 @@ static int git_preinit_worker(void)
   for (i = 0; i < 4; i++)
     for (j = 0; j < 2; j++)
       pipes[i][j] = INVALID_HANDLE_VALUE;
+  if (git_preinit_start_owner_watch()) {
+    rc = 136;
+    goto cleanup;
+  }
   frame = malloc(frame_capacity);
   if (!frame) {
     rc = 135;
