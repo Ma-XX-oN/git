@@ -32,6 +32,7 @@ jobs:
           export GIT809_WORKER_GIT="$(cygpath -w "$PWD/git.exe")"
           export GIT809_DRAIN_MODE=chunk100
           mkdir -p git809-stream-results
+          export GIT809_TIMING_LOG="$PWD/git809-stream-results/phases.csv"
           bash -n experiments/issue-809/git-ipc-request.sh || exit 21
           source experiments/issue-809/git-manager.sh 3 || exit 22
           [[ "$(git-ipc --version)" == "$("$GIT809_WORKER_GIT" --version)" ]] || exit 23
@@ -73,6 +74,14 @@ jobs:
               values=[float((Decimal(r[end])-Decimal(r[begin]))*1000) for r in subset]
               assert min(values)>0,(mode,kind,values)
               print('GIT809_DRAIN_AB',mode,kind,'median_ms',round(statistics.median(values),4),flush=True)
+          phases=list(csv.reader(open('git809-stream-results/phases.csv',newline='',encoding='utf-8')))
+          assert len(phases)>=40,len(phases)
+          stages=list(zip(*[
+            [float((Decimal(row[i+1])-Decimal(row[i]))*1000) for i in range(5)]
+            for row in phases[-40:]
+          ]))
+          for name,values in zip(('allocate','connect','request','drain','status'),stages):
+            print('GIT809_PHASE',name,'median_ms',round(statistics.median(values),4),flush=True)
           print('GIT809_DRAIN_SHA',os.environ['GITHUB_SHA'])
           PY
       - name: Preserve timings
