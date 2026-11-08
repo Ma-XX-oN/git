@@ -155,6 +155,16 @@ jobs:
           selected_names=[row[0] for row in selected_ids]
           assert len(set(selected_names))==len(selected_names),('duplicate reply selection',len(selected_names))
           assert set(selected_names)==set(request_ids),('unselected reply',len(selected_names))
+          pair_traces=re.findall(r'^REPLY_PAIR_TRACE request_id=([0-9]+-[0-9]+) slot0=([01]):([0-9]+):([0-9a-f-]+) slot1=([01]):([0-9]+):([0-9a-f-]+)$',log,re.M)
+          assert len(pair_traces)==len(selected_ids),('missing pair trace',len(pair_traces),len(selected_ids))
+          assert set(row[0] for row in pair_traces)==set(request_ids),'reply-pair trace identity mismatch'
+          for req,ok0,count0,byte0,ok1,count1,byte1 in pair_traces:
+            marker=format(ord(str(int(req.rsplit('-',1)[1])%10)),'02x')
+            assert (byte0==marker) != (byte1==marker),(req,byte0,byte1,marker)
+          from collections import Counter
+          grants=Counter(re.findall(r'^ALLOCATED ([0-9]+)$',log,re.M))
+          replies=Counter(pid for _,pid in reply_ids if pid!='WAIT')
+          assert grants==replies,('worker PID grant/reply mismatch',grants-replies,replies-grants)
           assert all(int(req.split('-')[1])%10==int(digit) for req,digit,*_ in selected_ids),('reply-marker mismatch',selected_ids[:5])
           # Only a single transport for each request may carry the marker;
           # the other named-pipe instance is an unmarked Git Bash probe.
