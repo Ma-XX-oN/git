@@ -6,7 +6,7 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/git-ipc-request.sh" || return 1
 _git809_source_manager() {
   local requested
   requested=$1
-  [[ -n $requested ]] || requested=4
+  [[ -n $requested ]] || requested=3
   if [[ ! $requested =~ ^[1-9][0-9]*$ ]] ||
      (( ${#requested} > 2 || requested > 32 )); then
     printf 'worker count must be an integer from 1 to 32\n' >&2
