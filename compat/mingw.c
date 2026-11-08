@@ -3781,72 +3781,69 @@ NORETURN void git_preinit_worker_exit(int status)
  */
 /*
  * Git Bash can open a throwaway pipe instance during redirection.
- * Each instance is connected independently; a client-sent decimal digit
- * identifies the transport, and must match across all five channels.
- *
- * ConnectNamedPipe is synchronous for these handles. Put both connection
- * waits on cancellable threads; the selected handle remains synchronous
- * for Git's ordinary stream I/O.
+ * Both instances are started on this worker thread, with separate overlapped
+ * connection/marker-read events. A marker identifies the real transport.
+ * All five logical channels are selected serially.
  */
 struct git809_connect_state {
   HANDLE pipe;
-  HANDLE thread;
-  volatile LONG complete;
-  DWORD error;
-  char marker;
+  OVERLAPPED overlap;
+  HANDLE event;
+  DWORD stage;
+  int pending;
   int marked;
+  char marker;
 };
 
-static DWORD WINAPI git809_connect_thread(LPVOID context)
+/* Start a one-byte read only after this pipe instance is connected. */
+static int git809_start_marker_read(struct git809_connect_state *state)
 {
-  struct git809_connect_state *state = context;
-  BOOL ok = ConnectNamedPipe(state->pipe, NULL);
-  DWORD error = ok ? ERROR_SUCCESS : GetLastError();
+  DWORD n = 0, error;
 
-  if (error == ERROR_SUCCESS || error == ERROR_PIPE_CONNECTED) {
-    DWORD received = 0;
-    if (ReadFile(state->pipe, &state->marker, 1, &received, NULL) &&
-        received == 1) {
-      state->marked = 1;
-      error = ERROR_SUCCESS;
-    } else {
-      error = GetLastError();
-      if (error == ERROR_SUCCESS)
-        error = ERROR_BROKEN_PIPE;
+  state->stage = 1;
+  ResetEvent(state->event);
+  if (ReadFile(state->pipe, &state->marker, 1, &n, &state->overlap)) {
+    state->pending = 0;
+    state->marked = (n == 1);
+    state->stage = 2;
+    return 0;
+  }
+  error = GetLastError();
+  if (error == ERROR_IO_PENDING) {
+    state->pending = 1;
+    return 0;
+  }
+  if (error == ERROR_BROKEN_PIPE || error == ERROR_NO_DATA) {
+    state->pending = 0;
+    state->stage = 2;
+    return 0;
+  }
+  return -1;
+}
+
+/* A completed connect advances to the marker read on the same thread. */
+static int git809_advance_connect(struct git809_connect_state *state)
+{
+  DWORD n;
+
+  if (state->pending) {
+    if (WaitForSingleObject(state->event, 0) != WAIT_OBJECT_0)
+      return 0;
+    if (!GetOverlappedResult(state->pipe, &state->overlap, &n, FALSE)) {
+      DWORD error = GetLastError();
+      state->pending = 0;
+      if (error == ERROR_OPERATION_ABORTED ||
+          error == ERROR_BROKEN_PIPE || error == ERROR_NO_DATA) {
+        state->stage = 2;
+        return 0;
+      }
+      return -1;
     }
+    state->pending = 0;
   }
-  state->error = error;
-  InterlockedExchange(&state->complete, 1);
-  return 0;
+  return git809_start_marker_read(state);
 }
 
-static void git809_finish_connect(struct git809_connect_state *state)
-{
-  if (!state->thread)
-    return;
-  trace_printf_key(&git809_preload_trace,
-    "pid=%lu connect-finish begin pipe=%p complete=%ld\n",
-    GetCurrentProcessId(), state->pipe,
-    InterlockedCompareExchange(&state->complete, 0, 0));
-  if (!InterlockedCompareExchange(&state->complete, 0, 0)) {
-    BOOL cancelled = CancelSynchronousIo(state->thread);
-    DWORD error = cancelled ? ERROR_SUCCESS : GetLastError();
-    trace_printf_key(&git809_preload_trace,
-      "pid=%lu connect-cancel pipe=%p ok=%d error=%lu\n",
-      GetCurrentProcessId(), state->pipe, cancelled, error);
-  }
-  WaitForSingleObject(state->thread, INFINITE);
-  trace_printf_key(&git809_preload_trace,
-    "pid=%lu connect-finish done pipe=%p error=%lu\n",
-    GetCurrentProcessId(), state->pipe, state->error);
-  CloseHandle(state->thread);
-  state->thread = NULL;
-}
-
-/*
- * Consume the marker, never forwarding it to Git or its caller.
- * Unused probe handles are closed only after their connect waits finish.
- */
 enum transport_result {
   TRANSPORT_OK = 0,
   TRANSPORT_TIMEOUT = 1,
@@ -3856,52 +3853,118 @@ enum transport_result {
 };
 
 /*
- * Takes ownership of pair[0] and pair[1]. On success, only *transport
- * remains open. On any error, both instances are closed and *transport
- * remains INVALID_HANDLE_VALUE.
+ * Takes ownership of pair[0] and pair[1]. Both instances are overlapped
+ * only to select their connection and read the initial marker, without any
+ * helper threads or timer polling. The selected instance is then handed
+ * to the existing Git I/O path; application bytes are not read here.
  */
 static int select_transport(HANDLE pair[2], DWORD timeout_ms,
                             HANDLE *transport, char expected,
                             char *observed)
 {
-  struct git809_connect_state state[2] = {0};
+  struct git809_connect_state state[2] = {{0}};
   DWORD start = GetTickCount();
-  HANDLE chosen = INVALID_HANDLE_VALUE;
-  int i, processed[2] = {0}, result = TRANSPORT_TIMEOUT;
+  int i, result = TRANSPORT_TIMEOUT, chosen = -1;
 
   if (!transport || !observed || !timeout_ms)
     return TRANSPORT_WIN32_ERROR;
   *transport = INVALID_HANDLE_VALUE;
   *observed = 0;
+
   for (i = 0; i < 2; i++) {
+    DWORD error;
     state[i].pipe = pair[i];
-    state[i].thread = CreateThread(NULL, 0, git809_connect_thread,
-                                   &state[i], 0, NULL);
-    if (!state[i].thread) {
+    state[i].event = CreateEvent(NULL, TRUE, FALSE, NULL);
+    if (!state[i].event) {
       result = TRANSPORT_WIN32_ERROR;
       goto done;
     }
+    state[i].overlap.hEvent = state[i].event;
+    if (ConnectNamedPipe(pair[i], &state[i].overlap)) {
+      state[i].stage = 1;
+      if (git809_start_marker_read(&state[i])) {
+        result = TRANSPORT_WIN32_ERROR;
+        goto done;
+      }
+      continue;
+    }
+    error = GetLastError();
+    if (error == ERROR_IO_PENDING) {
+      state[i].pending = 1;
+      continue;
+    }
+    if (error == ERROR_PIPE_CONNECTED) {
+      if (git809_start_marker_read(&state[i])) {
+        result = TRANSPORT_WIN32_ERROR;
+        goto done;
+      }
+      continue;
+    }
+    result = TRANSPORT_WIN32_ERROR;
+    goto done;
   }
-  /*
-   * Each connection thread blocks until it reads a marker or its probe
-   * disconnects. Wait for completion instead of polling PeekNamedPipe
-   * with Sleep(1), whose scheduler delay accumulates across channels.
-   */
+
   for (;;) {
-    HANDLE pending[2];
-    int indices[2], count = 0, selected = -1;
-    DWORD elapsed = GetTickCount() - start;
-    DWORD wait_result;
+    HANDLE events[2];
+    int indices[2], count = 0, marked = 0;
+    DWORD elapsed, wait_result;
 
     for (i = 0; i < 2; i++) {
-      if (!processed[i]) {
-        pending[count] = state[i].thread;
-        indices[count++] = i;
+      if (state[i].stage == 0) {
+        if (git809_advance_connect(&state[i])) {
+          result = TRANSPORT_WIN32_ERROR;
+          goto done;
+        }
+      }
+      if (state[i].stage == 1 && state[i].pending &&
+          WaitForSingleObject(state[i].event, 0) == WAIT_OBJECT_0) {
+        DWORD n = 0;
+        if (GetOverlappedResult(state[i].pipe, &state[i].overlap,
+                                &n, FALSE))
+          state[i].marked = (n == 1);
+        else {
+          DWORD error = GetLastError();
+          if (error != ERROR_BROKEN_PIPE && error != ERROR_NO_DATA &&
+              error != ERROR_OPERATION_ABORTED) {
+            result = TRANSPORT_WIN32_ERROR;
+            goto done;
+          }
+        }
+        state[i].pending = 0;
+        state[i].stage = 2;
+      }
+      if (state[i].marked) {
+        marked++;
+        chosen = i;
       }
     }
-    if (!count || elapsed >= timeout_ms)
+    if (marked > 1) {
+      result = TRANSPORT_DUPLICATE_MARKER;
+      goto done;
+    }
+    if (marked == 1) {
+      if (state[chosen].marker < '0' ||
+          state[chosen].marker > '9' ||
+          (expected && state[chosen].marker != expected)) {
+        result = TRANSPORT_INVALID_MARKER;
+        goto done;
+      }
+      *observed = state[chosen].marker;
+      result = TRANSPORT_OK;
       break;
-    wait_result = WaitForMultipleObjects(count, pending, FALSE,
+    }
+    elapsed = GetTickCount() - start;
+    if (elapsed >= timeout_ms)
+      break;
+    for (i = 0; i < 2; i++) {
+      if (state[i].pending) {
+        indices[count] = i;
+        events[count++] = state[i].event;
+      }
+    }
+    if (!count)
+      break;
+    wait_result = WaitForMultipleObjects(count, events, FALSE,
                                          timeout_ms - elapsed);
     if (wait_result == WAIT_TIMEOUT)
       break;
@@ -3910,33 +3973,30 @@ static int select_transport(HANDLE pair[2], DWORD timeout_ms,
       result = TRANSPORT_WIN32_ERROR;
       goto done;
     }
-    i = indices[wait_result - WAIT_OBJECT_0];
-    processed[i] = 1;
-    if (state[0].marked && state[1].marked) {
-      result = TRANSPORT_DUPLICATE_MARKER;
-      goto done;
-    }
-    if (!state[i].marked)
-      continue;
-    selected = i;
-    if (state[selected].marker < '0' ||
-        state[selected].marker > '9' ||
-        (expected && state[selected].marker != expected)) {
-      result = TRANSPORT_INVALID_MARKER;
-      goto done;
-    }
-    *observed = state[selected].marker;
-    chosen = pair[selected];
-    pair[selected] = INVALID_HANDLE_VALUE;
-    result = TRANSPORT_OK;
-    break;
+    (void)indices;
   }
+
 done:
   trace_printf_key(&git809_preload_trace,
-    "pid=%lu select cleanup result=%d chosen=%p\\n",
+    "pid=%lu select cleanup result=%d selected=%d\\n",
     GetCurrentProcessId(), result, chosen);
-  for (i = 0; i < 2; i++)
-    git809_finish_connect(&state[i]);
+  for (i = 0; i < 2; i++) {
+    if (state[i].pending) {
+      DWORD n;
+      if (!CancelIoEx(pair[i], &state[i].overlap) &&
+          GetLastError() != ERROR_NOT_FOUND)
+        result = TRANSPORT_WIN32_ERROR;
+      /* The OVERLAPPED storage must outlive cancellation completion. */
+      GetOverlappedResult(pair[i], &state[i].overlap, &n, TRUE);
+      state[i].pending = 0;
+    }
+    if (state[i].event)
+      CloseHandle(state[i].event);
+  }
+  if (result == TRANSPORT_OK && chosen >= 0) {
+    *transport = pair[chosen];
+    pair[chosen] = INVALID_HANDLE_VALUE;
+  }
   for (i = 0; i < 2; i++) {
     if (pair[i] != INVALID_HANDLE_VALUE) {
       DisconnectNamedPipe(pair[i]);
@@ -3944,8 +4004,6 @@ done:
       pair[i] = INVALID_HANDLE_VALUE;
     }
   }
-  if (result == TRANSPORT_OK)
-    *transport = chosen;
   return result;
 }
 
@@ -4128,7 +4186,7 @@ static int git_preinit_worker(void)
       goto cleanup;
     for (j = 0; j < 2; j++) {
       pipes[i][j] = CreateNamedPipeA(names[i],
-        PIPE_ACCESS_DUPLEX |
+        PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED |
           (j == 0 ? FILE_FLAG_FIRST_PIPE_INSTANCE : 0),
         PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
         2, 65536, 65536, 5000, &security_attributes);
