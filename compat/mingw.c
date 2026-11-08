@@ -3821,27 +3821,43 @@ static int git809_start_marker_read(struct git809_connect_state *state)
   return -1;
 }
 
-/* A completed connect advances to the marker read on the same thread. */
-static int git809_advance_connect(struct git809_connect_state *state)
+/*
+ * Check one candidate without waiting. Return its actual marker (1..255),
+ * zero while the operation is pending, -1 for an abandoned probe, and -2
+ * for a Win32 failure. Each overlapped operation is completed before the
+ * next one reuses its buffer and OVERLAPPED structure.
+ */
+static int git809_check_marker(struct git809_connect_state *state)
 {
-  DWORD n;
+  DWORD bytes = 0;
 
+  if (state->stage == 2)
+    return state->marked ? (unsigned char)state->marker : -1;
   if (state->pending) {
     if (WaitForSingleObject(state->event, 0) != WAIT_OBJECT_0)
       return 0;
-    if (!GetOverlappedResult(state->pipe, &state->overlap, &n, FALSE)) {
+    if (!GetOverlappedResult(state->pipe, &state->overlap, &bytes, FALSE)) {
       DWORD error = GetLastError();
       state->pending = 0;
-      if (error == ERROR_OPERATION_ABORTED ||
-          error == ERROR_BROKEN_PIPE || error == ERROR_NO_DATA) {
+      if (error == ERROR_BROKEN_PIPE || error == ERROR_NO_DATA ||
+          error == ERROR_OPERATION_ABORTED) {
         state->stage = 2;
-        return 0;
+        return -1;
       }
-      return -1;
+      return -2;
     }
     state->pending = 0;
+    if (state->stage == 1) {
+      state->stage = 2;
+      state->marked = (bytes == 1);
+      return state->marked ? (unsigned char)state->marker : -1;
+    }
   }
-  return git809_start_marker_read(state);
+  if (state->stage == 0 && git809_start_marker_read(state))
+    return -2;
+  if (state->stage == 2)
+    return state->marked ? (unsigned char)state->marker : -1;
+  return 0;
 }
 
 enum transport_result {
@@ -3905,44 +3921,29 @@ static int select_transport(HANDLE pair[2], DWORD timeout_ms,
   }
 
   for (;;) {
-    HANDLE events[2];
-    int indices[2], count = 0, marked = 0;
+    HANDLE waiting[2];
+    int count = 0, seen = 0;
     DWORD elapsed, wait_result;
 
+    /* Inspect both candidates before selecting: two markers are an error. */
     for (i = 0; i < 2; i++) {
-      if (state[i].stage == 0) {
-        if (git809_advance_connect(&state[i])) {
-          result = TRANSPORT_WIN32_ERROR;
-          goto done;
-        }
+      int marker = git809_check_marker(&state[i]);
+      if (marker == -2) {
+        result = TRANSPORT_WIN32_ERROR;
+        goto done;
       }
-      if (state[i].stage == 1 && state[i].pending &&
-          WaitForSingleObject(state[i].event, 0) == WAIT_OBJECT_0) {
-        DWORD n = 0;
-        if (GetOverlappedResult(state[i].pipe, &state[i].overlap,
-                                &n, FALSE))
-          state[i].marked = (n == 1);
-        else {
-          DWORD error = GetLastError();
-          if (error != ERROR_BROKEN_PIPE && error != ERROR_NO_DATA &&
-              error != ERROR_OPERATION_ABORTED) {
-            result = TRANSPORT_WIN32_ERROR;
-            goto done;
-          }
-        }
-        state[i].pending = 0;
-        state[i].stage = 2;
-      }
-      if (state[i].marked) {
-        marked++;
+      if (marker > 0) {
+        seen++;
         chosen = i;
       }
+      if (state[i].pending)
+        waiting[count++] = state[i].event;
     }
-    if (marked > 1) {
+    if (seen == 2) {
       result = TRANSPORT_DUPLICATE_MARKER;
       goto done;
     }
-    if (marked == 1) {
+    if (seen == 1) {
       if (state[chosen].marker < '0' ||
           state[chosen].marker > '9' ||
           (expected && state[chosen].marker != expected)) {
@@ -3954,17 +3955,9 @@ static int select_transport(HANDLE pair[2], DWORD timeout_ms,
       break;
     }
     elapsed = GetTickCount() - start;
-    if (elapsed >= timeout_ms)
+    if (!count || elapsed >= timeout_ms)
       break;
-    for (i = 0; i < 2; i++) {
-      if (state[i].pending) {
-        indices[count] = i;
-        events[count++] = state[i].event;
-      }
-    }
-    if (!count)
-      break;
-    wait_result = WaitForMultipleObjects(count, events, FALSE,
+    wait_result = WaitForMultipleObjects(count, waiting, FALSE,
                                          timeout_ms - elapsed);
     if (wait_result == WAIT_TIMEOUT)
       break;
@@ -3973,12 +3966,10 @@ static int select_transport(HANDLE pair[2], DWORD timeout_ms,
       result = TRANSPORT_WIN32_ERROR;
       goto done;
     }
-    (void)indices;
   }
-
 done:
   trace_printf_key(&git809_preload_trace,
-    "pid=%lu select cleanup result=%d selected=%d\\n",
+    "pid=%lu select cleanup result=%d selected=%d\n",
     GetCurrentProcessId(), result, chosen);
   for (i = 0; i < 2; i++) {
     if (state[i].pending) {
