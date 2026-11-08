@@ -3818,6 +3818,9 @@ static int git809_start_marker_read(struct git809_connect_state *state)
     state->stage = 2;
     return 0;
   }
+  trace_printf_key(&git809_preload_trace,
+    "pid=%lu marker-read error=%lu pipe=%p\n",
+    GetCurrentProcessId(), error, state->pipe);
   return -1;
 }
 
@@ -3844,6 +3847,9 @@ static int git809_check_marker(struct git809_connect_state *state)
         state->stage = 2;
         return -1;
       }
+      trace_printf_key(&git809_preload_trace,
+        "pid=%lu marker-completion error=%lu pipe=%p stage=%lu\n",
+        GetCurrentProcessId(), error, state->pipe, state->stage);
       return -2;
     }
     state->pending = 0;
@@ -3916,6 +3922,9 @@ static int select_transport(HANDLE pair[2], DWORD timeout_ms,
       }
       continue;
     }
+    trace_printf_key(&git809_preload_trace,
+      "pid=%lu connect error=%lu pipe=%p index=%d\n",
+      GetCurrentProcessId(), error, pair[i], i);
     result = TRANSPORT_WIN32_ERROR;
     goto done;
   }
