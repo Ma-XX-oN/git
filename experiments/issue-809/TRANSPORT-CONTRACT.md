@@ -73,9 +73,14 @@ The **five Git worker data channels** (`stdin`, `param-env-cwd`,
 `stdout`, `stderr`, `exit-code`) also use the same rotating decimal
 marker **in place of `T`**. The native Windows worker accepts the first
 channel's decimal marker and requires the identical marker on each of the
-remaining four channels. A different digit fails closed; it cannot be
-interpreted as a second valid call. The worker does not create another
-process to validate the marker.
+remaining four channels. After consuming each marker, the worker sends a
+single ASCII `A` **connection acknowledgment on that same native duplex
+instance**. Bash waits for `A` before opening the next worker channel
+or closing stdin. This avoids losing the stdin connection before the
+worker has selected it. The acknowledgment is handshake metadata, not
+application stdout/stderr or reverse-direction Git data. A different
+digit or invalid acknowledgment fails closed. No extra helper process
+is launched per Git command.
 
 No simultaneous `git-ipc` calls are authorized in this experiment.
 A single request completes before the next starts; the manager may
