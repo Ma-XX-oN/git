@@ -1,0 +1,78 @@
+name: RWF 809 Windows Detours termination diagnostic
+on:
+  push:
+    branches: [investigation-809-exit-detours]
+    paths:
+      - experiments/issue-809/detours_exit_trace.cpp
+      - experiments/issue-809/detours_exit_trace.def
+      - experiments/issue-809/detours_launcher.cpp
+      - experiments/issue-809/test_detours_exit_worker.py
+      - .github/workflows/issue-809-exit-detours.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-native-detours:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64
+      - name: Build same-SHA native Git worker
+        shell: bash
+        run: |
+          . /etc/profile
+          make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git.exe
+      - name: Build pinned Microsoft Detours 4.0.1 and instrumentation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $cl = (Get-Command cl.exe -CommandType Application).Source
+          $msvcBin = Split-Path $cl -Parent
+          $link = Join-Path $msvcBin 'link.exe'
+          if (-not (Test-Path $link)) { throw "Missing MSVC linker: $link" }
+          $env:PATH = "$msvcBin;$env:PATH"
+          git clone --quiet --no-checkout https://github.com/microsoft/Detours.git "$env:RUNNER_TEMP\detours"
+          if ($LASTEXITCODE -ne 0) { throw 'Detours download failed' }
+          git -C "$env:RUNNER_TEMP\detours" checkout --detach e4bfd6b03e50de46b47abfbd1e46b384f0c5f833
+          if ($LASTEXITCODE -ne 0) { throw 'Detours SHA mismatch' }
+          Push-Location "$env:RUNNER_TEMP\detours\src"
+          try {
+            nmake /nologo
+            if ($LASTEXITCODE -ne 0) { throw 'Detours compilation failed' }
+          } finally { Pop-Location }
+          $include = "$env:RUNNER_TEMP\detours\src"
+          $library = "$env:RUNNER_TEMP\detours\lib.X64\detours.lib"
+          if (-not (Test-Path $library)) { throw 'Detours library missing' }
+          $dir = "experiments\issue-809"
+          cl /nologo /std:c++17 /EHsc /W4 /WX /MT /LD "/I$include" "$dir\detours_exit_trace.cpp" /link "/OUT:$env:RUNNER_TEMP\git809_detours_exit.dll" "/DEF:$dir\detours_exit_trace.def" $library
+          if ($LASTEXITCODE -ne 0) { throw 'Detours exit tracer compilation failed' }
+          cl /nologo /std:c++17 /EHsc /W4 /WX /MT "/I$include" "$dir\detours_launcher.cpp" /link "/OUT:$env:RUNNER_TEMP\git809_detours_launcher.exe" $library
+          if ($LASTEXITCODE -ne 0) { throw 'Detours launcher compilation failed' }
+          Get-FileHash "$env:RUNNER_TEMP\git809_detours_exit.dll" -Algorithm SHA256
+          Get-FileHash "$env:RUNNER_TEMP\git809_detours_launcher.exe" -Algorithm SHA256
+      - name: Trace exact-SHA worker exit entry points
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force exit-detours-results | Out-Null
+          python -m py_compile experiments/issue-809/test_detours_exit_worker.py
+          if ($LASTEXITCODE -ne 0) { throw 'Python syntax check failed' }
+          python experiments/issue-809/test_detours_exit_worker.py "$env:RUNNER_TEMP\git809_detours_launcher.exe" "$env:RUNNER_TEMP\git809_detours_exit.dll" "$env:GITHUB_WORKSPACE\git.exe" "$env:GITHUB_WORKSPACE\exit-detours-results"
+          if ($LASTEXITCODE -ne 0) { throw 'Detours worker exit-path test failed' }
+          Write-Output "GIT809_EXIT_DETOURS_SHA=$env:GITHUB_SHA"
+      - name: Preserve source and exit diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-windows-exit-detours
+          path: exit-detours-results/
+          if-no-files-found: warn
