@@ -3749,15 +3749,9 @@ static BOOL WINAPI handle_ctrl_c(DWORD ctrl_type)
  * To be more compatible with the core git code, we convert
  * argv into UTF8 and pass them directly to main().
  */
-#include <setjmp.h>
-static jmp_buf git_preinit_jump;
 /* Set GIT_TRACE_GIT809_PRELOAD to an absolute file path for worker diagnostics. */
 static struct trace_key git809_preload_trace = TRACE_KEY_INIT(GIT809_PRELOAD);
-static volatile int git_preinit_active;
-static volatile int git_preinit_exit_status;
-/* Diagnostic control: publish status before allowing the real exit(). */
-static int git_preinit_direct_exit;
-static HANDLE *git_preinit_direct_status;
+static HANDLE *git_preinit_status_pipe;
 
 /*
  * Snapshot the trace path before Git can modify its environment. CRT shutdown
@@ -3820,37 +3814,29 @@ static void git_preinit_atexit_log(void)
 #undef exit
 static void git_preinit_worker_exit(int status)
 {
-  if (git_preinit_active) {
-    git_preinit_exit_diagnostic("preload exit callback", status);
-    trace_printf_key(&git809_preload_trace,
-      "pid=%lu preload exit callback status=%d\n", GetCurrentProcessId(), status);
-    git_preinit_exit_status = status;
-    if (git_preinit_direct_exit) {
-      char record[64];
-      DWORD written = 0;
-      int length = snprintf(record, sizeof(record), "EXIT %d\n", status);
-      HANDLE pipe = git_preinit_direct_status ?
-        *git_preinit_direct_status : INVALID_HANDLE_VALUE;
+  char record[64];
+  DWORD written = 0;
+  int length;
+  HANDLE pipe;
 
-      if (pipe == INVALID_HANDLE_VALUE || length < 1 ||
-          (size_t)length >= sizeof(record) ||
-          !WriteFile(pipe, record, (DWORD)length, &written, NULL) ||
-          written != (DWORD)length) {
-        git_preinit_exit_diagnostic("direct exit status write FAILED", status);
-        ExitProcess(138);
-      }
-      /* Do not FlushFileBuffers: the reader drains stdout first. */
-      if (!CloseHandle(pipe)) {
-        git_preinit_exit_diagnostic("direct exit status close FAILED", status);
-        ExitProcess(138);
-      }
-      *git_preinit_direct_status = INVALID_HANDLE_VALUE;
-      git_preinit_exit_diagnostic("direct exit status delivered", status);
-      return; /* common_exit returns to the real CRT exit(). */
-    }
-    longjmp(git_preinit_jump, 1);
+  git_preinit_exit_diagnostic("preload exit callback", status);
+  pipe = git_preinit_status_pipe ?
+    *git_preinit_status_pipe : INVALID_HANDLE_VALUE;
+  length = snprintf(record, sizeof(record), "EXIT %d\n", status);
+  if (pipe == INVALID_HANDLE_VALUE || length < 1 ||
+      (size_t)length >= sizeof(record) ||
+      !WriteFile(pipe, record, (DWORD)length, &written, NULL) ||
+      written != (DWORD)length) {
+    git_preinit_exit_diagnostic("exit status write FAILED", status);
+    ExitProcess(138);
   }
-  exit(status);
+  if (!CloseHandle(pipe)) {
+    git_preinit_exit_diagnostic("exit status close FAILED", status);
+    ExitProcess(138);
+  }
+  *git_preinit_status_pipe = INVALID_HANDLE_VALUE;
+  git_preinit_exit_diagnostic("exit status delivered", status);
+  /* Return to common_exit(), then the real CRT exit(). */
 }
 #define exit(code) exit(common_exit(__FILE__, __LINE__, (code)))
 /*
@@ -4277,7 +4263,7 @@ static int git_preinit_worker(void)
   const char *const *suffixes = git809_channel_names;
   HANDLE pipes[5][2];
   struct git809_connections connections = {0};
-  char *volatile frame = NULL;
+  char *frame = NULL;
   char result[64];
   const DWORD frame_capacity = 131072;
   DWORD used = 0, n;
@@ -4497,32 +4483,17 @@ static int git_preinit_worker(void)
     rc = 134;
     goto cleanup;
   }
-  {
-    char enabled[2] = { 0 };
-    git_preinit_direct_exit =
-      GetEnvironmentVariableA("GIT809_PRELOAD_EXIT_DIRECT", enabled,
-                              sizeof(enabled)) == 1 && enabled[0] == '1';
-    git_preinit_direct_status = &pipes[3][1];
-  }
-  git_preinit_active = 1;
+  git_preinit_status_pipe = &pipes[3][1];
   trace_printf_key(&git809_preload_trace,
     "pid=%lu command begin argc=%d\n", pid, count);
   set_preload_exit_callback(git_preinit_worker_exit);
-  if (!setjmp(git_preinit_jump)) {
-    init_git(args);
-    rc = cmd_main(count, args);
-    trace_printf_key(&git809_preload_trace,
-      "pid=%lu cmd_main returned rc=%d\n", pid, rc);
-    set_preload_exit_callback(NULL);
-    rc = common_exit(__FILE__, __LINE__, rc);
-  } else {
-    git_preinit_exit_diagnostic("longjmp resumed", git_preinit_exit_status);
-    rc = git_preinit_exit_status;
-  }
+  init_git(args);
+  rc = cmd_main(count, args);
+  trace_printf_key(&git809_preload_trace,
+    "pid=%lu cmd_main returned rc=%d\n", pid, rc);
+  rc = common_exit(__FILE__, __LINE__, rc);
   set_preload_exit_callback(NULL);
-  git_preinit_active = 0;
-  git_preinit_direct_status = NULL;
-  git_preinit_direct_exit = 0;
+  git_preinit_status_pipe = NULL;
   trace_printf_key(&git809_preload_trace,
     "pid=%lu command done rc=%d\n", pid, rc);
   fflush(stdout);
