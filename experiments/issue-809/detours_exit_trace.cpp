@@ -112,12 +112,24 @@ static void trace_fault_stack(const CONTEXT *original)
     PRUNTIME_FUNCTION function = RtlLookupFunctionEntry(
       context.Rip, &image_base, nullptr);
     char event[160];
+    char module_name[MAX_PATH] = {};
+    if (image_base) {
+      const DWORD name_length = GetModuleFileNameA(
+        reinterpret_cast<HMODULE>(static_cast<uintptr_t>(image_base)),
+        module_name, static_cast<DWORD>(sizeof(module_name)));
+      if (!name_length || name_length >= sizeof(module_name))
+        module_name[0] = 0;
+    }
+    const char *module_basename = module_name;
+    for (const char *p = module_name; *p; ++p)
+      if (*p == '\\' || *p == '/')
+        module_basename = p + 1;
     _snprintf_s(event, sizeof(event), _TRUNCATE,
-      "exception.frame=%u.pc=0x%llx.image=0x%llx.offset=0x%llx",
-      frame, static_cast<unsigned long long>(context.Rip),
-      static_cast<unsigned long long>(image_base),
+      "exception.frame=%u.module=%s.offset=0x%llx.pc=0x%llx",
+      frame, module_basename[0] ? module_basename : "unknown",
       static_cast<unsigned long long>(image_base ?
-        context.Rip - image_base : 0));
+        context.Rip - image_base : 0),
+      static_cast<unsigned long long>(context.Rip));
     emit(event, 0);
     if (!function)
       break; // Do not dereference an untrusted stack pointer.
