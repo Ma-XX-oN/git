@@ -91,6 +91,27 @@ static SignalHandler __cdecl hook_signal(int sig, SignalHandler handler)
   return real_signal(sig, handler);
 }
 
+static LONG CALLBACK trace_exception(PEXCEPTION_POINTERS exception)
+{
+  if (!exception || !exception->ExceptionRecord)
+    return EXCEPTION_CONTINUE_SEARCH;
+  const EXCEPTION_RECORD *record = exception->ExceptionRecord;
+  char event[160];
+  HMODULE module = nullptr;
+  uintptr_t offset = 0;
+  if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                         GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                         reinterpret_cast<LPCWSTR>(record->ExceptionAddress),
+                         &module) && module)
+    offset = reinterpret_cast<uintptr_t>(record->ExceptionAddress) -
+             reinterpret_cast<uintptr_t>(module);
+  _snprintf_s(event, sizeof(event), _TRUNCATE,
+    "exception.address=%p.module=%p.offset=0x%llx",
+    record->ExceptionAddress, module, static_cast<unsigned long long>(offset));
+  emit(event, static_cast<int>(record->ExceptionCode));
+  return EXCEPTION_CONTINUE_SEARCH;
+}
+
 static bool attach(PVOID *original, PVOID hook)
 {
   return DetourAttach(original, hook) == NO_ERROR;
@@ -154,6 +175,8 @@ extern "C" BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID)
     return FALSE;
   }
   if (DetourTransactionCommit() != NO_ERROR)
+    return FALSE;
+  if (!AddVectoredExceptionHandler(1, trace_exception))
     return FALSE;
   emit("HOOK_READY", 0);
   return TRUE;
