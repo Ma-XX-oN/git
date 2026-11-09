@@ -96,8 +96,10 @@ def delta(a, b):
     return float((Decimal(b) - Decimal(a)) * 1000)
 
 def prepare(root, windows):
-    git = (root / ("git.exe" if windows else "git")).resolve(strict=True)
-    return git, "native source-built Git from workflow checkout"
+    selected = os.environ.get("GIT809_BENCH_GIT")
+    git = (Path(selected) if selected else
+           root / ("git.exe" if windows else "git")).resolve(strict=True)
+    return git, "native source-built Git: " + str(git)
 
 def run_case(bash, script, git_shell, environment, workers, round_index, windows):
     started = time.perf_counter()
@@ -206,8 +208,11 @@ def main():
         trace_dir = (OUT / "native-worker").resolve()
         trace_dir.mkdir(parents=True, exist_ok=True)
         env["GIT809_NATIVE_TRACE_DIR"] = str(trace_dir)
+    label = env.get("GIT809_BENCH_LABEL", "current")
+    assert label in ("baseline", "updated", "current"), label
     report = {
-        "sha": env.get("GITHUB_SHA"),
+        "sha": env.get("GIT809_BENCH_SOURCE_SHA", env.get("GITHUB_SHA")),
+        "benchmark_label": label,
         "os": env.get("RUNNER_OS", sys.platform),
         "git": native,
         "build_flags": flags,
@@ -220,7 +225,8 @@ def main():
         "manager_present_in_both_configurations": True,
         "results": [],
     }
-    output_path = OUT / ("pool-size-matched-1to5-" + report["os"].lower() + ".json")
+    output_path = OUT / ("pool-size-matched-1to5-" + report["os"].lower() +
+                         "-" + label + ".json")
     try:
         for round_index, workers in enumerate(RUN_ORDER, 1):
             result = run_case(bash, script, git_shell, env, workers, round_index, windows)
