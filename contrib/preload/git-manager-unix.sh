@@ -21,7 +21,7 @@ _git_preload_unix_source() {
   local owner_pid=$BASHPID
   local script_dir directory py
   script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) || return 255
-  directory=$(mktemp -d) || return 255
+  directory=$(mktemp -d "${TMPDIR:-${TEMP:-${TMP:-/tmp}}}/git-preload-$owner_pid-XXXXXXXX") || return 255
   py=${GIT_PRELOAD_MANAGER_PYTHON:-python3}
   "$py" "$script_dir/unix_git_ipc_pool.py" --git "$GIT_PRELOAD_WORKER_GIT" \
     --workers "$requested" --directory "$directory" --owner-pid "$owner_pid" \
@@ -33,8 +33,8 @@ _git_preload_unix_source() {
       # command can observe EOF from the prior reply writer before the
       # server finishes closing that connection.
       exec {_GIT_PRELOAD_UNIX_REPLY_FD}< "$directory/allocate-reply" || {
-	printf 'GIT-IPC ERROR: Unix allocation reply channel open failed\n' >&2
-	return 255
+        printf 'GIT-IPC ERROR: Unix allocation reply channel open failed\n' >&2
+        return 255
       }
       _GIT_PRELOAD_UNIX_DIRECTORY=$directory
       _GIT_PRELOAD_UNIX_MANAGER_PID=$launched
@@ -78,8 +78,13 @@ git-ipc() {
     printf 'GIT-IPC ERROR: allocation response failed read_rc=%s partial=%q manager_pid=%s\n' "$rc" "$worker" "$_GIT_PRELOAD_UNIX_MANAGER_PID" >&2
     return 255
   fi
-  if [[ $worker == WAIT || $worker == INVALID || ! -d $worker ]]; then
+  if [[ ! $worker =~ ^[1-9][0-9]*$ ]]; then
     printf 'GIT-IPC ERROR: unavailable or invalid Git worker\n' >&2
+    return 255
+  fi
+  worker=$dir/worker-$worker
+  if [[ ! -d $worker ]]; then
+    printf 'GIT-IPC ERROR: worker directory unavailable\n' >&2
     return 255
   fi
 
@@ -95,17 +100,17 @@ git-ipc() {
 
   count=$(( $# + 1 ))
   printf -v header '\\x%02x\\x00\\x00\\x00' "$count"
-  printf '%b' "$header" >&7 || { printf 'GIT-IPC ERROR: request header write failed\n' >&2; return 255; }
-  printf 'git\x00' >&7 || { printf 'GIT-IPC ERROR: command write failed\n' >&2; return 255; }
-  for arg in "$@"; do
-    printf '%s\x00' "$arg" >&7 || { printf 'GIT-IPC ERROR: argument write failed\n' >&2; return 255; }
-  done
-  _git_preload_write_context unix >&7 || {
+  {
+    printf '%b' "$header" &&
+    printf 'git\0' &&
+    { (( $# == 0 )) || printf '%s\0' "$@"; } &&
+    _git_preload_write_context unix &&
+    printf 'end\0'
+  } >&7 || {
     exec 7>&-
     printf 'GIT-IPC ERROR: context frame write failed\n' >&2
     return 255
   }
-  exec 7>&-
 
   local stdout_open=1 stderr_open=1
   while (( stdout_open || stderr_open )); do
@@ -115,12 +120,12 @@ git-ipc() {
       rc=$?
       [[ -z $chunk ]] || printf '%s' "$chunk"
       if (( rc == 1 )); then
-	stdout_open=0
-	exec 4<&-
+        stdout_open=0
+        exec 4<&-
       elif (( rc != 0 && rc <= 128 )); then
-	printf 'GIT-IPC ERROR: stdout read failed\n' >&2
-	exec 4<&- 5<&- 6<&-
-	return 255
+        printf 'GIT-IPC ERROR: stdout read failed\n' >&2
+        exec 4<&- 5<&- 6<&- 7>&-
+        return 255
       fi
     fi
     if (( stderr_open )); then
@@ -129,15 +134,16 @@ git-ipc() {
       rc=$?
       [[ -z $chunk ]] || printf '%s' "$chunk" >&2
       if (( rc == 1 )); then
-	stderr_open=0
-	exec 5<&-
+        stderr_open=0
+        exec 5<&-
       elif (( rc != 0 && rc <= 128 )); then
-	printf 'GIT-IPC ERROR: stderr read failed\n' >&2
-	exec 4<&- 5<&- 6<&-
-	return 255
+        printf 'GIT-IPC ERROR: stderr read failed\n' >&2
+        exec 4<&- 5<&- 6<&- 7>&-
+        return 255
       fi
     fi
   done
+  exec 7>&-
   IFS= read -r status <&6 || {
     exec 6<&-
     printf 'GIT-IPC ERROR: exit-code read failed\n' >&2

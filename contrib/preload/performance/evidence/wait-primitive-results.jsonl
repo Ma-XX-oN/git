@@ -1,0 +1,8 @@
+{"test":"wakeup","mode":"semaphore","samples":200,"median_us":44.300,"p95_us":94.300,"p99_us":136.000,"max_us":215.200,"roundtrip_median_us":74.250,"waiter_cpu_ms":0.000,"wall_ms":3422.109}
+{"test":"wakeup","mode":"spin","samples":200,"median_us":1.900,"p95_us":42.600,"p99_us":96.200,"max_us":229.600,"roundtrip_median_us":20.600,"waiter_cpu_ms":3390.625,"wall_ms":3424.613}
+{"test":"rendezvous","mode":"semaphore","rounds":50000,"mean_us":3.799,"worker_cpu_ms":171.875,"wall_ms":189.947}
+{"test":"rendezvous","mode":"spin","rounds":50000,"mean_us":0.124,"worker_cpu_ms":15.625,"wall_ms":6.180}
+{"test":"rendezvous","mode":"spin","rounds":50000,"mean_us":0.079,"worker_cpu_ms":0.000,"wall_ms":3.941}
+{"test":"rendezvous","mode":"semaphore","rounds":50000,"mean_us":3.880,"worker_cpu_ms":171.875,"wall_ms":194.006}
+{"test":"wakeup","mode":"spin","samples":200,"median_us":0.800,"p95_us":25.200,"p99_us":111.300,"max_us":189.300,"roundtrip_median_us":6.400,"waiter_cpu_ms":3406.250,"wall_ms":3428.515}
+{"test":"wakeup","mode":"semaphore","samples":200,"median_us":39.550,"p95_us":91.200,"p99_us":181.000,"max_us":296.900,"roundtrip_median_us":69.950,"waiter_cpu_ms":15.625,"wall_ms":3428.501}

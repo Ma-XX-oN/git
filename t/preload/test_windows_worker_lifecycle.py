@@ -69,8 +69,9 @@ def run_case(git, name, arguments, expected_status, expected_output,
              expected_errors=b""):
     """Run a worker with stdin held open while output and status are drained."""
     env = os.environ.copy()
-    env["GIT_PRELOAD_OWNER_WINPID"] = str(os.getpid())
-    worker = subprocess.Popen([git, "--preload-worker"], env=env,
+    env["GIT_PRELOAD_OWNER_PID"] = str(os.getpid())
+    directory = tempfile.TemporaryDirectory(prefix="preload-worker-")
+    worker = subprocess.Popen([git, "--preload-worker", directory.name], env=env,
                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                               stderr=subprocess.DEVNULL)
     handles = {}
@@ -159,13 +160,15 @@ def run_case(git, name, arguments, expected_status, expected_output,
             worker.kill()
         worker.wait(timeout=5)
         worker.stdout.close()
+        directory.cleanup()
 
 
 def test_marker_timeout(git):
     """A missing marker must cancel both connection threads and exit promptly."""
     env = os.environ.copy()
-    env["GIT_PRELOAD_OWNER_WINPID"] = str(os.getpid())
-    worker = subprocess.Popen([git, "--preload-worker"], env=env,
+    env["GIT_PRELOAD_OWNER_PID"] = str(os.getpid())
+    directory = tempfile.TemporaryDirectory(prefix="preload-worker-")
+    worker = subprocess.Popen([git, "--preload-worker", directory.name], env=env,
                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                               stderr=subprocess.DEVNULL)
     try:
@@ -177,6 +180,7 @@ def test_marker_timeout(git):
             worker.kill()
         worker.wait(timeout=5)
         worker.stdout.close()
+        directory.cleanup()
 
 
 if __name__ == "__main__":

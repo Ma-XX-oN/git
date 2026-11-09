@@ -1,10 +1,17 @@
 = Preloaded Git workers
 
-`git --preload-worker` starts a single-use Git process that waits for one
-command. On POSIX systems it takes the manager-created FIFO directory as its
-sole additional argument. On Windows it creates private named pipes using its
-native process ID. The owning shell's PID must be supplied in
-`GIT_PRELOAD_OWNER_PID` or `GIT_PRELOAD_OWNER_WINPID`, respectively.
+`git --preload-worker <session-directory>` starts a single-use Git process
+that waits for one command. Set `GIT_PRELOAD_OWNER_PID` to the native operating
+system PID of the application that owns the session. Both platforms use this
+startup interface. The worker creates `worker-<pid>` inside the session
+directory before reporting READY.
+
+The launcher creates the private session directory under the temporary
+directory, named `git-preload-<owner-pid>-<unique-suffix>`. The owner PID
+separates sessions; the suffix avoids collisions with stale directories.
+Windows launchers translate an MSYS PID to a native PID at this boundary.
+Windows endpoints use the named-pipe namespace; POSIX endpoints are FIFOs
+inside the worker directory.
 
 The Bash client in `contrib/preload/git-manager.sh` starts the platform's
 Python pool manager. Set `GIT_PRELOAD_WORKER_GIT` to the built native Git and
@@ -19,11 +26,23 @@ command and terminates, so repository state cannot leak into the next call.
 The manager implementation remains Python; a native `--preload-manager` is a
 separate task.
 
+Applications can launch `contrib/preload/windows_git_ipc_pool.py` or
+`contrib/preload/unix_git_ipc_pool.py` with the same options:
+`--git <executable> --workers <count> --directory <session-directory>
+--owner-pid <native-pid>`. Create the private session directory first. Wait
+for its atomic `ready.json` publication, connect the allocation endpoints,
+and send serial `GET` lines (`GET` plus newline). Allocation replies contain the selected worker PID
+followed by a newline. Keep the allocation channels open for the session.
+POSIX uses `allocate-req` and `allocate-reply` FIFOs in that directory;
+Windows uses `git-preload-allocate-req-<owner-pid>` and
+`git-preload-allocate-reply-<owner-pid>` under `\\.\pipe\`.
+
 == Modules and ownership
 
-`preload-worker.c` owns dispatch and the command-completion hook.
-`preload-worker-win32.c` and `preload-worker-posix.c` own platform-specific
-worker lifecycle and owner monitoring. `preload-context.c` validates and
+`preload-worker.c` owns dispatch, request framing, command execution and ordered
+completion. `preload-worker-win32.c` and `preload-worker-posix.c` own native
+endpoint setup, standard-handle adaptation and owner monitoring.
+`preload-context.c` validates and
 applies the command's complete working-directory and environment snapshot.
 The export decoder accepts restricted Bash quoting; it never evaluates shell
 commands or substitutions.
@@ -42,12 +61,25 @@ Each worker exposes stdin, stdout, stderr, exit-code and param-env-cwd
 channels. The client opens stdout, stderr, status, stdin and context in that
 order. The context request begins with a little-endian 32-bit argument count
 including `git`, followed by that many NUL-terminated UTF-8 arguments.
-Optional fields follow: `cwd` and its NUL-terminated path, `cwd-win` and its
-newline-terminated Windows path plus NUL, `env` and a little-endian byte length
+Optional fields follow: `cwd` and its newline-terminated native path plus NUL,
+`env` and a little-endian byte length
 plus a double-NUL-terminated environment block, or `env-export` and a
-NUL-terminated restricted Bash export stream. Windows requests end with `end`
-and NUL; POSIX requests end when the context writer closes. Argument count
+NUL-terminated restricted Bash export stream. Requests end with `end`
+and NUL on both platforms; completion does not require closing the context
+writer. The cwd newline lets the Bash client write `pwd` output directly
+using a builtin. Remove exactly that last newline when decoding the path.
+Argument count
 and frame size are bounded by the worker.
+
+Both environment encodings have identical replacement semantics on both
+platforms. Application callers can emit the `env` block directly from their
+environment map. Bash clients use `env-export` because `export -p` captures
+exported variables using a builtin, avoiding process startup and per-variable
+shell serialization. The double NUL belongs to the environment-block encoding,
+including an empty block; it is independent of the host operating system.
+Omitting both environment fields retains the worker's environment inherited
+when the manager spawned it. That snapshot can differ from the caller's
+environment at command submission.
 
 Environment snapshots replace inherited variables, including removals. The
 Windows environment is case insensitive: duplicate names retain the first
@@ -81,11 +113,15 @@ with its peer before either thread advances to the next channel. Cancellation
 can race with submission, so cancellation retries until the peer has arrived
 or cancellation has found pending I/O. Transport release waits for the
 threads before destroying their shared state. Handles passed to the CRT stay
-synchronous; this worker does not use overlapped I/O.
+synchronous so Git's ordinary stream operations can use them directly.
 
 Worker channels use the call's decimal marker; all five must agree.
 Persistent manager allocation channels use `0` once when connected, since
-subsequent serial requests reuse the same accepted connection. The Python
+subsequent serial requests reuse the same accepted connection. During
+investigation, both candidate instances sometimes received characters. That
+condition has stopped reproducing; the call-specific digit and duplicate
+checks remain diagnostic safeguards, and errors report both received values.
+The Python
 manager's event-driven connection implementation is separate from the native
 worker's blocking transport.
 
@@ -101,10 +137,11 @@ Detailed investigative diagnostics are retained until migration acceptance
 has passed and are removed in a separate validated cleanup.
 
 The Bash client supports text output and commands that do not consume caller
-stdin. Windows supplies an EOF-producing NUL input handle. Embedded NUL output
-and arbitrary binary streams require a different client and are not supported
-by this Bash interface. Do not infer general stdin streaming support from the
-presence of the stdin channel.
+stdin. Relaying arbitrary streams needs an executable with the available Bash
+builtins; its process startup would undermine the speedup. A Bash builtin
+`cat` is a proposed follow-up to enable forwarding without that startup cost.
+Workers receive EOF on stdin. Bash variables cannot preserve embedded NUL
+output, so arbitrary binary streams need a client that transfers bytes directly.
 
 == Validation and performance
 
@@ -114,9 +151,7 @@ Run `t/t5790-preload.sh` for normal regression integration and the scripts in
 Windows, Linux and macOS acceptance includes the Git regression suite, both
 Makefile and Meson builds, ownership/cleanup and 6,000 serial commands.
 
-Compare the migration with tag `working-version-two` on the same laptop or
-within one CI job, using each revision's matching client and manager, the
-same compiler options, worker count, workload and full context transfer.
-Tracing, investigative timing and ablations must be disabled for performance
-measurements. Keep raw samples with the exact revisions and environment.
-Historical experimental evidence remains available from that tag.
+Record performance with matching client and manager versions, compiler
+options, worker counts, workload and full context transfer. Disable tracing
+and investigative timing for measurements. Preserve raw samples, revisions
+and machine details; compare revisions on the same machine.

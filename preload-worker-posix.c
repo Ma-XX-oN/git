@@ -3,12 +3,12 @@
 #include "preload-context.h"
 #include "preload-worker.h"
 #include "preload-transport.h"
+#include "trace.h"
 #include <fcntl.h>
 #include <limits.h>
 #include <stdint.h>
 #include <pthread.h>
 #include <signal.h>
-#include <setjmp.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -16,18 +16,10 @@
  * A --preload-worker worker executes one command and exits. Its private channel
  * directory is created by the owning manager, not by the Git worker.
  */
-static jmp_buf preload_exit_jump;
-static volatile int preload_exit_active;
-static volatile int preload_exit_status;
-
-/** @brief Return command exits to the worker's ordered completion path. */
-NORETURN static void preload_worker_finish(int status)
+/** @param fd Borrowed output descriptor; FIFO writes already reach the kernel. */
+int preload_worker_flush_output(int fd)
 {
-	if (preload_exit_active) {
-		preload_exit_status = status;
-		longjmp(preload_exit_jump, 1);
-	}
-	exit(status);
+	return fcntl(fd, F_GETFD) < 0 ? -1 : 0;
 }
 
 /*
@@ -55,6 +47,29 @@ struct preload_owner_watch {
 	pid_t pid;
 	char directory[1];
 };
+
+/**
+ * @brief Prepare the FIFO channels before publishing READY.
+ * @param directory Borrowed newly created private worker directory.
+ * @return Zero on success, -1 with errno set on failure; caller removes partial FIFOs.
+ */
+static int preload_worker_create_fifos(const char *directory)
+{
+	static const char *const names[] = {
+		"stdout", "stderr", "exit-code", "stdin", "param-env-cwd"
+	};
+	size_t i;
+
+	for (i = 0; i < ARRAY_SIZE(names); i++) {
+		char *path = xstrfmt("%s/%s", directory, names[i]);
+		int result = mkfifo(path, 0600);
+
+		free(path);
+		if (result)
+			return -1;
+	}
+	return 0;
+}
 
 /** @brief Terminate and remove endpoints when the original shell owner dies. */
 static void *preload_worker_watch_owner(void *context)
@@ -110,150 +125,48 @@ static int preload_worker_start_owner_watch(const char *directory)
 	return 0;
 }
 
-/** @brief Accept one FIFO request and complete output before publishing status. */
-int preload_worker_run(const char *directory)
+/**
+ * @brief Prepare FIFO endpoints and owner monitoring before READY.
+ * @param directory Borrowed existing private worker directory.
+ * @return Zero on success, or a worker startup status on failure.
+ */
+int preload_worker_platform_prepare(const char *directory)
 {
-	static const struct preload_channel_spec channels[] = {
-		{ "stdout", 1 }, { "stderr", 1 }, { "exit-code", 1 }, { "stdin", 0 }, { "param-env-cwd", 0 }
-	};
-	static const size_t order[] = { 0, 1, 2, 3, 4 };
-	struct preload_transport_config config = { 0 };
-	struct preload_transport *transport = NULL;
-	char *frame = NULL;
-	char result[64];
-	const size_t frame_capacity = 131072;
-	const char *args[33] = { NULL };
-	int fd[5] = { -1, -1, -1, -1, -1 };
-	int pos, rc = 120;
-	unsigned int i, count;
-	size_t used = 0;
-	ssize_t n;
-
-	if (preload_worker_start_owner_watch(directory))
-		return 136;
-	if (!directory || strlen(directory) > 960)
+	if (strlen(directory) > 960 || preload_worker_create_fifos(directory))
 		return 121;
-	frame = malloc(frame_capacity);
-	if (!frame)
-		return 121;
-	config.location = directory;
-	config.channels = channels;
-	config.order = order;
-	config.nr = ARRAY_SIZE(channels);
-	if (preload_transport_start(&transport, &config)) {
-		rc = 121;
-		goto cleanup;
-	}
-	printf("READY %ld\n", (long)getpid());
-	fflush(stdout);
-	/* Match the four-channel open order used by git-ipc. */
-	if (preload_transport_wait(transport) != PRELOAD_TRANSPORT_OK) {
-		rc = 122;
-		goto cleanup;
-	}
-	while (used < frame_capacity) {
-		n = preload_transport_read(transport, 4, frame + used, frame_capacity - used);
-		if (n < 0) {
-			if (errno == EINTR)
-				continue;
-			rc = 124;
-			goto cleanup;
-		}
-		if (!n)
-			break;
-		used += (size_t)n;
-	}
-	preload_transport_close_channel(transport, 4);
-	if (used < 4 || used == frame_capacity) {
-		rc = 125;
-		goto cleanup;
-	}
-	count = (unsigned int)(unsigned char)frame[0] |
-		((unsigned int)(unsigned char)frame[1] << 8) |
-		((unsigned int)(unsigned char)frame[2] << 16) |
-		((unsigned int)(unsigned char)frame[3] << 24);
-	if (count < 1 || count > 32) {
-		rc = 126;
-		goto cleanup;
-	}
-	pos = 4;
-	for (i = 0; i < count; i++) {
-		int start = pos;
-		if ((size_t)pos >= used) {
-			rc = 127;
-			goto cleanup;
-		}
-		while ((size_t)pos < used && frame[pos])
-			pos++;
-		if ((size_t)pos == used) {
-			rc = 128;
-			goto cleanup;
-		}
-		args[i] = frame + start;
-		pos++;
-	}
-	if (strcmp(args[0], "git") ||
-	    preload_context_apply(frame + pos, used - (size_t)pos)) {
-		rc = 129;
-		goto cleanup;
-	}
-	args[count] = NULL;
+	return preload_worker_start_owner_watch(directory) ? 136 : 0;
+}
 
-	fd[3] = preload_transport_detach_fd(transport, 3);
-	fd[0] = preload_transport_detach_fd(transport, 0);
-	fd[1] = preload_transport_detach_fd(transport, 1);
-	/*
-	 * The request writer has reached EOF, but its readable endpoint remains
-	 * valid. Redirect it to Git's stdin instead of closing descriptor zero.
-	 */
-	if (dup2(fd[3], STDIN_FILENO) < 0 ||
-	    dup2(fd[0], STDOUT_FILENO) < 0 ||
-	    dup2(fd[1], STDERR_FILENO) < 0) {
-		rc = 130;
-		goto cleanup;
-	}
-	close(fd[3]);
-	fd[3] = -1;
-	close(fd[0]);
-	fd[0] = -1;
-	close(fd[1]);
-	fd[1] = -1;
+/**
+ * @brief Use the private worker directory as the FIFO location.
+ * @param directory Borrowed directory created by shared worker startup.
+ * @return Newly owned location string, freed by the shared worker.
+ */
+char *preload_worker_platform_location(const char *directory)
+{
+	return xstrdup(directory);
+}
 
-	/* Defer Git initialization until after the command arrives. */
-	preload_exit_active = 1;
-	preload_worker_set_exit_handler(preload_worker_finish);
-	if (!setjmp(preload_exit_jump)) {
-		init_git(args);
-		rc = cmd_main(count, args);
-		preload_worker_set_exit_handler(NULL);
-		rc = common_exit(__FILE__, __LINE__, rc);
-	} else {
-		rc = preload_exit_status;
-	}
-	preload_worker_set_exit_handler(NULL);
-	preload_exit_active = 0;
+/** @return Owned EOF-producing input descriptor, or -1 with errno set. */
+int preload_worker_open_input(void)
+{
+	return open("/dev/null", O_RDONLY);
+}
 
-	fflush(stdout);
-	fflush(stderr);
-	close(STDOUT_FILENO);
-	close(STDERR_FILENO);
-	close(STDIN_FILENO);
+/**
+ * @brief POSIX standard descriptors are already installed by dup2.
+ * @return Zero; no separate operating-system handle table requires updating.
+ */
+int preload_worker_platform_stdio(void)
+{
+	return 0;
+}
 
-cleanup:
-	/* Deliver output EOF before status even when request validation fails. */
-	for (i = 0; i < 5; i++)
-		if (fd[i] >= 0)
-			close(fd[i]);
-	if (transport) {
-		for (i = 0; i < 5; i++)
-			if (i != 2)
-				preload_transport_close_channel(transport, i);
-		n = snprintf(result, sizeof(result), "EXIT %d\n", rc);
-		if (n > 0 && (size_t)n < sizeof(result))
-			preload_transport_write(transport, 2, result, (size_t)n);
-		preload_transport_release(transport);
-	}
+/**
+ * @brief Remove this worker's FIFOs and private directory.
+ * @param directory Borrowed directory created by shared worker startup.
+ */
+void preload_worker_platform_cleanup(const char *directory)
+{
 	preload_worker_remove_fifos(directory);
-	free(frame);
-	return rc;
 }

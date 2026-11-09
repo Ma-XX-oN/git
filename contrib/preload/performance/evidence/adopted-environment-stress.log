@@ -1,0 +1,60 @@
+GIT809_PEER_RENDEZVOUS_PASS cancel-before-read
+GIT809_PEER_RENDEZVOUS_PASS already-finished-duplicate-read
+GIT809_PEER_RENDEZVOUS_PASS mixed-winners-repeated-generations
+GIT809_SELECT_TRANSPORT_PASS first-instance-marker
+GIT809_SELECT_TRANSPORT_PASS second-instance-marker-probe-held
+GIT809_SELECT_TRANSPORT_PASS disconnected-probe-other-instance-selected
+GIT809_SELECT_TRANSPORT_PASS invalid-marker
+GIT809_SELECT_TRANSPORT_PASS nul-marker-is-invalid
+GIT809_SELECT_TRANSPORT_PASS missing-marker-timeout
+ALLOCATOR_DUPLICATE_MARKERS reply=\\.\pipe\git809-select-test-30868dd27b1e481ebabc6efda7ae0b37 first=49 (0x31) second=49 (0x31) expected=49 (0x31)
+GIT809_SELECT_TRANSPORT_PASS duplicate-markers
+ALLOCATOR_START persistent owner=106366287
+GIT809_ALLOCATOR_PASS persistent-6000-requests-shortage-held-probes handles 132 130
+ALLOCATOR_START persistent owner=93459397
+GIT809_ALLOCATOR_PASS drained-shutdown-wakeup
+GIT809_ALLOCATOR_PASS connect-failure-cleanup
+GIT809_WORKER_LIFECYCLE_PASS stdin-held-open
+GIT809_WORKER_LIFECYCLE_PASS output-flush-precedes-status
+GIT809_WORKER_LIFECYCLE_PASS nonzero-exit-with-stderr
+GIT809_WORKER_LIFECYCLE_PASS abandoned-probes-on-every-channel
+GIT809_WORKER_LIFECYCLE_PASS probes-stay-open-on-every-channel
+GIT809_WORKER_LIFECYCLE_PASS alternating-marked-connections
+GIT809_WORKER_LIFECYCLE_PASS reverse-alternating-marked-connections
+GIT809_WORKER_LIFECYCLE_PASS request-read-pends-between-fragments
+GIT809_WORKER_LIFECYCLE_PASS output-exceeds-pipe-buffer
+GIT809_WORKER_LIFECYCLE_PASS end-is-an-argument
+GIT809_WORKER_LIFECYCLE_PASS stdin-produces-eof
+GIT809_WORKER_LIFECYCLE_PASS invalid-stdin-marker-closes-output
+GIT809_WORKER_LIFECYCLE_PASS nul-stdin-marker-closes-output
+GIT809_WORKER_LIFECYCLE_PASS malformed-request-closes-output
+GIT809_WORKER_LIFECYCLE_PASS missing-end-tag-closes-output
+GIT809_WORKER_LIFECYCLE_PASS duplicate-control-markers-0
+GIT809_WORKER_LIFECYCLE_PASS duplicate-control-markers-1
+GIT809_WORKER_LIFECYCLE_PASS duplicate-control-markers-2
+GIT809_WORKER_LIFECYCLE_PASS duplicate-control-markers-3
+GIT809_WORKER_LIFECYCLE_PASS duplicate-control-markers-4
+GIT809_WORKER_LIFECYCLE_PASS duplicate-control-markers-5
+GIT809_WORKER_LIFECYCLE_PASS duplicate-control-markers-6
+GIT809_WORKER_LIFECYCLE_PASS duplicate-control-markers-7
+GIT809_WORKER_LIFECYCLE_PASS duplicate-control-markers-8
+GIT809_WORKER_LIFECYCLE_PASS duplicate-control-markers-9
+GIT809_WORKER_LIFECYCLE_PASS missing-marker-timeout
+GIT809_STREAM_ROUNDTRIP_PASS
+GIT809_SERIAL_REPLY_PASS 24
+GIT809_STRESS_PROGRESS 0
+GIT809_STRESS_PROGRESS 500
+GIT809_STRESS_PROGRESS 1000
+GIT809_STRESS_PROGRESS 1500
+GIT809_STRESS_PROGRESS 2000
+GIT809_STRESS_PROGRESS 2500
+GIT809_STRESS_PROGRESS 3000
+GIT809_STRESS_PROGRESS 3500
+GIT809_STRESS_PROGRESS 4000
+GIT809_STRESS_PROGRESS 4500
+GIT809_STRESS_PROGRESS 5000
+GIT809_STRESS_PROGRESS 5500
+GIT809_OWNER_DEATH_PASS allocated_worker_pid 21124
+GIT809_STRESS_PASS count 6000 median_ms 11.5725
+GIT809_MANAGER_HANDLES first_last (100, 141, 1) (6000, 141, 1) min_max 134 144
+GIT809_STRESS_SHA f00bdfe779f1f4c1afdb6b4dcb8ba9f8fe97e614-ordered-completion-working-tree

@@ -1,0 +1,206 @@
+--- a/compat/mingw.c
++++ b/compat/mingw.c
+@@ -1789,2 +1789,2 @@
+-	p_len = wcschrnul(p, L'=') - p;
+-	q_len = wcschrnul(q, L'=') - q;
++	p_len = wcschrnul(p + (*p == L'='), L'=') - p;
++	q_len = wcschrnul(q + (*q == L'='), L'=') - q;
+@@ -1813 +1813 @@
+-static wchar_t *make_environment_block(char **deltaenv)
++static wchar_t *make_environment_block(const char *const *deltaenv, int inherit)
+@@ -1824 +1824 @@
+-	if (!deltaenv || !*deltaenv) {
++	if (inherit && (!deltaenv || !*deltaenv)) {
+@@ -1842 +1841,0 @@
+-		ALLOC_GROW(array, nr + 1, alloc);
+@@ -1844 +1843,7 @@
+-		array[nr++] = p;
++		/* Windows' =C: drive-directory pseudo-variables are not exported
++		 * by Bash; preserve them rather than treating them as ordinary keys. */
++		if (inherit || *p == L'=') {
++			ALLOC_GROW(array, nr + 1, alloc);
++			array[nr++] = p;
++			size += s;
++		}
+@@ -1846 +1850,0 @@
+-		size += s;
+@@ -1863 +1867 @@
+-	ALLOC_ARRAY(result, size + delta_size);
++	ALLOC_ARRAY(result, size + delta_size + 1);
+@@ -1877,0 +1882,2 @@
++	if (p == result)
++		*p++ = L'\0';
+@@ -1882,0 +1889,79 @@
++	return result;
++}
++
++/** @brief Change or remove one ordinary variable without modifying its entry. */
++static int update_environment_entry(const wchar_t *entry, int remove)
++{
++	const wchar_t *equal = wcschr(entry, L'=');
++	size_t length = equal - entry;
++	wchar_t *name;
++	int ok;
++	DWORD error;
++
++	ALLOC_ARRAY(name, length + 1);
++	wmemcpy(name, entry, length);
++	name[length] = L'\0';
++	ok = SetEnvironmentVariableW(name, remove ? NULL : equal + 1);
++	error = ok ? 0 : GetLastError();
++	free(name);
++	if (!ok) {
++		errno = err_win_to_posix(error);
++		return -1;
++	}
++	return 0;
++}
++
++/** @brief Replace a UTF-8 snapshot, updating only variables that differ. */
++int mingw_replace_environment(const char *const *environment)
++{
++	wchar_t *block = make_environment_block(environment, 0);
++	wchar_t *original = GetEnvironmentStringsW(), *p = block, *entry;
++	wchar_t **current = NULL;
++	size_t nr = 0, alloc = 0, i = 0;
++	int result = -1;
++	DWORD error = GetLastError();
++
++	if (!original) {
++		free(block);
++		errno = err_win_to_posix(error);
++		return -1;
++	}
++	for (entry = original; *entry; entry += wcslen(entry) + 1) {
++		if (*entry == L'=')
++			continue;
++		ALLOC_GROW(current, nr + 1, alloc);
++		current[nr++] = entry;
++	}
++	git_stable_qsort(current, nr, sizeof(*current), wenvcmp);
++	while (i < nr || *p) {
++		int comparison;
++
++		while (*p == L'=')
++			p += wcslen(p) + 1;
++		if (i == nr && !*p)
++			break;
++		comparison = !*p ? -1 : i == nr ? 1 :
++			wenvcmp(current + i, &p);
++		if (comparison < 0) {
++			if (update_environment_entry(current[i++], 1))
++				goto done;
++		} else {
++			if (comparison || wcscmp(current[i], p)) {
++				/* Delete/recreate a changed spelling to preserve name case. */
++				if (!comparison && wcsncmp(current[i], p,
++						wcschr(p, L'=') - p) &&
++				    update_environment_entry(current[i], 1))
++					goto done;
++				if (update_environment_entry(p, 0))
++					goto done;
++			}
++			if (!comparison)
++				i++;
++			p += wcslen(p) + 1;
++		}
++	}
++	result = 0;
++done:
++	free(current);
++	FreeEnvironmentStringsW(original);
++	free(block);
+@@ -2090 +2175 @@
+-	wenvblk = make_environment_block(deltaenv);
++	wenvblk = make_environment_block((const char *const *)deltaenv, 1);
+--- a/compat/mingw.h
++++ b/compat/mingw.h
+@@ -117,0 +118,9 @@
++/**
++ * @brief Replace the process environment from a non-NULL UTF-8 entry array.
++ *
++ * Entries are NAME=VALUE strings terminated by a NULL array element. Windows
++ * drive-directory pseudo-variables survive replacement; duplicate names are
++ * case-insensitive and the last entry wins. Return zero, or -1 with errno set.
++ */
++int mingw_replace_environment(const char *const *environment);
++
+--- a/preload-context.c
++++ b/preload-context.c
+@@ -3,0 +4 @@
++#include "strvec.h"
+@@ -30,0 +32 @@
++#ifndef GIT_WINDOWS_NATIVE
+@@ -33,33 +34,0 @@
+-#ifdef GIT_WINDOWS_NATIVE
+-  wchar_t *block = GetEnvironmentStringsW();
+-  const wchar_t *entry;
+-  int result = 0;
+-  if (!block)
+-    return -1;
+-  for (entry = block; *entry; entry += wcslen(entry) + 1) {
+-    const wchar_t *equals = wcschr(entry + (*entry == L'='), L'=');
+-    wchar_t *key;
+-    size_t len;
+-    if (!equals)
+-      continue;
+-    /* Windows' =C: drive-directory pseudo-variables are not exported
+-     * by Bash; preserve them rather than treating them as ordinary keys. */
+-    if (*entry == L'=')
+-      continue;
+-    len = (size_t)(equals - entry);
+-    key = malloc((len + 1) * sizeof(*key));
+-    if (!key) {
+-      result = -1;
+-      break;
+-    }
+-    wmemcpy(key, entry, len);
+-    key[len] = L'\0';
+-    if (!SetEnvironmentVariableW(key, NULL))
+-      result = -1;
+-    free(key);
+-    if (result)
+-      break;
+-  }
+-  FreeEnvironmentStringsW(block);
+-  return result;
+-#else
+@@ -85,0 +55 @@
++}
+@@ -87 +56,0 @@
+-}
+@@ -91,0 +61,4 @@
++#ifdef GIT_WINDOWS_NATIVE
++  struct strvec environment = STRVEC_INIT;
++  int result;
++#endif
+@@ -93,0 +67,9 @@
++#ifdef GIT_WINDOWS_NATIVE
++  while (offset < len - 1 && buf[offset]) {
++    strvec_push(&environment, buf + offset);
++    offset += strlen(buf + offset) + 1;
++  }
++  result = mingw_replace_environment(environment.v);
++  strvec_clear(&environment);
++  return result;
++#else
+@@ -113,0 +96 @@
++#endif
+--- a/preload-export-stream.h
++++ b/preload-export-stream.h
+@@ -113,0 +114,3 @@
++#ifdef GIT_WINDOWS_NATIVE
++  struct strvec environment = STRVEC_INIT;
++#endif
+@@ -144,0 +148,5 @@
++#ifdef GIT_WINDOWS_NATIVE
++  for (i = 0; i < used; i++)
++    strvec_pushf(&environment, "%s=%s", pairs[i].name, pairs[i].value);
++  rc = mingw_replace_environment(environment.v);
++#else
+@@ -148,0 +157 @@
++#endif
+@@ -149,0 +159,3 @@
++#ifdef GIT_WINDOWS_NATIVE
++  strvec_clear(&environment);
++#endif

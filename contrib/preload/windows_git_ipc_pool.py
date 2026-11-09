@@ -287,9 +287,10 @@ class TransportPair:
 
 
 class Pool:
-  def __init__(self, git:Path, target:int):
+  def __init__(self, git:Path, target:int, directory:Path):
     """Track READY workers until allocation transfers ownership to a client."""
     self.git=git
+    self.directory=directory
     self.target=target
     self.ready=queue.Queue()
     self.children=[]
@@ -297,7 +298,7 @@ class Pool:
     self.closing=threading.Event()
     self.errors=[]
     self.allocations=0
-    self.owner_winpid=None
+    self.owner_pid=None
     self.notify=None
 
   def spawn(self):
@@ -306,10 +307,10 @@ class Pool:
       return
     try:
       worker_env=os.environ.copy()
-      if self.owner_winpid is None:
-        raise RuntimeError("owner_winpid not initialized")
-      worker_env["GIT_PRELOAD_OWNER_WINPID"]=str(self.owner_winpid)
-      p=subprocess.Popen([str(self.git),"--preload-worker"],
+      if self.owner_pid is None:
+        raise RuntimeError("owner_pid not initialized")
+      worker_env["GIT_PRELOAD_OWNER_PID"]=str(self.owner_pid)
+      p=subprocess.Popen([str(self.git),"--preload-worker",str(self.directory)],
         stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,
         env=worker_env,bufsize=0)
     except OSError as error:
@@ -392,6 +393,10 @@ class Pool:
     for p in children:
       if p.stdout:
         p.stdout.close()
+      try:
+        (self.directory / ("worker-" + str(p.pid))).rmdir()
+      except FileNotFoundError:
+        pass
 
 def parse_get_request(frame):
   """Validate GET and return client PID, sequence and actual marker."""
@@ -504,19 +509,21 @@ def main():
   parser=argparse.ArgumentParser()
   parser.add_argument("--git",required=True,type=Path)
   parser.add_argument("--workers",required=True,type=int)
-  parser.add_argument("--owner-winpid",required=True,type=int)
-  parser.add_argument("--ready-file",required=True,type=Path)
+  parser.add_argument("--owner-pid",required=True,type=int)
+  parser.add_argument("--directory",required=True,type=Path)
   args=parser.parse_args()
   if not 1<=args.workers<=32:parser.error("workers must be 1..32")
-  if not 1<=args.owner_winpid<=0xffffffff:parser.error("owner PID invalid")
+  if not 1<=args.owner_pid<=0xffffffff:parser.error("owner PID invalid")
   git=args.git.resolve(strict=True)
-  owner=K.OpenProcess(SYNCHRONIZE,False,args.owner_winpid)
+  directory=args.directory.resolve(strict=True)
+  ready_file=directory / "ready.json"
+  owner=K.OpenProcess(SYNCHRONIZE,False,args.owner_pid)
   if not owner:
     raise OSError(C.get_last_error(),"OpenProcess(owner)")
   if K.WaitForSingleObject(owner,0)!=WAIT_TIMEOUT:
     raise RuntimeError("owner already terminated")
-  pool=Pool(git,args.workers)
-  pool.owner_winpid=args.owner_winpid
+  pool=Pool(git,args.workers,directory)
+  pool.owner_pid=args.owner_pid
   allocator=None
   try:
     for _ in range(args.workers):
@@ -526,13 +533,13 @@ def main():
     # Ensure allocator exists before publishing READY. The allocator's
     # initialization is synchronized by an explicit event instead of sleeps.
     allocator=threading.Thread(target=allocation_server,
-      args=(args.owner_winpid,pool),daemon=True)
+      args=(args.owner_pid,pool),daemon=True)
     allocator.start()
     # CreateNamedPipe happens immediately, but verify endpoint existence via
     # WaitNamedPipeW rather than assuming a started thread is ready.
     K.WaitNamedPipeW.argtypes=[W.LPCWSTR,W.DWORD]
     K.WaitNamedPipeW.restype=W.BOOL
-    address=r"\\.\pipe\git-preload-allocate-req-"+str(args.owner_winpid)
+    address=r"\\.\pipe\git-preload-allocate-req-"+str(args.owner_pid)
     deadline=time.monotonic()+10
     while time.monotonic()<deadline:
       if K.WaitNamedPipeW(address,100):
@@ -542,22 +549,21 @@ def main():
       time.sleep(.01)
     else:
       raise RuntimeError("allocation server startup timeout")
-    record={"manager_pid":os.getpid(),"owner_winpid":args.owner_winpid,
-      "worker_count":args.workers,"worker_pids":[x.pid for x in list(pool.ready.queue)],
+    record={"manager_pid":os.getpid(),"owner_pid":args.owner_pid,
+      "workers":args.workers,"worker_pids":[x.pid for x in list(pool.ready.queue)],
       "poll_seconds":POLL_SECONDS,"state":"READY"}
-    args.ready_file.parent.mkdir(parents=True,exist_ok=True)
-    tmp=args.ready_file.with_suffix(".tmp")
+    tmp=ready_file.with_suffix(".tmp")
     tmp.write_text(json.dumps(record)+"\n",encoding="utf-8")
-    tmp.replace(args.ready_file)
+    tmp.replace(ready_file)
     print("READY "+json.dumps(record),flush=True)
     while K.WaitForSingleObject(owner,POLL_SECONDS*1000)==WAIT_TIMEOUT:
       if not allocator.is_alive():
         raise RuntimeError("allocation server unexpectedly stopped")
       if pool.errors:
         raise RuntimeError("worker initialization failed: "+repr(pool.errors))
-    print("OWNER_EXIT "+str(args.owner_winpid),flush=True)
+    print("OWNER_EXIT "+str(args.owner_pid),flush=True)
   finally:
-    args.ready_file.unlink(missing_ok=True)
+    ready_file.unlink(missing_ok=True)
     pool.close()
     if allocator is not None:
       allocator.join()

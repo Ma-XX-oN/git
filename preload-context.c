@@ -288,7 +288,7 @@ static int apply_export_stream(const char *buf, size_t len)
 #ifdef GIT_WINDOWS_NATIVE
 	struct strvec environment = STRVEC_INIT;
 #endif
-	if (!len || buf[len - 1] != '\n' || memchr(buf, '\0', len))
+	if ((len && buf[len - 1] != '\n') || memchr(buf, '\0', len))
 		return -1;
 	while (off < len) {
 		const char *line = buf + off;
@@ -310,7 +310,7 @@ static int apply_export_stream(const char *buf, size_t len)
 			continue;
 		if (used == cap) {
 			size_t next = cap ? cap * 2 : 32;
-			if (next > len)
+			if (next > SIZE_MAX / sizeof(*pairs))
 				goto cleanup;
 			grown = realloc(pairs, next * sizeof(*pairs));
 			if (!grown)
@@ -366,16 +366,6 @@ int preload_context_apply(const char *buf, size_t len)
 			return -1;
 		offset = (size_t)(end - buf) + 1;
 		if (!strcmp(tag, "cwd") && !seen_cwd) {
-			const char *cwd;
-			end = memchr(buf + offset, '\0', len - offset);
-			if (!end)
-				return -1;
-			cwd = buf + offset;
-			if (!*cwd || !is_utf8(cwd) || chdir(cwd))
-				return -1;
-			seen_cwd = 1;
-			offset = (size_t)(end - buf) + 1;
-		} else if (!strcmp(tag, "cwd-win") && !seen_cwd) {
 			size_t n;
 			char *path;
 			int bad;

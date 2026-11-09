@@ -49,7 +49,7 @@ _git_preload_source_manager() {
     # No resize control protocol in this iteration. Sourcing is idempotent.
     if [[ $requested != "${_GIT_PRELOAD_MANAGER_WORKERS:-}" ]]; then
       printf 'manager already running with %s workers; resize is not implemented\n' \
-	"$_GIT_PRELOAD_MANAGER_WORKERS" >&2
+        "$_GIT_PRELOAD_MANAGER_WORKERS" >&2
     fi
     return 0
   fi
@@ -62,19 +62,19 @@ _git_preload_source_manager() {
     printf 'set GIT_PRELOAD_WORKER_GIT and GIT_PRELOAD_MANAGER_PYTHON before sourcing\n' >&2
     return 2
   fi
-  local owner_winpid
-  IFS= read -r owner_winpid < "/proc/$BASHPID/winpid" || return 1
-  if [[ ! $owner_winpid =~ ^[1-9][0-9]*$ ]]; then
+  local owner_pid
+  IFS= read -r owner_pid < "/proc/$BASHPID/winpid" || return 1
+  if [[ ! $owner_pid =~ ^[1-9][0-9]*$ ]]; then
     printf 'cannot resolve owning shell native Windows PID\n' >&2
     return 1
   fi
-  local script_path script_dir temp native_ready
+  local script_path script_dir temp native_directory
   script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) || return 1
   script_path=$(cygpath -w "$script_dir/windows_git_ipc_pool.py") || return 1
-  temp=$(mktemp -d) || return 1
-  native_ready=$(cygpath -w "$temp/ready.json") || return 1
+  temp=$(mktemp -d "${TMPDIR:-${TEMP:-${TMP:-/tmp}}}/git-preload-$owner_pid-XXXXXXXX") || return 1
+  native_directory=$(cygpath -w "$temp") || return 1
   "$GIT_PRELOAD_MANAGER_PYTHON" "$script_path" --git "$GIT_PRELOAD_WORKER_GIT" \
-    --workers "$requested" --owner-winpid "$owner_winpid" --ready-file "$native_ready" \
+    --workers "$requested" --owner-pid "$owner_pid" --directory "$native_directory" \
     >"$temp/manager.log" 2>&1 </dev/null &
   local launched=$!
   local i
@@ -83,7 +83,7 @@ _git_preload_source_manager() {
       _GIT_PRELOAD_MANAGER_BASH_PID=$launched
       _GIT_PRELOAD_MANAGER_READY=$temp/ready.json
       _GIT_PRELOAD_MANAGER_WORKERS=$requested
-      _GIT_PRELOAD_OWNER_WINPID=$owner_winpid
+      _GIT_PRELOAD_OWNER_PID=$owner_pid
       _GIT_PRELOAD_MANAGER_LOG=$temp/manager.log
       return 0
     fi
@@ -137,7 +137,7 @@ _git_preload_open_pipe() {
     esac
     if (( $? == 0 )); then
       if printf '%s' "$marker" >&"$fd"; then
-	return 0
+        return 0
       fi
       if [[ $fd == 8 ]]; then exec 8>&-;
       elif [[ $fd == 9 ]]; then exec 9>&-;
@@ -153,8 +153,8 @@ _git_preload_open_pipe() {
 _git_preload_connect_allocator() {
   if [[ ${_GIT_PRELOAD_ALLOC_CONNECTED:-} == 1 ]]; then return 0; fi
   local request reply
-  printf -v request '%s%s' '\\.\pipe\git-preload-allocate-req-' "$_GIT_PRELOAD_OWNER_WINPID"
-  printf -v reply '%s%s' '\\.\pipe\git-preload-allocate-reply-' "$_GIT_PRELOAD_OWNER_WINPID"
+  printf -v request '%s%s' '\\.\pipe\git-preload-allocate-req-' "$_GIT_PRELOAD_OWNER_PID"
+  printf -v reply '%s%s' '\\.\pipe\git-preload-allocate-reply-' "$_GIT_PRELOAD_OWNER_PID"
   if ! _git_preload_open_pipe 8 "$request" 0 400 ||
      ! _git_preload_open_pipe 9 "$reply" 0 400; then
     exec 8>&- 9>&-
@@ -261,30 +261,30 @@ git-ipc() {
     local out_open=1 err_open=1 chunk read_rc stderr_chunk
     while (( out_open || err_open )); do
       if (( out_open )); then
-	chunk=
-	IFS= read -r -d '' -t 0.100 -u "$fd_worker_stdout" chunk
-	read_rc=$?
-	[[ -z $chunk ]] || printf '%s' "$chunk"
-	if (( read_rc == 1 )); then
-	  out_open=0
-	  close_fhs "$fd_worker_stdout"
-	elif (( read_rc != 0 && read_rc <= 128 )); then
-	  close_fhs
-	  printf 'GIT-IPC ERROR: output pipe read failed\n' >&2; return 255
-	fi
+        chunk=
+        IFS= read -r -d '' -t 0.100 -u "$fd_worker_stdout" chunk
+        read_rc=$?
+        [[ -z $chunk ]] || printf '%s' "$chunk"
+        if (( read_rc == 1 )); then
+          out_open=0
+          close_fhs "$fd_worker_stdout"
+        elif (( read_rc != 0 && read_rc <= 128 )); then
+          close_fhs
+          printf 'GIT-IPC ERROR: output pipe read failed\n' >&2; return 255
+        fi
       fi
       if (( err_open )); then
-	stderr_chunk=
-	IFS= read -r -d '' -t 0.100 -u "$fd_worker_stderr" stderr_chunk
-	read_rc=$?
-	[[ -z $stderr_chunk ]] || printf '%s' "$stderr_chunk" >&2
-	if (( read_rc == 1 )); then
-	  err_open=0
-	  close_fhs "$fd_worker_stderr"
-	elif (( read_rc != 0 && read_rc <= 128 )); then
-	  close_fhs
-	  printf 'GIT-IPC ERROR: output pipe read failed\n' >&2; return 255
-	fi
+        stderr_chunk=
+        IFS= read -r -d '' -t 0.100 -u "$fd_worker_stderr" stderr_chunk
+        read_rc=$?
+        [[ -z $stderr_chunk ]] || printf '%s' "$stderr_chunk" >&2
+        if (( read_rc == 1 )); then
+          err_open=0
+          close_fhs "$fd_worker_stderr"
+        elif (( read_rc != 0 && read_rc <= 128 )); then
+          close_fhs
+          printf 'GIT-IPC ERROR: output pipe read failed\n' >&2; return 255
+        fi
       fi
     done
     [[ ${GIT_PRELOAD_TRACE:-} == 1 ]] && printf 'TRACE drained data pid=%s\n' "$pid" >>"$_GIT_PRELOAD_MANAGER_LOG"
@@ -312,11 +312,11 @@ git-ipc() {
       read_rc=$?
       [[ -z $chunk ]] || printf '%s' "$chunk"
       if (( read_rc == 1 )); then
-	out_open=0
-	close_fhs "$fd_worker_stdout"
+        out_open=0
+        close_fhs "$fd_worker_stdout"
       elif (( read_rc != 0 && read_rc <= 128 )); then
-	close_fhs
-	printf 'GIT-IPC ERROR: output pipe read failed\n' >&2; return 255
+        close_fhs
+        printf 'GIT-IPC ERROR: output pipe read failed\n' >&2; return 255
       fi
     fi
     if (( err_open )); then
@@ -325,11 +325,11 @@ git-ipc() {
       read_rc=$?
       [[ -z $chunk ]] || printf '%s' "$chunk" >&2
       if (( read_rc == 1 )); then
-	err_open=0
-	close_fhs "$fd_worker_stderr"
+        err_open=0
+        close_fhs "$fd_worker_stderr"
       elif (( read_rc != 0 && read_rc <= 128 )); then
-	close_fhs
-	printf 'GIT-IPC ERROR: output pipe read failed\n' >&2; return 255
+        close_fhs
+        printf 'GIT-IPC ERROR: output pipe read failed\n' >&2; return 255
       fi
     fi
   done

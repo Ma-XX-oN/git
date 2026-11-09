@@ -10,28 +10,34 @@ enum preload_transport_candidate_result {
 	CANDIDATE_ERROR
 };
 
+/** Selection results for one logical channel, published at the rendezvous. */
 struct preload_transport_channel {
-	LONG winner;
-	enum preload_transport_candidate_result result[2];
-	char marker[2];
+	LONG winner; /**< Atomic: zero until selected, otherwise instance index + 1. */
+	enum preload_transport_candidate_result result[2]; /**< Each connector owns its slot. */
+	char marker[2]; /**< Consumed bytes; read by the winner after both arrivals. */
 };
 
 struct preload_transport;
 
+/** Arguments borrowed by one connector until its thread has been joined. */
 struct preload_transport_connector {
-	struct preload_transport *connections;
-	int index;
+	struct preload_transport *connections; /**< Shared transport, owned by main. */
+	int index; /**< Pipe instance and publication slot, zero or one. */
 };
 
+/** Owns endpoints and connector storage from preparation through thread join. */
 struct preload_transport {
-	HANDLE (*pipes)
-	[2];
-	HANDLE *accepted, threads[2];
-	struct preload_transport_config config;
-	struct preload_transport_channel *channels;
-	struct preload_transport_connector connectors[2];
-	LONG arrived[2], completed, failure, deadline;
-	char expected_marker;
+	HANDLE (*pipes)[2]; /**< Owned candidate handles, indexed by channel/instance. */
+	HANDLE *accepted; /**< Aliases selected candidates; invalid after detach/close. */
+	HANDLE threads[2]; /**< Owned thread handles, closed after joining. */
+	struct preload_transport_config config; /**< Copy; referenced strings remain borrowed. */
+	struct preload_transport_channel *channels; /**< Owned per-channel selection state. */
+	struct preload_transport_connector connectors[2]; /**< Stable borrowed thread arguments. */
+	LONG arrived[2]; /**< Atomic per-thread completed operation generation. */
+	LONG completed; /**< Atomic generation validated by the winning connector. */
+	LONG failure; /**< Atomic first preload_transport_result failure, or zero. */
+	LONG deadline; /**< Atomic wrapping GetTickCount deadline in milliseconds. */
+	char expected_marker; /**< Configured digit or first valid consumed marker. */
 };
 
 /** @brief Read shared progress without modifying it. */
@@ -292,39 +298,54 @@ static int preload_transport_finish_connections(struct preload_transport *connec
 	return preload_transport_atomic_read(&connections->failure);
 }
 
-/** @brief Create owner-restricted synchronous pipes before publishing readiness. */
-int preload_transport_start(struct preload_transport **out,
-			    const struct preload_transport_config *config)
-{
-	struct preload_transport *transport;
-	HANDLE token = NULL;
-	TOKEN_USER *token_user = NULL;
-	DWORD token_size = 0, acl_size, error = 0;
-	ACL *acl = NULL;
-	SECURITY_DESCRIPTOR security_descriptor;
-	SECURITY_ATTRIBUTES security_attributes;
-	size_t i, j;
-	int result = -1;
+/**
+ * @brief Own the security descriptor's backing allocations during pipe creation.
+ * All pointers are released after CreateNamedPipe has copied the descriptor.
+ */
+struct preload_pipe_security {
+	HANDLE token; /**< Owned access token for the current process. */
+	TOKEN_USER *user; /**< Owned token information containing the owner's SID. */
+	ACL *acl; /**< Owned ACL granting access to that SID. */
+	SECURITY_DESCRIPTOR descriptor; /**< References acl until endpoint creation ends. */
+	SECURITY_ATTRIBUTES attributes; /**< Borrows descriptor; disables inheritance. */
+};
 
-	*out = NULL;
+/**
+ * @brief Check endpoint names and the connection-order permutation.
+ * @param config Borrowed configuration; must specify 1 through 32 channels.
+ * @return Zero if valid, -1 with EINVAL otherwise.
+ */
+static int validate_config(const struct preload_transport_config *config)
+{
+	size_t i, j;
+
 	if (!config || !config->location || !config->nr || config->nr > 32 ||
-	    !config->channels || !config->order || !config->timeout_ms) {
-		errno = EINVAL;
-		return -1;
-	}
+	    !config->channels || !config->order || !config->timeout_ms)
+		goto invalid;
 	for (i = 0; i < config->nr; i++) {
-		if (!config->channels[i].name || config->order[i] >= config->nr) {
-			errno = EINVAL;
-			return -1;
-		}
+		if (!config->channels[i].name || config->order[i] >= config->nr)
+			goto invalid;
 		for (j = 0; j < i; j++)
-			if (config->order[j] == config->order[i]) {
-				errno = EINVAL;
-				return -1;
-			}
+			if (config->order[j] == config->order[i])
+				goto invalid;
 	}
-	transport = xcalloc(1, sizeof(*transport));
-	*out = transport;
+	return 0;
+invalid:
+	errno = EINVAL;
+	return -1;
+}
+
+/**
+ * @brief Allocate a transport whose endpoint slots are initially unowned.
+ * @param config Borrowed validated configuration; strings outlive the transport.
+ * @return Newly owned transport, released with preload_transport_release().
+ */
+static struct preload_transport *allocate_transport(
+	const struct preload_transport_config *config)
+{
+	struct preload_transport *transport = xcalloc(1, sizeof(*transport));
+	size_t i, j;
+
 	transport->config = *config;
 	transport->expected_marker = config->expected_marker;
 	transport->pipes = xcalloc(config->nr, sizeof(*transport->pipes));
@@ -335,61 +356,109 @@ int preload_transport_start(struct preload_transport **out,
 		for (j = 0; j < 2; j++)
 			transport->pipes[i][j] = INVALID_HANDLE_VALUE;
 	}
-	/*
-	 * A pipe's default security descriptor gives Everyone and Anonymous
-	 * read access. Restrict all five PID-addressed channels to the process
-	 * owner before publishing their names in the READY handshake.
-	 */
-	if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
-		goto done;
-	GetTokenInformation(token, TokenUser, NULL, 0, &token_size);
-	if (!token_size || GetLastError() != ERROR_INSUFFICIENT_BUFFER)
-		goto done;
-	token_user = malloc(token_size);
-	if (!token_user ||
-	    !GetTokenInformation(token, TokenUser, token_user, token_size,
-				 &token_size))
-		goto done;
-	acl_size = sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE) -
-		   sizeof(DWORD) + GetLengthSid(token_user->User.Sid);
-	acl = malloc(acl_size);
-	if (!acl ||
-	    !InitializeAcl(acl, acl_size, ACL_REVISION) ||
-	    !AddAccessAllowedAce(acl, ACL_REVISION, GENERIC_ALL,
-				 token_user->User.Sid) ||
-	    !InitializeSecurityDescriptor(&security_descriptor,
-					  SECURITY_DESCRIPTOR_REVISION) ||
-	    !SetSecurityDescriptorDacl(&security_descriptor, TRUE, acl, FALSE))
-		goto done;
-	security_attributes.nLength = sizeof(security_attributes);
-	security_attributes.lpSecurityDescriptor = &security_descriptor;
-	security_attributes.bInheritHandle = FALSE;
+	return transport;
+}
 
-	for (i = 0; i < config->nr; i++) {
+/**
+ * @brief Grant pipe access exclusively to the current process owner.
+ * @param security Zero-initialized owned storage, including on partial failure.
+ * @return Zero on success, -1 with a Win32 last error on failure.
+ *
+ * A default pipe descriptor grants Everyone and Anonymous read access.
+ * Construct the restricted descriptor before publishing endpoint readiness.
+ */
+static int prepare_pipe_security(struct preload_pipe_security *security)
+{
+	DWORD token_size = 0, acl_size;
+
+	if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &security->token))
+		return -1;
+	GetTokenInformation(security->token, TokenUser, NULL, 0, &token_size);
+	if (!token_size || GetLastError() != ERROR_INSUFFICIENT_BUFFER)
+		return -1;
+	security->user = xmalloc(token_size);
+	if (!GetTokenInformation(security->token, TokenUser, security->user,
+				 token_size, &token_size))
+		return -1;
+	acl_size = sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE) -
+		sizeof(DWORD) + GetLengthSid(security->user->User.Sid);
+	security->acl = xmalloc(acl_size);
+	if (!InitializeAcl(security->acl, acl_size, ACL_REVISION) ||
+	    !AddAccessAllowedAce(security->acl, ACL_REVISION, GENERIC_ALL,
+				 security->user->User.Sid) ||
+	    !InitializeSecurityDescriptor(&security->descriptor,
+					  SECURITY_DESCRIPTOR_REVISION) ||
+	    !SetSecurityDescriptorDacl(&security->descriptor, TRUE,
+				       security->acl, FALSE))
+		return -1;
+	security->attributes.nLength = sizeof(security->attributes);
+	security->attributes.lpSecurityDescriptor = &security->descriptor;
+	security->attributes.bInheritHandle = FALSE;
+	return 0;
+}
+
+/**
+ * @brief Create two synchronous duplex instances for each logical channel.
+ * @param transport Owned endpoint table, retaining partial results on error.
+ * @param attributes Borrowed owner-restricted descriptor, valid during this call.
+ * @return Zero on success, -1 with a Win32 last error on failure.
+ */
+static int create_pipe_instances(struct preload_transport *transport,
+				SECURITY_ATTRIBUTES *attributes)
+{
+	size_t i, j;
+
+	for (i = 0; i < transport->config.nr; i++) {
 		struct strbuf name = STRBUF_INIT;
-		strbuf_addf(&name, "%s-%s", config->location, config->channels[i].name);
+
+		strbuf_addf(&name, "%s-%s", transport->config.location,
+			    transport->config.channels[i].name);
 		for (j = 0; j < 2; j++) {
-			transport->pipes[i][j] = CreateNamedPipeA(name.buf,
-								  PIPE_ACCESS_DUPLEX | (j == 0 ? FILE_FLAG_FIRST_PIPE_INSTANCE : 0),
-								  PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-								  2, 65536, 65536, 5000, &security_attributes);
+			DWORD mode = PIPE_ACCESS_DUPLEX |
+				(j == 0 ? FILE_FLAG_FIRST_PIPE_INSTANCE : 0);
+
+			transport->pipes[i][j] = CreateNamedPipeA(name.buf, mode,
+				PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+				2, 65536, 65536, 5000, attributes);
 			if (transport->pipes[i][j] == INVALID_HANDLE_VALUE) {
-				error = GetLastError();
+				DWORD error = GetLastError();
+
 				strbuf_release(&name);
-				goto done;
+				SetLastError(error);
+				return -1;
 			}
 		}
 		strbuf_release(&name);
 	}
-	result = preload_transport_start_connections(transport);
-done:
-	if (result && !error)
-		error = GetLastError();
-	free(acl);
-	free(token_user);
-	if (token)
-		CloseHandle(token);
-	if (result && error) {
+	return 0;
+}
+
+/**
+ * @brief Prepare owned endpoints and prestart the two blocking connectors.
+ * @param out Receives owned state, including partial state on failure; release it.
+ * @param config Borrowed configuration; referenced strings outlive returned state.
+ * @return Zero on success, -1 with errno set on failure.
+ */
+int preload_transport_start(struct preload_transport **out,
+			    const struct preload_transport_config *config)
+{
+	struct preload_pipe_security security = { 0 };
+	DWORD error;
+	int result = -1;
+
+	*out = NULL;
+	if (validate_config(config))
+		return -1;
+	*out = allocate_transport(config);
+	if (!prepare_pipe_security(&security) &&
+	    !create_pipe_instances(*out, &security.attributes))
+		result = preload_transport_start_connections(*out);
+	error = result ? GetLastError() : 0;
+	free(security.acl);
+	free(security.user);
+	if (security.token)
+		CloseHandle(security.token);
+	if (result) {
 		errno = err_win_to_posix(error);
 		SetLastError(error);
 	}
@@ -451,7 +520,7 @@ int preload_transport_detach_fd(struct preload_transport *transport, size_t chan
 /** @brief Close a connected channel still owned by this transport. */
 int preload_transport_has_channel(struct preload_transport *transport, size_t channel)
 {
-	return transport->pipes[channel][1] != INVALID_HANDLE_VALUE;
+	return transport->accepted[channel] != INVALID_HANDLE_VALUE;
 }
 
 /** @brief Close a connected channel still owned by this transport. */

@@ -25,6 +25,17 @@ test_expect_success 'context removal does not retain inherited variables' '
 	test_grep "^value=<unset>$" actual
 '
 
+test_expect_success 'empty export snapshot removes inherited variables' '
+	printf "env-export\0\0" >frame &&
+	PRELOAD_TEST_VALUE=old test-tool preload context frame >actual &&
+	test_grep "^value=<unset>$" actual
+'
+
+test_expect_success 'small export snapshot accepts an empty value' '
+	printf "env-export\0declare -x A=\"\"\n\0" >frame &&
+	test-tool preload context frame >actual
+'
+
 test_expect_success 'context rejects unterminated fields' '
 	printf "env-export\0declare -x PRELOAD_TEST_VALUE=\"x\"" >frame &&
 	test_must_fail test-tool preload context frame

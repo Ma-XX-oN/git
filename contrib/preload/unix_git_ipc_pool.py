@@ -11,7 +11,6 @@ import signal
 import subprocess
 import threading
 import time
-import uuid
 
 
 class Pool:
@@ -31,16 +30,14 @@ class Pool:
         """Start a single-use worker and publish it only after READY."""
         if self.stopping.is_set():
             return
-        channel_dir = self.directory / ("worker-" + uuid.uuid4().hex)
-        channel_dir.mkdir(mode=0o700)
-        for name in ("stdout", "stderr", "exit-code", "stdin", "param-env-cwd"):
-            os.mkfifo(channel_dir / name, 0o600)
         worker_env = os.environ.copy()
         worker_env["GIT_PRELOAD_OWNER_PID"] = str(self.owner_pid)
         p = subprocess.Popen(
-            [str(self.git), "--preload-worker", str(channel_dir)],
+            [str(self.git), "--preload-worker", str(self.directory)],
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL, env=worker_env, bufsize=0)
+
+        channel_dir = self.directory / ("worker-" + str(p.pid))
         with self.lock:
             self.children.append((p, channel_dir))
         line = p.stdout.readline()
@@ -68,9 +65,8 @@ class Pool:
             threading.Thread(target=self.spawn, daemon=True).start()
             return "WAIT"
         # Client owns this worker; the worker owns cleaning its FIFO directory.
-        threading.Thread(target=self.spawn, daemon=True).start()
         print("ALLOCATED " + str(p.pid), flush=True)
-        return str(channel_dir)
+        return str(p.pid)
 
     def close(self):
         """Stop pending work and release resources owned by this instance."""
@@ -128,8 +124,12 @@ def run(args):
         if pool.ready.qsize() != args.workers:
             raise RuntimeError("initial worker pool incomplete: " + repr(pool.errors))
         ready = root / "ready.json"
-        ready.write_text(json.dumps({"state": "READY", "workers": args.workers,
-                         "manager_pid": os.getpid()}) + "\n", encoding="utf-8")
+        temporary = root / "ready.tmp"
+        temporary.write_text(json.dumps({"state": "READY", "workers": args.workers,
+                             "manager_pid": os.getpid(), "owner_pid": args.owner_pid,
+                             "worker_pids": [p.pid for p, _ in list(pool.ready.queue)]})
+                             + "\n", encoding="utf-8")
+        temporary.replace(ready)
         print("POOL_READY " + str(args.workers), flush=True)
         # Keep one writer open for the entire manager session. Reopening the
         # writer per request lets Bash's next read attach to the previous
@@ -166,6 +166,10 @@ def run(args):
                 written = os.write(response_fd, payload)
                 if written != len(payload):
                     raise RuntimeError("short FIFO allocation reply write")
+                if answer not in ("WAIT", "INVALID"):
+                    # Publish the selected worker before replacement startup
+                    # competes with the client's command on the critical path.
+                    threading.Thread(target=pool.spawn, daemon=True).start()
         if pool.errors:
             raise RuntimeError("worker initialization failure: " + repr(pool.errors))
     finally:

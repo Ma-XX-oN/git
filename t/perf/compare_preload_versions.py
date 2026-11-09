@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import platform
 from pathlib import Path
 import shutil
 import statistics
@@ -13,7 +14,20 @@ import sys
 
 
 def load_benchmark(path, name):
-    """Load a revision's benchmark without modifying its client or protocol."""
+    """Load a revision's benchmark without modifying its client or protocol.
+
+    Parameters
+    ----------
+    path : Path
+        Benchmark source from the revision being measured.
+    name : str
+        Distinct module name for this variant.
+
+    Returns
+    -------
+    module
+        Loaded benchmark; its own client and wire protocol remain in use.
+    """
     sys.path.insert(0, str(path.parent))
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
@@ -33,6 +47,12 @@ def main():
     report = {"baseline": "working-version-two", "workers": 3,
               "host": os.environ.get("COMPUTERNAME", os.uname().nodename if not windows else ""),
               "platform": sys.platform, "tracing": False, "full_context": True,
+              "machine": {"os": platform.platform(), "architecture": platform.machine(),
+                          "processor": platform.processor(), "logical_cpus": os.cpu_count(),
+                          "python": sys.version, "bash": subprocess.check_output(
+                              [shutil.which("bash"), "--version"], text=True).splitlines()[0],
+                          "ci_run": os.environ.get("GITHUB_RUN_ID"),
+                          "ci_job": os.environ.get("GITHUB_JOB")},
               "order": ["baseline", "candidate", "candidate", "baseline"], "rounds": [],
               "variants": {}}
     variants = {}
@@ -72,6 +92,9 @@ def main():
                                     for sample in row["ipc"]["samples_ms"])
             for name in variants}
         report["reduction_ms"] = report["medians_ms"]["baseline"] - report["medians_ms"]["candidate"]
+        report["candidate_percent_of_baseline"] = (
+            100 * report["medians_ms"]["candidate"] / report["medians_ms"]["baseline"])
+        report["change_percent"] = report["candidate_percent_of_baseline"] - 100
         print("PRELOAD_MATCHED_SUMMARY", json.dumps(report["medians_ms"]), flush=True)
     finally:
         (args.output / "matched.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

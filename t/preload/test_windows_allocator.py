@@ -261,7 +261,7 @@ def test_allocator_isolation():
 
 def test_shutdown_after_drained_wakeup():
   """Force shutdown's notification to be consumed before the loop waits."""
-  pool = manager.Pool(Path("unused"), 1)
+  pool = manager.Pool(Path("unused"), 1, Path("unused"))
   original_drain = manager.CompletionPort.drain
 
   def drain_then_stop(port):

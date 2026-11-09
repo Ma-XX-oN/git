@@ -25,7 +25,13 @@ jobs:
           python-version: '3.13'
       - name: Install Meson
         shell: bash
-        run: python -m pip install meson ninja
+        run: |
+          if [[ $RUNNER_OS == Windows ]]; then
+            py="$(cygpath -u "$pythonLocation")/python.exe"
+          else
+            py="$pythonLocation/bin/python3"
+          fi
+          "$py" -m pip install meson ninja
       - name: Ensure Bash with EPOCHREALTIME on macOS
         if: runner.os == 'macOS'
         shell: bash
@@ -49,20 +55,29 @@ jobs:
             "$py" t/preload/test_windows_worker_lifecycle.py "$gitbin"
             "$py" t/preload/test_windows_allocator.py
           else
-            py=python3
+            py="$pythonLocation/bin/python3"
             gitbin="$PWD/git"
             helper="$PWD/t/helper/test-tool"
             "$py" t/preload/test_posix_worker.py "$gitbin"
           fi
           "$py" t/preload/test_transport.py "$helper"
           "$py" t/preload/test_owner_death.py --git "$gitbin"
-          "$py" t/preload/acceptance.py --git "$gitbin" --count 6000 --output preload-results
+          "$py" t/preload/acceptance.py --git "$gitbin" --count 6000 --trace --output preload-results
+      - name: Preserve native evidence before the full suites
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: preload-native-${{ runner.os }}-${{ github.sha }}
+          path: preload-results/
       - name: Git regression suite
         if: ${{ !cancelled() }}
         shell: bash
         run: |
-          if [[ $RUNNER_OS == Windows ]]; then . /etc/profile; fi
-          make -C t -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease DEFAULT_TEST_TARGET=test
+          if [[ $RUNNER_OS == Windows ]]; then
+            . /etc/profile
+            export GIT_BUILD_DIR="$(cygpath -au "$PWD")"
+          fi
+          make -C t -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease DEFAULT_TEST_TARGET=test GIT_TEST_OPTS=--tee
       - name: Build and test Meson
         if: ${{ !cancelled() }}
         shell: bash
@@ -70,8 +85,9 @@ jobs:
           if [[ $RUNNER_OS == Windows ]]; then
             . /etc/profile
             py="$(cygpath -u "$pythonLocation")/python.exe"
+            export PATH="$(cygpath -u "$pythonLocation")/Scripts:$PATH"
           else
-            py=python3
+            py="$pythonLocation/bin/python3"
           fi
           "$py" -m mesonbuild.mesonmain setup build-preload -Drust=disabled -Dcurl=disabled -Dgettext=disabled -Dgit_gui=disabled -Dgitk=disabled -Dzlib_backend=zlib
           "$py" -m mesonbuild.mesonmain compile -C build-preload -j4
@@ -91,7 +107,7 @@ jobs:
             . /etc/profile
             py="$(cygpath -u "$pythonLocation")/python.exe"
           else
-            py=python3
+            py="$pythonLocation/bin/python3"
           fi
           make -C baseline -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git$([[ $RUNNER_OS == Windows ]] && printf .exe)
           "$py" t/perf/compare_preload_versions.py --baseline baseline --output preload-comparison

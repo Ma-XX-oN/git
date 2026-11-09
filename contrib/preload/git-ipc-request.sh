@@ -5,7 +5,7 @@ _git_preload_write_context() {
   if [[ $platform == windows ]]; then
     # Investigation-only switches; default keeps both features enabled.
     if [[ ${GIT_PRELOAD_ABLATION_CWD:-1} == 1 ]]; then
-      printf 'cwd-win\0' || return 1
+      printf 'cwd\0' || return 1
       pwd -W || return 1
       printf '\0' || return 1
     fi
@@ -18,7 +18,9 @@ _git_preload_write_context() {
   fi
   # Unix and Windows share the validated native export-declaration decoder.
   # Both outputs are Bash builtins; neither opens an MSYS subprocess.
-  printf 'cwd\0%s\0env-export\0' "$PWD" || return 1
+  printf 'cwd\0' || return 1
+  pwd -P || return 1
+  printf '\0env-export\0' || return 1
   export -p || return 1
   printf '\0' || return 1
 }

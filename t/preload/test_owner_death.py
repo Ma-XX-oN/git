@@ -18,6 +18,7 @@ if [[ ${OSTYPE:-} == msys* || ${OSTYPE:-} == cygwin* ]]; then
 else
   printf 'GET\n' >"$_GIT_PRELOAD_UNIX_DIRECTORY/allocate-req" || exit 2
   IFS= read -r allocated <&"$_GIT_PRELOAD_UNIX_REPLY_FD" || exit 3
+  allocated=$_GIT_PRELOAD_UNIX_DIRECTORY/worker-$allocated
 fi
 printf '%s\n' "$allocated"
 while :; do sleep 1; done

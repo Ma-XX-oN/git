@@ -16,6 +16,14 @@ import time
 SHELL = r'''
 set -u
 source "$1" 3 || exit 10
+if [[ ${OSTYPE:-} == msys* || ${OSTYPE:-} == cygwin* ]]; then
+  manager_log=$_GIT_PRELOAD_MANAGER_LOG
+else
+  manager_log=$_GIT_PRELOAD_UNIX_MANAGER_LOG
+fi
+printf '%s\n' "$manager_log" >"$3/manager-path.txt"
+# Preserve the allocator's last events on ordinary command failure as well.
+trap 'cp "$manager_log" "$3/manager.log"' EXIT
 expected=$("$GIT_PRELOAD_WORKER_GIT" --version) || exit 11
 actual=$(git-ipc --version) || exit 12
 [[ $actual == "$expected" ]] || exit 13
@@ -36,12 +44,8 @@ for ((i=0; i<$2; i++)); do
   IFS= read -r actual <"$3/actual.txt" || exit 24
   [[ $actual == "$expected" ]] || exit 25
   printf '%s,%s,%s\n' "$i" "$begin" "$end"
+  if (( i % 500 == 0 )); then printf 'PRELOAD_STRESS_PROGRESS %s\n' "$i" >&2; fi
 done
-if [[ ${OSTYPE:-} == msys* || ${OSTYPE:-} == cygwin* ]]; then
-  cp "$_GIT_PRELOAD_MANAGER_LOG" "$3/manager.log"
-else
-  cp "$_GIT_PRELOAD_UNIX_MANAGER_LOG" "$3/manager.log"
-fi
 '''
 
 
@@ -52,12 +56,23 @@ def shell_path(path):
     return str(path)
 
 
+def preserve_manager_log(output):
+    """Copy the last allocator events before timeout terminates its owner."""
+    metadata = output / "manager-path.txt"
+    if metadata.exists():
+        path = metadata.read_text(encoding="utf-8").strip()
+        if os.name == "nt":
+            path = subprocess.check_output(["cygpath", "-w", path], text=True).strip()
+        shutil.copy2(path, output / "manager.log")
+
+
 def main():
     """Validate full context and serial execution against the supplied build."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--git", required=True, type=Path)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--count", type=int, default=6000)
+    parser.add_argument("--trace", action="store_true")
     parser.add_argument("--output", type=Path, default=Path("preload-results"))
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
@@ -67,6 +82,8 @@ def main():
     env["GIT_PRELOAD_WORKER_GIT"] = str(args.git.resolve())
     env["GIT_PRELOAD_MANAGER_PYTHON"] = sys.executable
     env["GIT_PRELOAD_DRAIN_MODE"] = "chunk100"
+    if args.trace:
+        env["GIT_TRACE_PRELOAD"] = str(output / "worker-trace.log")
     command = [shutil.which("bash"), "--noprofile", "--norc", "-c", SHELL,
                "acceptance", shell_path(root / "contrib/preload/git-manager.sh"),
                str(args.count), shell_path(output), shell_path(root)]
@@ -75,8 +92,20 @@ def main():
         out.write("sample,begin,end\n")
         out.flush()
         with (output / "stderr.log").open("w", encoding="utf-8", newline="\n") as err:
-            subprocess.run(command, env=env, cwd=root, stdout=out, stderr=err,
-                           timeout=900, check=True)
+            process = subprocess.Popen(command, env=env, cwd=root, stdout=out, stderr=err)
+            try:
+                result = process.wait(timeout=900)
+            except subprocess.TimeoutExpired:
+                try:
+                    preserve_manager_log(output)
+                except OSError as error:
+                    print(f"PRELOAD_LOG_CAPTURE_FAILED {error}", file=sys.stderr)
+                finally:
+                    process.kill()
+                    process.wait(timeout=15)
+                raise
+            if result:
+                raise subprocess.CalledProcessError(result, command)
     rows = (output / "stress.csv").read_text(encoding="utf-8").splitlines()[1:]
     assert len(rows) == args.count, len(rows)
     samples = [float((Decimal(row.split(",")[2]) - Decimal(row.split(",")[1])) * 1000)
