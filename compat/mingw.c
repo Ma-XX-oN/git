@@ -3767,7 +3767,7 @@ static wchar_t git_preinit_exit_log_path[4096];
  * Use a new Win32 handle for every diagnostic: Git may already have closed
  * Trace2 and trace_printf_key's descriptors during shutdown.
  */
-static void git_preinit_exit_diagnostic(const char *event, int status)
+void git_preinit_exit_diagnostic(const char *event, int status)
 {
   char message[160], error_message[200];
   HANDLE file;
