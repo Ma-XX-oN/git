@@ -185,7 +185,7 @@ def main():
     source = (root / "compat/mingw.c").read_text(encoding="utf-8")
     begin = source.index("enum git809_candidate_result {")
     end = source.index("/*\n * The manager transfers", begin)
-    prelude = ('#include <windows.h>\n#include <stdio.h>\n#include <stdlib.h>\n'
+    prelude = ('#define WIN32_LEAN_AND_MEAN\n#include <windows.h>\n#include <stdio.h>\n#include <stdlib.h>\n'
                '#include <assert.h>\n#include <string.h>\n'
                '#define trace_printf_key(key, ...) do { if (0) fprintf(stderr, __VA_ARGS__); } while (0)\n'
                '#define BUG(...) abort()\n')
