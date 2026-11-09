@@ -86,7 +86,7 @@ static int git_preload_start_owner_watch(const char *directory)
     unsigned char ch = raw[i];
 
     if (ch < '0' || ch > '9' ||
-        value > (LONG_MAX - (ch - '0')) / 10)
+        value > ((unsigned long)LONG_MAX - (unsigned long)(ch - '0')) / 10)
       return -1;
     value = value * 10 + ch - '0';
   }
@@ -257,4 +257,7 @@ cleanup:
   free(frame);
   return rc;
 }
+#else
+/* The Makefile also compiles this source for native Windows builds. */
+typedef int git_preload_unix_excluded_on_windows;
 #endif
