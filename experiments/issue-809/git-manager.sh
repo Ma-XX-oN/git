@@ -114,7 +114,7 @@ close_fhs() {
   fi
   for fd in "$@"; do
     case $fd in
-      4|5|6|7|9) eval "exec ${fd}>&-" ;;
+      4|5|6|7|9) exec {fd}>&- ;;
       *) return 2 ;;
     esac
   done
