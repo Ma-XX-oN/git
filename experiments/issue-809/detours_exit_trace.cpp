@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <detours.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <wchar.h>
 
 using ExitProcessFn = VOID (WINAPI *)(UINT);
