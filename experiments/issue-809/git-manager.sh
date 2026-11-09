@@ -108,13 +108,14 @@ fi
 close_fhs() {
   local fd
   if (( $# == 0 )); then
-    exec {fd_allocate_request}>&- {fd_allocate_reply}>&- \
-         {fd_worker_stdin}>&- {fd_worker_stdout}>&- {fd_worker_stderr}>&- \
-         {fd_worker_exit}>&- {fd_worker_control}>&-
+    exec 3>&- 4>&- 5>&- 6>&- 7>&-
     return
   fi
   for fd in "$@"; do
-    exec {fd}>&-
+    case $fd in
+      3|4|5|6|7) exec {fd}>&- ;;
+      *) return 2 ;;
+    esac
   done
 }
 
@@ -122,7 +123,7 @@ close_fhs() {
 # Keep the established descriptor numbers and opening order unchanged.
 _git809_open_pipe() {
   local fd=$1 path=$2 marker=$3 retries=${4:-1} attempt
-  [[ $fd =~ ^[3-8]$ && $marker =~ ^[0-9]$ &&
+  [[ $fd =~ ^[3-9]$ && $marker =~ ^[0-9]$ &&
      $retries =~ ^[1-9][0-9]*$ ]] || return 2
   for ((attempt=0; attempt<retries; attempt++)); do
     case $fd in
@@ -132,12 +133,15 @@ _git809_open_pipe() {
       6) { exec 6<>"$path"; } 2>/dev/null ;;
       7) { exec 7<>"$path"; } 2>/dev/null ;;
       8) { exec 8<>"$path"; } 2>/dev/null ;;
+      9) { exec 9<>"$path"; } 2>/dev/null ;;
     esac
     if (( $? == 0 )); then
       if printf '%s' "$marker" >&"$fd"; then
         return 0
       fi
-      close_fhs "$fd"
+      if [[ $fd == 8 ]]; then exec 8>&-;
+      elif [[ $fd == 9 ]]; then exec 9>&-;
+      else close_fhs "$fd"; fi
       return 1
     fi
     if (( attempt + 1 < retries )); then sleep .005; fi
@@ -145,48 +149,47 @@ _git809_open_pipe() {
   return 1
 }
 
+# Keep the two allocation channels connected for the owning shell's lifetime.
+_git809_connect_allocator() {
+  if [[ ${_GIT809_ALLOC_CONNECTED:-} == 1 ]]; then return 0; fi
+  local request reply
+  printf -v request '%s%s' '\\.\pipe\git809-allocate-req-' "$_GIT809_OWNER_WINPID"
+  printf -v reply '%s%s' '\\.\pipe\git809-allocate-reply-' "$_GIT809_OWNER_WINPID"
+  if ! _git809_open_pipe 8 "$request" 0 400 ||
+     ! _git809_open_pipe 9 "$reply" 0 400; then
+    exec 8>&- 9>&-
+    return 1
+  fi
+  _GIT809_ALLOC_CONNECTED=1
+}
+_git809_connect_allocator || {
+  printf 'GIT-IPC ERROR: persistent allocator connection failed\n' >&2
+  return 1
+}
+
 # Request a worker PID, then talk directly to its five worker channels.
 # The Python manager only allocates IDs; it never forwards Git output.
 git-ipc() {
-  local fd_allocate_request=3 fd_allocate_reply=8
   local fd_worker_stdin=3 fd_worker_stdout=4 fd_worker_stderr=5
-  local fd_worker_exit=6 fd_worker_control=7 
-  if [[ -z ${_GIT809_OWNER_WINPID:-} || $# -gt 31 ]]; then
-    printf 'git-ipc requires a running manager and at most 31 arguments\n' >&2
+  local fd_worker_exit=6 fd_worker_control=7
+  if [[ ${_GIT809_ALLOC_CONNECTED:-} != 1 || $# -gt 31 ]]; then
+    printf 'git-ipc requires a connected allocator and at most 31 arguments\n' >&2
     printf 'GIT-IPC ERROR: invalid invocation\n' >&2; return 255
   fi
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE start bashpid=%s\n' "$BASHPID" >>"$_GIT809_MANAGER_LOG"
-  # GET and worker ID are separate one-way logical channels.
-  # BASHPID correlates the reply to this client, including concurrent Bash
-  # subshells. Duplex handles carry only the Windows T identification byte
-  # in the reverse direction of each application's data flow.
-  # Each allocation needs a distinct reply name until the previous reply
-  # server has released both instances. Bash PID alone can be reused by
-  # consecutive requests before the prior FlushFileBuffers/close finishes.
   _GIT809_REQUEST_SEQ=$(( ${_GIT809_REQUEST_SEQ:-0} + 1 ))
-  local allocator reply client_pid=$BASHPID
-  local request_id="${client_pid}-${_GIT809_REQUEST_SEQ}"
   local marker=$(( _GIT809_REQUEST_SEQ % 10 ))
-  printf -v allocator '%s%s' '\\.\pipe\git809-allocate-req-' "$_GIT809_OWNER_WINPID"
-  printf -v reply '%s%s-%s' '\\.\pipe\git809-allocate-reply-' "$_GIT809_OWNER_WINPID" "$request_id"
   local pid i count header arg status line
   local _git809_t_start _git809_t_alloc _git809_t_connect _git809_t_send _git809_t_drained
   if [[ -n ${GIT809_TIMING_LOG:-} ]]; then _git809_t_start=$EPOCHREALTIME; fi
-  if ! _git809_open_pipe "$fd_allocate_request" "$allocator" "$marker" 400; then
+  if ! printf 'GET\n' >&8; then
     close_fhs
-    printf 'GIT-IPC ERROR: allocation request pipe unavailable\n' >&2; return 255
+    printf 'GIT-IPC ERROR: allocator GET write failed\n' >&2; return 255
   fi
-  if ! printf 'GET %s\n' "$request_id" >&"$fd_allocate_request"; then
+  IFS= read -r pid <&9 || {
     close_fhs
-    printf 'GIT-IPC ERROR: allocation request write failed\n' >&2; return 255
-  fi
-  # Keep request open until ID delivery so the server can read its bytes.
-  if ! _git809_open_pipe "$fd_allocate_reply" "$reply" "$marker" 400; then
-    close_fhs
-    printf 'GIT-IPC ERROR: allocation reply pipe unavailable\n' >&2; return 255
-  fi
-  IFS= read -r pid <&"$fd_allocate_reply" || { close_fhs; printf 'GIT-IPC ERROR: allocation response failed\n' >&2; return 255; }
-  close_fhs "$fd_allocate_reply" "$fd_allocate_request"
+    printf 'GIT-IPC ERROR: allocator ID read failed\n' >&2; return 255
+  }
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE allocated pid=%s bashpid=%s\n' "$pid" "$BASHPID" >>"$_GIT809_MANAGER_LOG"
   if [[ $pid == WAIT ]]; then
     printf 'Git worker pool temporarily depleted\n' >&2
