@@ -39,7 +39,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          python experiments/issue-809/check_pe_debug_sections.py git.exe
+          # The minimal Git SDK Bash PATH does not expose Python or objdump.
+          # Validate the exact PE in the following native PowerShell step.
           if ($LASTEXITCODE -ne 0) { throw 'Missing Git DWARF debug sections' }
       - name: Build pinned Microsoft Detours 4.0.1 and instrumentation
         shell: pwsh
@@ -62,6 +63,10 @@ jobs:
           $include = "$env:RUNNER_TEMP\detours\src"
           $library = "$env:RUNNER_TEMP\detours\lib.X64\detours.lib"
           if (-not (Test-Path $library)) { throw 'Detours library missing' }
+          python experiments/issue-809/check_pe_debug_sections.py git.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Same-SHA Git DWARF verification failed' }
+          New-Item -ItemType Directory -Force exit-detours-results | Out-Null
+          Copy-Item git.exe exit-detours-results/git.exe -Force
           $dir = "experiments\issue-809"
           New-Item -ItemType Directory -Force exit-detours-results | Out-Null
           cl /nologo /std:c++17 /EHsc /W4 /WX /MT /Zi /Od /LD "/I$include" "$dir\detours_exit_trace.cpp" /link /DEBUG:FULL "/PDB:$env:RUNNER_TEMP\git809_detours_exit.pdb" "/OUT:$env:RUNNER_TEMP\git809_detours_exit.dll" "/DEF:$dir\detours_exit_trace.def" $library
