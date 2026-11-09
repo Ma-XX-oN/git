@@ -4483,6 +4483,7 @@ static int git_preinit_worker(void)
     set_preload_exit_callback(NULL);
     rc = common_exit(__FILE__, __LINE__, rc);
   } else {
+    git_preinit_exit_diagnostic("longjmp resumed", git_preinit_exit_status);
     rc = git_preinit_exit_status;
   }
   set_preload_exit_callback(NULL);
