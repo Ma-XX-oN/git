@@ -15,6 +15,8 @@ retain the limitations in [the transport contract](TRANSPORT-CONTRACT.md).
   tracing constant within a comparison. Warm `git --version` is the workload
   below; startup and initial pool preparation are excluded.
 - Use ABBA order for changes under test; preserve each round and its samples.
+  Three-variant isolation uses ABCCBA within one host/job, with matching native
+  binary paths and the same client except for the two validation lines.
   Local ABBA entries below have 80 paired direct/IPC calls per round and 160 IPC
   samples per variant. Direct calls alternate order with IPC calls.
 - Keep diagnostic traces and phase timers off for end-to-end performance.
@@ -34,6 +36,9 @@ retain the limitations in [the transport contract](TRANSPORT-CONTRACT.md).
 | Shell patterns instead of regex pipe validation | 6.7650 ms | 6.5045 ms | 0.2605 ms | Adopted in `f62fbc2d7b`; same-job CI measurement pending |
 | One-call environment replacement | 5.2780 ms | 4.7915 ms | 0.4865 ms | Rejected: three compatibility failures |
 | Changed-only environment updates | 5.5045 ms | 4.9770 ms | 0.5275 ms | Temporary prototype; broader validation pending |
+| Final candidate: regex to patterns (A/B) | 5.5645 ms | 5.2880 ms | 0.2765 ms | Same laptop ABCCBA experiment below |
+| Final candidate: native environment (B/C) | 5.2880 ms | 5.0450 ms | 0.2430 ms | Same laptop ABCCBA experiment below |
+| Final candidate: combined (A/C) | 5.5645 ms | 5.0450 ms | 0.5195 ms | Same laptop ABCCBA experiment below |
 
 These are separate matched experiments. Their baseline variation is visible in
 the raw round medians; the reductions must not be added together. An earlier
@@ -122,6 +127,53 @@ Windows drive-directory entries and last-wins aliases. All 14 differential cases
 pass, including Unicode, empty/removed values, aliases, an empty environment,
 300 variables, invalid export syntax and long values. Native worker stress and
 same-job CI acceptance are still required before adopting it.
+
+The original 14-case prototype comparison compared case-folded names and values.
+The permanent differential test also checks exact name spelling. This exposed
+three alias-spelling differences: successive baseline updates retain the first
+alias spelling with the last value, while the prototype retained the last spelling.
+The production candidate preserves the baseline's first-spelling/last-value rule.
+Two additional cases cover renaming an existing variable and an unchanged snapshot.
+The prototype timing above remains prototype evidence; the final implementation
+requires its own worker tests and matched measurements.
+
+The final candidate passed all 16 exact context comparisons, 26 native worker
+lifecycle cases, connection/duplicate-marker/cancellation cases, persistent
+allocator tests, Bash framing and the complete local 6,000-command stress run.
+Its matched laptop ABCCBA test measured A/B/C medians of 5.5645/5.2880/5.0450 ms,
+with 240 calls per variant. Native B/C savings were 0.2430 ms, below the earlier
+prototype's 0.5275 ms observation; the final matched result takes precedence for
+this candidate. The 4–5 ms objective remains a CI objective and is not established
+by this laptop result. Same-job CI acceptance is pending.
+
+Evidence: [final laptop rounds, samples and identities](performance/evidence/adopted-environment-laptop.json),
+[16 exact context comparisons](performance/evidence/adopted-environment-cases.json),
+[full local stress log](performance/evidence/adopted-environment-stress.log).
+
+### Reproducing a matched comparison
+
+Build both checkouts with identical flags and native DLLs, then run from the
+candidate checkout using native Windows Python and SDK Bash on PATH:
+
+```sh
+python experiments/issue-809/performance/compare_windows.py \
+  --before-git BASELINE/git.exe --after-git git.exe \
+  --baseline-sha 82080aa670fb1665b4827a061a5bc5690066463d --output RESULTS
+```
+
+The script isolates A (baseline native plus regex), B (baseline native plus
+patterns) and C (changed-only native plus patterns), in ABCCBA order. It records
+240 untraced calls per variant, direct-call controls, source/executable hashes,
+build flags when available, host, CI run/job and complete round samples. Both
+binaries use symmetric temporary paths; all variants use the same manager,
+request framing, cwd, environment, workload and three-worker pool. The native
+Windows stream workflow builds and runs all variants inside one job.
+
+The context probe makefile in `performance/support` links the identical fixture
+against each checkout's real libgit implementation. `performance/compare_context.py`
+compares exact resulting environments and return codes for 16 cases, including
+long values, drive-directory entries and case aliases. Its output is preserved
+alongside the same-job performance artifact.
 
 Evidence: [one-call pairs](performance/evidence/one-call-environment-pairs.json),
 [rejection summary](performance/evidence/one-call-environment-semantics.json),

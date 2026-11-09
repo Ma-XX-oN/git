@@ -1,6 +1,7 @@
 #include "git-compat-util.h"
 #include "preload-context.h"
 #include "utf8.h"
+#include "strvec.h"
 
 #ifdef GIT_WINDOWS_NATIVE
 #include <windows.h>
@@ -28,41 +29,9 @@ static int valid_environment_block(const char *buf, size_t len)
   return offset == len - 1 ? 0 : -1;
 }
 
+#ifndef GIT_WINDOWS_NATIVE
 static int clear_worker_environment(void)
 {
-#ifdef GIT_WINDOWS_NATIVE
-  wchar_t *block = GetEnvironmentStringsW();
-  const wchar_t *entry;
-  int result = 0;
-  if (!block)
-    return -1;
-  for (entry = block; *entry; entry += wcslen(entry) + 1) {
-    const wchar_t *equals = wcschr(entry + (*entry == L'='), L'=');
-    wchar_t *key;
-    size_t len;
-    if (!equals)
-      continue;
-    /* Windows' =C: drive-directory pseudo-variables are not exported
-     * by Bash; preserve them rather than treating them as ordinary keys. */
-    if (*entry == L'=')
-      continue;
-    len = (size_t)(equals - entry);
-    key = malloc((len + 1) * sizeof(*key));
-    if (!key) {
-      result = -1;
-      break;
-    }
-    wmemcpy(key, entry, len);
-    key[len] = L'\0';
-    if (!SetEnvironmentVariableW(key, NULL))
-      result = -1;
-    free(key);
-    if (result)
-      break;
-  }
-  FreeEnvironmentStringsW(block);
-  return result;
-#else
   extern char **environ;
   while (environ && environ[0]) {
     const char *equal = strchr(environ[0], '=');
@@ -83,14 +52,28 @@ static int clear_worker_environment(void)
     free(key);
   }
   return 0;
-#endif
 }
+#endif
 
+/** @brief Validate and apply a complete UTF-8 binary environment snapshot. */
 static int apply_environment_block(const char *buf, size_t len)
 {
   size_t offset = 0;
+#ifdef GIT_WINDOWS_NATIVE
+  struct strvec environment = STRVEC_INIT;
+  int result;
+#endif
   if (valid_environment_block(buf, len))
     return -1;
+#ifdef GIT_WINDOWS_NATIVE
+  while (offset < len - 1 && buf[offset]) {
+    strvec_push(&environment, buf + offset);
+    offset += strlen(buf + offset) + 1;
+  }
+  result = mingw_replace_environment(environment.v);
+  strvec_clear(&environment);
+  return result;
+#else
   if (clear_worker_environment())
     return -1;
   while (offset < len - 1 && buf[offset]) {
@@ -111,6 +94,7 @@ static int apply_environment_block(const char *buf, size_t len)
     offset += strlen(entry) + 1;
   }
   return 0;
+#endif
 }
 
 #include "preload-export-stream.h"

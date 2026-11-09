@@ -135,6 +135,17 @@ CRT shutdown. Windows completion does not use `setjmp()` or `longjmp()`.
 Abrupt process termination can bypass the callback and remains a transport
 failure rather than a successfully delivered Git exit result.
 
+### Windows environment snapshots
+
+Both environment encodings describe a complete snapshot. Apply it by removing
+unlisted ordinary variables and setting only entries whose name spelling or
+value differs. Preserve Windows drive-directory entries. Names use Windows'
+case-insensitive comparison; aliases retain the first spelling and last value.
+Recreate a changed spelling so child processes see the caller's requested name
+case. Empty values, an empty snapshot and long values retain the existing
+per-variable API behavior.
+No state is cached between calls and no environment fields are omitted.
+
 
 ## Existing output limitation
 

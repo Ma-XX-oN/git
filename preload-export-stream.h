@@ -1,5 +1,6 @@
 /* Restricted Bash export -p decoder. Included in preload-context.c after
  * clear_worker_environment(); never interpret commands or expansions. */
+/* Native Windows snapshot application uses mingw_replace_environment(). */
 struct export_pair { char *name, *value; };
 static int export_hex(unsigned char c) {
   if (c >= '0' && c <= '9') return c - '0';
@@ -107,10 +108,14 @@ static int export_name_ok(const char *p, size_t len) {
           (p[i] >= '0' && p[i] <= '9') || p[i] == '_')) return 0;
   return 1;
 }
+/** @brief Decode restricted Bash exports and apply their complete snapshot. */
 static int apply_export_stream(const char *buf, size_t len) {
   struct export_pair *pairs = NULL, *grown;
   size_t off = 0, used = 0, cap = 0, i;
   int rc = -1;
+#ifdef GIT_WINDOWS_NATIVE
+  struct strvec environment = STRVEC_INIT;
+#endif
   if (!len || buf[len - 1] != '\n' || memchr(buf, '\0', len)) return -1;
   while (off < len) {
     const char *line = buf + off;
@@ -142,11 +147,20 @@ static int apply_export_stream(const char *buf, size_t len) {
     if (decode_export_value(eq + 1, end - eq - 1,
                             &pairs[used - 1].value)) goto cleanup;
   }
+#ifdef GIT_WINDOWS_NATIVE
+  for (i = 0; i < used; i++)
+    strvec_pushf(&environment, "%s=%s", pairs[i].name, pairs[i].value);
+  rc = mingw_replace_environment(environment.v);
+#else
   if (clear_worker_environment()) goto cleanup;
   for (i = 0; i < used; i++)
     if (setenv(pairs[i].name, pairs[i].value, 1)) goto cleanup;
   rc = 0;
+#endif
 cleanup:
+#ifdef GIT_WINDOWS_NATIVE
+  strvec_clear(&environment);
+#endif
   for (i = 0; i < used; i++) {
     free(pairs[i].name); free(pairs[i].value);
   }

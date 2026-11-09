@@ -13,6 +13,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: 82080aa670fb1665b4827a061a5bc5690066463d
+          path: git809-baseline
+          persist-credentials: false
       - uses: git-for-windows/setup-git-for-windows-sdk@v2
       - uses: actions/setup-python@v5
         with:
@@ -22,6 +27,18 @@ jobs:
         run: |
           . /etc/profile
           make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git.exe
+      - name: Compile comparison baseline and context probes with matching flags
+        shell: bash
+        run: |
+          . /etc/profile
+          set -euo pipefail
+          make -C git809-baseline -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git.exe
+          support="$PWD/experiments/issue-809/performance/support"
+          mkdir -p git809-bash-pipe-results/context-compare
+          make -f "$support/native-context-probe.mk" -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease "$support/native-context-probe.exe" PROBE_OUTPUT="$support/native-context-probe.exe"
+          make -C git809-baseline -f "$support/native-context-probe.mk" -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease "$PWD/git809-baseline/native-context-probe.exe" PROBE_SOURCE="$support/native-context-probe.c" PROBE_OUTPUT="$PWD/git809-baseline/native-context-probe.exe"
+          PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
+          "$PYTHON_EXE" experiments/issue-809/performance/compare_context.py --before git809-baseline/native-context-probe.exe --after "$support/native-context-probe.exe" --output git809-bash-pipe-results/context-compare
       - name: Check environment roundtrip, cwd, isolation, and IPC latency
         shell: bash
         run: |
@@ -96,6 +113,13 @@ jobs:
           PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
           export GIT809_MANAGER_PYTHON="$(cygpath -w "$PYTHON_EXE")"
           "$PYTHON_EXE" experiments/issue-809/pool_size_ab_benchmark.py
+      - name: Compare native and shell optimizations within this job
+        shell: bash
+        run: |
+          . /etc/profile
+          set -euo pipefail
+          PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
+          "$PYTHON_EXE" experiments/issue-809/performance/compare_windows.py --before-git git809-baseline/git.exe --after-git git.exe --baseline-sha 82080aa670fb1665b4827a061a5bc5690066463d --output git809-bash-pipe-results/same-job-comparison
       - name: Preserve timings
         if: always()
         uses: actions/upload-artifact@v4
