@@ -67,17 +67,16 @@ For every logical channel, the Windows server/receiving endpoint creates a pair 
 5. Two `T` markers on distinct instances of a pair indicate a protocol violation; report an error, do not arbitrarily select one.
 6. Close and release all handles, pending accept operations, and per-connection state on success, error, cancellation, and owner death.
 
-For allocation, GET and ID travel over distinct logical named-pipe names. The Windows reply name is unique for **every request**, identified by the Bash process ID and a monotonically increasing shell-local sequence; the GET frame carries that identity. Both the request parser and reply-name constructor validate its two unsigned decimal components. PID-only reply names are prohibited because successive calls from one Bash process overlap server-side close/recreation. The same T identification rule applies to both channels; concurrent clients must receive only their own replies.
+For allocation, GET and worker ID travel over **two persistent,
+unidirectional logical channels**. When the owning Bash sources the manager,
+it opens the `allocate-req` and `allocate-reply` named pipes once, each
+with a single Windows ASCII `0` marker identifying the transport instance.
+Thereafter each serial call writes exactly `GET\n` on the request channel,
+reads one newline-terminated worker PID (or `WAIT\n`) on the reply channel,
+and leaves both connected. Only one allocation is outstanding per shell.
+The worker's five one-shot channels retain their call-specific decimal marker
+`sequence % 10`; no native worker transport change is part of this protocol.
 
-## Windows call marker
-
-For serial calls, `git-ipc` replaces each Windows `T` connection marker
-with the decimal digit `sequence % 10`, including GET, reply, and all
-five worker channels. The request ID remains `BashPID-sequence` and
-continues to determine the unique reply-pipe name. The manager verifies
-that the GET and reply marker match the sequence. The native worker
-requires the same digit on all five channels. No acknowledgment, additional
-connection, or stream-handling change is introduced.
 
 ## Transport-selection API
 
@@ -108,20 +107,17 @@ across successive channels. Connect and marker reads remain blocking; the
 main thread does not dispatch or acknowledge individual pairs. Connection
 deadlines and owner death still terminate stalled handshakes.
 
-The Python `git-manager` implements `TransportPair(port, address, marker)`.
-Its `advance()` returns the selected `Pipe` or None while selection is pending,
-and raises on failure. Production replies and selector tests use this same
-implementation. Each `Pipe` owns its native handle, OVERLAPPED, buffer, and
-operation result until completion or cancellation has been dequeued. A shared
-I/O completion port waits for all GET and reply operations without the
-64-event limit. No cross-language
-C library is introduced: GET and ID connect Bash with Python, while the five
-Git worker channels connect Bash with C.
+The Python `git-manager` creates the two `TransportPair` objects
+before the owning shell connects. `advance()` selects one marked instance
+for each channel and closes its unused probe. Both selected instances remain
+open for the shell's lifetime. The same completion port serves request reads,
+reply writes, worker-ready notifications, and shutdown. Reads accumulate
+`GET\n`, and the manager replies with exactly one line. When the READY
+queue is empty, it waits up to five seconds before replying `WAIT\n`.
+The manager does not create, flush, or close a reply pipe per command.
+The worker's five native channels and their independent connection
+handling remain unchanged.
 
-Worker allocation is nonblocking: an empty READY queue leaves that request
-waiting for a readiness notification, with a five-second deadline before WAIT.
-After writing a reply, the manager waits asynchronously for client disconnect
-before closing the instance. It does not block other clients in a pipe flush.
 
 ## Existing output limitation
 
@@ -136,26 +132,15 @@ binary stdout/stderr and interactive stdin tests are implemented and pass.
 
 - Windows: identify selected pipe by `T`, not `NtQueryInformationFile` state or probe close; test both possible instance orders, two markers, no marker, probe remaining open, and client disconnect mid-handshake.
 - All OSes: GET/ID use separate logical unidirectional channels; every channel carries exactly the intended application bytes with no `T` contamination; cwd/environment and stdin/stdout/stderr/exit-code semantics preserved.
-- Native same-SHA tests on Windows, Linux, macOS: command correctness, UTF-8 and environment isolation, distinct cwd, 6,000-command stress, concurrent requests, allocation/wait behaviour, bounded manager handles and FIFO cleanup, and owner-shell death.
+- Native same-SHA tests on Windows, Linux, macOS: command correctness, UTF-8 and environment isolation, distinct cwd, 6,000-command stress, serial persistent allocation, allocation/wait behaviour, bounded manager handles and FIFO cleanup, and owner-shell death.
 - Starting worker count is unchanged unless shortage is measured. Replacement on allocation remains asynchronous; do not introduce speculative grow-only pool sizing.
 
 ## Implementation notes
 
-### Open design discrepancy: shared GET listener
-
-The current Python git-manager request side retains a **replenished pool of
-listener instances for the shared GET pipe name**, and identifies each real
-request by its `T` prefix. It does **not** call the same two-instance
-`TransportPair` used for each unique ID reply pipe. This is **not
-yet verified as satisfying the agreed pair-selection contract**. Unlike a
-private worker channel, GET accepts concurrent independent git-ipc clients:
-two distinct GET connections can both carry valid `T` markers without
-representing a duplicate marker on one client's transport pair.
-
-Do not replace the shared request listener with a single global two-instance
-pair without preserving concurrent-client isolation. The exact GET
-pair/acceptance model must be reconciled with this concurrency requirement
-before claiming full protocol acceptance.
+The serial allocation protocol has one owner shell and one persistent
+request/reply pair. It does not support simultaneous allocations through the
+same descriptors; the stress suite exercises serial reuse, held probes,
+shortage, command correctness, and owner death.
 
 
 
