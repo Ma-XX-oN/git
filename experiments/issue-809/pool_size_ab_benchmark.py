@@ -147,9 +147,20 @@ def run_case(bash, script, git_shell, environment, workers, round_index, windows
     errors = err.decode("utf-8", "strict")
     if process.returncode:
         complete = [row for row in output.splitlines() if row.startswith("PAIR ")]
+        trace_files = []
+        if windows:
+            trace_dir = OUT / "native-worker" / environment.get(
+                "GIT809_BENCH_LABEL", "current")
+            for path in sorted(trace_dir.glob("worker-*.log")):
+                trace_files.append(str(path))
+                print("GIT809_FAILED_WORKER_TRACE_BEGIN " + str(path), flush=True)
+                print(path.read_text(encoding="utf-8", errors="replace")[-8000:],
+                      flush=True)
+                print("GIT809_FAILED_WORKER_TRACE_END " + str(path), flush=True)
         raise AssertionError(
             f"pool={workers} round={round_index} rc={process.returncode} "
-            f"pairs={len(complete)} stderr={errors[-2000:]}")
+            f"pairs={len(complete)} worker_logs={len(trace_files)} "
+            f"stderr={errors[-2000:]}")
     rows = output.splitlines()
     assert f"READY_CHECK {workers}" in rows, "worker ready/response missing"
     direct, ipc = [], []
@@ -213,7 +224,8 @@ def main():
     env["GIT809_WORKER_GIT"] = native
     env["GIT809_MANAGER_PYTHON"] = env.get("GIT809_MANAGER_PYTHON") or sys.executable
     if windows:
-        trace_dir = (OUT / "native-worker").resolve()
+        trace_dir = (OUT / "native-worker" /
+                     env.get("GIT809_BENCH_LABEL", "current")).resolve()
         trace_dir.mkdir(parents=True, exist_ok=True)
         env["GIT809_NATIVE_TRACE_DIR"] = str(trace_dir)
     label = env.get("GIT809_BENCH_LABEL", "current")
