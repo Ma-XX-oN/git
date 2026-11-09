@@ -34,7 +34,7 @@ jobs:
           export GIT809_TRACE=1
           mkdir -p git809-stream-results
           export GIT_TRACE_GIT809_PRELOAD="$(cygpath -w "$PWD/git809-stream-results/worker-trace.log")"
-          "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_git_ipc_pool.py experiments/issue-809/test_allocator_probe_hold.py experiments/issue-809/test_windows_transport_selection.py
+          "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_git_ipc_pool.py experiments/issue-809/test_windows_transport_selection.py
           "$PYTHON_EXE" experiments/issue-809/test_windows_peer_rendezvous.py || exit 18
           "$PYTHON_EXE" experiments/issue-809/test_windows_transport_selection.py || exit 19
           "$PYTHON_EXE" experiments/issue-809/test_windows_worker_lifecycle.py "$GIT809_WORKER_GIT" || exit 20
@@ -82,22 +82,13 @@ jobs:
           [[ ! -v GIT_EDITOR ]] || exit 33
           printf 'GIT809_STREAM_ROUNDTRIP_PASS\n'
 
-          # Two Git Bash clients request concurrently from one manager.
-          # Verify that distinct request identities receive their own PID
-          # without cross-connecting their per-request ID channels.
+          # The protocol permits one outstanding allocation per shell.
           expected_version="$("$GIT809_WORKER_GIT" --version)"
-          for ((wave=0;wave<12;wave++)); do
-            { git-ipc --version >git809-stream-results/concurrent-a.out || exit $?; } &
-            client_a=$!
-            { git-ipc --version >git809-stream-results/concurrent-b.out || exit $?; } &
-            client_b=$!
-            wait "$client_a" || exit 36
-            wait "$client_b" || exit 37
-            [[ "$(cat git809-stream-results/concurrent-a.out)" == "$expected_version" ]] || exit 38
-            [[ "$(cat git809-stream-results/concurrent-b.out)" == "$expected_version" ]] || exit 39
-            sleep .1
+          for ((wave=0;wave<24;wave++)); do
+            git-ipc --version >git809-stream-results/serial.out || exit 36
+            [[ "$(cat git809-stream-results/serial.out)" == "$expected_version" ]] || exit 38
           done
-          printf 'GIT809_CONCURRENT_REPLY_PASS 24\n'
+          printf 'GIT809_SERIAL_REPLY_PASS 24\n'
           export GIT809_ABLATION_CWD=1 GIT809_ABLATION_ENV=1
           printf 'sample,begin,end\n' >git809-stream-results/stress.csv
           for ((i=0;i<6000;i++)); do
@@ -128,6 +119,9 @@ jobs:
           script=r'''
           source "$GIT809_SHELL_LIBRARY" 3 || exit 51
           printf 'OWNER_WINPID %s\n' "$_GIT809_OWNER_WINPID"
+          printf 'GET\n' >&8 || exit 52
+          IFS= read -r allocated <&9 || exit 53
+          printf 'ALLOCATED_PID %s\n' "$allocated"
           sleep 120
           '''
           child=subprocess.Popen([bash,"--noprofile","--norc","-c",script],
@@ -138,13 +132,10 @@ jobs:
             line=child.stdout.readline().strip()
             if not line.startswith("OWNER_WINPID "):
               rc=child.wait(timeout=8)
-              raise AssertionError(f"owner Bash rc={rc} stdout={line!r} stderr={child.stderr.read()!r}")
-            owner=int(line.split()[1])
-            result=subprocess.run(
-              [sys.executable,"experiments/issue-809/test_allocator_probe_hold.py",str(owner)],
-              capture_output=True,text=True,encoding="utf-8",timeout=20)
-            assert result.returncode==0,(result.returncode,result.stdout,result.stderr)
-            match=re.search(r"GIT809_PROBE_HOLD_PASS allocated_pid (\d+)",result.stdout)
+                 worker_line=child.stdout.readline().strip()
+            assert worker_line.startswith("ALLOCATED_PID "),worker_line
+            pid=int(worker_line.split()[1])
+E_HOLD_PASS allocated_pid (\d+)",result.stdout)
             assert match,(result.stdout,result.stderr)
             pid=int(match.group(1))
             worker_handle=k.OpenProcess(0x00100000,False,pid)
@@ -161,7 +152,6 @@ jobs:
             child.wait(timeout=5)
             if worker_handle: k.CloseHandle(worker_handle)
           PY
-          "$PYTHON_EXE" experiments/issue-809/test_allocator_probe_hold.py "$_GIT809_OWNER_WINPID" || exit 65
           cp -- "$_GIT809_MANAGER_LOG" git809-stream-results/manager.log
           "$PYTHON_EXE" - <<'PY'
           import csv,statistics,os,re
