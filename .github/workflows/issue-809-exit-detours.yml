@@ -7,6 +7,7 @@ on:
       - experiments/issue-809/detours_exit_trace.def
       - experiments/issue-809/detours_launcher.cpp
       - experiments/issue-809/test_detours_exit_worker.py
+      - compat/mingw.c
       - .github/workflows/issue-809-exit-detours.yml
   workflow_dispatch:
 permissions:
