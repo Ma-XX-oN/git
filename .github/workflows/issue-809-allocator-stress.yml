@@ -119,8 +119,8 @@ jobs:
           script=r'''
           source "$GIT809_SHELL_LIBRARY" 3 || exit 51
           printf 'OWNER_WINPID %s\n' "$_GIT809_OWNER_WINPID"
-          printf 'GET\n' >&3 || exit 52
-          IFS= read -r allocated <&8 || exit 53
+          printf 'GET\n' >&8 || exit 52
+          IFS= read -r allocated <&9 || exit 53
           printf 'ALLOCATED_PID %s\n' "$allocated"
           sleep 120
           '''
