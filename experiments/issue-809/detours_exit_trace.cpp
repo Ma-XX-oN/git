@@ -138,9 +138,11 @@ extern "C" BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID)
   real_exit_process = kernel ?
     reinterpret_cast<ExitProcessFn>(GetProcAddress(kernel, "ExitProcess")) :
     nullptr;
-  HMODULE crt = GetModuleHandleW(L"msvcrt.dll");
+  // The Git for Windows SDK builds this worker with UCRT64. Prefer
+  // its runtime rather than hooking an unrelated loaded MSVCRT.
+  HMODULE crt = GetModuleHandleW(L"ucrtbase.dll");
   if (!crt)
-    crt = GetModuleHandleW(L"ucrtbase.dll");
+    crt = GetModuleHandleW(L"msvcrt.dll");
   real_crt_exit = crt ?
     reinterpret_cast<CRunFn>(GetProcAddress(crt, "exit")) : nullptr;
   real_crt__exit = crt ?
