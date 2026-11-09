@@ -1,0 +1,81 @@
+name: RWF 809 Windows no-longjmp stress and same-runner benchmark
+on:
+  push:
+    branches: [investigation-809-exit-detours]
+    paths:
+      - compat/mingw.c
+      - experiments/issue-809/pool_size_ab_benchmark.py
+      - .github/workflows/issue-809-no-longjmp-benchmark.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-native-benchmark:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Build matching optimized baseline and updated Git on same Windows runner
+        shell: bash
+        run: |
+          . /etc/profile
+          baseline=3fad35ddb27449a32255ffacfdfebd697e6409b2
+          baseline_dir="$PWD/.git809-benchmark-baseline"
+          git worktree add --detach "$baseline_dir" "$baseline"
+          make -C "$baseline_dir" -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease CFLAGS='-g -O2 -Wall' git.exe
+          make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease CFLAGS='-g -O2 -Wall' git.exe
+          test -s "$baseline_dir/git.exe" && test -s "$PWD/git.exe"
+      - name: Verify input SHA and run existing matching 1-5 worker pool benchmark twice
+        shell: bash
+        run: |
+          . /etc/profile
+          PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
+          export GIT809_MANAGER_PYTHON="$(cygpath -w "$PYTHON_EXE")"
+          "$PYTHON_EXE" -m py_compile experiments/issue-809/pool_size_ab_benchmark.py experiments/issue-809/windows_git_ipc_pool.py
+          bash -n experiments/issue-809/git-manager.sh
+          test "$(git -C .git809-benchmark-baseline rev-parse HEAD)" = 3fad35ddb27449a32255ffacfdfebd697e6409b2
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          export GIT809_BENCH_LABEL=baseline
+          export GIT809_BENCH_SOURCE_SHA=3fad35ddb27449a32255ffacfdfebd697e6409b2
+          export GIT809_BENCH_GIT="$(cygpath -w "$PWD/.git809-benchmark-baseline/git.exe")"
+          "$PYTHON_EXE" experiments/issue-809/pool_size_ab_benchmark.py
+          export GIT809_BENCH_LABEL=updated
+          export GIT809_BENCH_SOURCE_SHA="$GITHUB_SHA"
+          export GIT809_BENCH_GIT="$(cygpath -w "$PWD/git.exe")"
+          "$PYTHON_EXE" experiments/issue-809/pool_size_ab_benchmark.py
+      - name: Verify 6000 replacement workers under Git Bash IPC stress
+        shell: bash
+        run: |
+          . /etc/profile
+          PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
+          export GIT809_MANAGER_PYTHON="$(cygpath -w "$PYTHON_EXE")"
+          export GIT809_WORKER_GIT="$(cygpath -w "$PWD/git.exe")"
+          source experiments/issue-809/git-manager.sh 4
+          direct="$("$GIT809_WORKER_GIT" --version)"
+          for ((i=1; i<=6000; i++)); do
+            if ((i%100 == 0)); then
+              actual="$(git-ipc --version)" || exit 51
+              [[ $actual == "$direct" ]] || exit 52
+            else
+              git-ipc --version >/dev/null || exit 53
+            fi
+            if ((i%500 == 0)); then printf 'GIT809_NO_LONGJMP_STRESS_PROGRESS %s/6000\n' "$i"; fi
+          done
+          printf 'GIT809_NO_LONGJMP_STRESS_PASS 6000 sha=%s\n' "$GITHUB_SHA"
+      - name: Preserve same-runner benchmark raw samples and stress failure diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-no-longjmp-windows-benchmark
+          path: |
+            git809-bash-pipe-results/pool-size-matched-1to5-windows-*.json
+            git809-bash-pipe-results/latest-timeout-manager.log
+            git809-bash-pipe-results/timeout-dumps/
+          if-no-files-found: warn
