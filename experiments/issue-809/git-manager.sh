@@ -123,8 +123,8 @@ close_fhs() {
 # Keep the established descriptor numbers and opening order unchanged.
 _git809_open_pipe() {
   local fd=$1 path=$2 marker=$3 retries=${4:-1} attempt
-  [[ $fd =~ ^[3-9]$ && $marker =~ ^[0-9]$ &&
-     $retries =~ ^[1-9][0-9]*$ ]] || return 2
+  [[ $fd == [3-9] && $marker == [0-9] &&
+     $retries == [1-9]*([0-9]) ]] || return 2
   for ((attempt=0; attempt<retries; attempt++)); do
     case $fd in
       3) { exec 3<>"$path"; } 2>/dev/null ;;
