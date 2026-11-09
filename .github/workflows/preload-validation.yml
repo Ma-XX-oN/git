@@ -52,6 +52,7 @@ jobs:
             helper="$PWD/t/helper/test-tool"
           fi
           "$py" t/preload/test_transport.py "$helper"
+          "$py" t/preload/test_owner_death.py --git "$gitbin"
           "$py" t/preload/acceptance.py --git "$gitbin" --count 6000 --output preload-results
       - name: Build and test Meson
         shell: bash
