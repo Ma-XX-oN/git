@@ -22,8 +22,13 @@ Do **not** assume that `-g` disables optimizations. Assert that the linked
 
 Detours instrumentation is built by MSVC separately: compile with `/Zi /Od`
 and link with `/DEBUG:FULL`; assert that the corresponding DLL/EXE PDBs
-exist and archive them alongside diagnostic logs. Do not confuse MSVC PDBs
-with Git's MinGW/GCC DWARF symbols.
+exist and archive them alongside diagnostic logs. The pinned Microsoft Detours
+4.0.1 `src/Makefile` itself uses `/Zi /Od` and `/Fd$(LIBD)\\detours.pdb`;
+`system.mak` resolves `LIBD` to `lib.X64` for our x64 build. Preserve
+`lib.X64/detours.pdb` as well. Do not confuse MSVC PDBs with Git's
+MinGW/GCC DWARF symbols. The Git SDK Bash login profile resets `PATH`:
+run the Python PE/COFF debug-section verification in a separate PowerShell
+step where `actions/setup-python` is available.
 
 ## Crash investigation and symbolization
 
