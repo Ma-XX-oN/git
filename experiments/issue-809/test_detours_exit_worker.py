@@ -28,7 +28,7 @@ def read_ready(stream, results):
   results.put(stream.readline())
 
 
-def run_case(case, args, legacy_crt=False):
+def run_case(case, args, legacy_crt=False, direct_exit=False):
   log = root / f"{case}.exit-detours.log"
   fallback = root / f"{case}.exit-fallback.log"
   native = root / f"{case}.native-trace.log"
@@ -38,6 +38,8 @@ def run_case(case, args, legacy_crt=False):
   env["GIT809_DETOURS_FALLBACK"] = str(fallback)
   if legacy_crt:
     env["GIT809_DETOURS_LEGACY_CRT"] = "1"
+  if direct_exit:
+    env["GIT809_PRELOAD_EXIT_DIRECT"] = "1"
   env["GIT_TRACE_GIT809_PRELOAD"] = str(native)
   process = subprocess.Popen([launcher, dll, git, "--preload"],
                              env=env, stdin=subprocess.DEVNULL,
@@ -82,7 +84,7 @@ def run_case(case, args, legacy_crt=False):
           "stdout_bytes", len(stdout), flush=True)
     outcome = (stdout, stderr, exit_status)
     expected_result = expected if args == ["--version"] else b""
-    if legacy_crt:
+    if legacy_crt and not direct_exit:
       if launcher_status == 0:
         assert stdout == expected_result, (case, stdout, expected_result)
         assert not stderr, (case, stderr)
@@ -102,7 +104,8 @@ def run_case(case, args, legacy_crt=False):
       assert not stderr, (case, stderr)
       assert exit_status == b"EXIT 0\n", (case, exit_status)
       assert launcher_status == 0, (case, launcher_status)
-      print("GIT809_DETOURS_WORKER_PASS", case, flush=True)
+      print("GIT809_DETOURS_WORKER_PASS", case,
+            "direct_exit", direct_exit, flush=True)
   finally:
     for handle in handles.values():
       K.CloseHandle(handle)
@@ -123,6 +126,9 @@ def run_case(case, args, legacy_crt=False):
 
 
 run_case("git-version", ["--version"])
+run_case("git-version-direct", ["--version"], direct_exit=True)
 for attempt in range(12):
   run_case(f"git-version-legacy-crt-{attempt:02d}",
            ["--version"], legacy_crt=True)
+  run_case(f"git-version-legacy-direct-{attempt:02d}",
+           ["--version"], legacy_crt=True, direct_exit=True)
