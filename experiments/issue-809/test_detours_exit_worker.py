@@ -96,7 +96,7 @@ def run_case(case, args, legacy_crt=False):
     else:
       assert stdout == expected_result, (case, stdout, expected_result)
       assert not stderr, (case, stderr)
-      assert exit_status == b"EXIT 0\\n", (case, exit_status)
+      assert exit_status == b"EXIT 0\n", (case, exit_status)
       assert launcher_status == 0, (case, launcher_status)
       print("GIT809_DETOURS_WORKER_PASS", case, flush=True)
   finally:
