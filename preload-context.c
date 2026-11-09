@@ -52,7 +52,7 @@ static int clear_worker_environment(void)
       result = -1;
       break;
     }
-    wmemcpy(key, entry, len);
+    memcpy(key, entry, len * sizeof(*key));
     key[len] = L'\0';
     if (!SetEnvironmentVariableW(key, NULL))
       result = -1;
