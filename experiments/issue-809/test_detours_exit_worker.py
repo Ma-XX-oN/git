@@ -81,11 +81,16 @@ def run_case(case, args, legacy_crt=False):
           "status_bytes", repr(exit_status),
           "stdout_bytes", len(stdout), flush=True)
     outcome = (stdout, stderr, exit_status)
+    invalid_option = args == ["--git809-deliberately-invalid-option"]
     expected_result = expected if args == ["--version"] else b""
+    expected_status = 129 if invalid_option else 0
     assert stdout == expected_result, (case, stdout, expected_result)
-    assert not stderr, (case, stderr)
-    assert exit_status == b"EXIT 0\n", (case, exit_status)
-    assert launcher_status == 0, (case, launcher_status)
+    if invalid_option:
+      assert stderr, (case, "missing diagnostic for invalid option")
+    else:
+      assert not stderr, (case, stderr)
+    assert exit_status == f"EXIT {expected_status}\n".encode(), (case, exit_status)
+    assert launcher_status == expected_status, (case, launcher_status)
     print("GIT809_DETOURS_WORKER_PASS", case, "legacy", legacy_crt, flush=True)
   finally:
     for handle in handles.values():
@@ -106,9 +111,13 @@ def run_case(case, args, legacy_crt=False):
       assert fallback.exists(), "both Detours diagnostic destinations unavailable"
 
 
-# 240 independent processes on the same native Windows runner.
-# All must publish a complete status and terminate cleanly, with and without
-# the intentionally incorrect legacy CRT Detours configuration.
+# 300 independent processes on the same native Windows runner, per build.
+# Verify positive and negative exit status under both CRT hook settings.
 for attempt in range(120):
   run_case(f"git-version-ucrt-{attempt:03d}", ["--version"])
   run_case(f"git-version-legacy-{attempt:03d}", ["--version"], legacy_crt=True)
+for attempt in range(30):
+  run_case(f"git-error-ucrt-{attempt:03d}",
+           ["--git809-deliberately-invalid-option"])
+  run_case(f"git-error-legacy-{attempt:03d}",
+           ["--git809-deliberately-invalid-option"], legacy_crt=True)
