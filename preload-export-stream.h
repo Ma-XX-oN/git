@@ -1,5 +1,7 @@
 /* Restricted Bash export -p decoder. Included in preload-context.c after
  * clear_worker_environment(); never interpret commands or expansions. */
+/* This is a private implementation fragment, not a standalone API header. */
+#ifdef PRELOAD_EXPORT_STREAM_IMPLEMENTATION
 struct export_pair { char *name, *value; };
 static int export_hex(unsigned char c) {
   if (c >= '0' && c <= '9') return c - '0';
@@ -153,3 +155,5 @@ cleanup:
   free(pairs);
   return rc;
 }
+
+#endif /* PRELOAD_EXPORT_STREAM_IMPLEMENTATION */
