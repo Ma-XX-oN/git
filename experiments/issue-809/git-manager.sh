@@ -108,13 +108,13 @@ fi
 close_fhs() {
   local fd
   if (( $# == 0 )); then
-    # The allocator owns FDs 3 and 8 until the shell exits.
-    exec 4>&- 5>&- 6>&- 7>&- 9>&-
+    # The allocator owns FDs 8 and 9 until the shell exits.
+    exec 3>&- 4>&- 5>&- 6>&- 7>&-
     return
   fi
   for fd in "$@"; do
     case $fd in
-      4|5|6|7|9) exec {fd}>&- ;;
+      3|4|5|6|7) exec {fd}>&- ;;
       *) return 2 ;;
     esac
   done
@@ -154,8 +154,8 @@ _git809_connect_allocator() {
   local request reply
   printf -v request '%s%s' '\\.\pipe\git809-allocate-req-' "$_GIT809_OWNER_WINPID"
   printf -v reply '%s%s' '\\.\pipe\git809-allocate-reply-' "$_GIT809_OWNER_WINPID"
-  _git809_open_pipe 3 "$request" 0 400 || return 1
-  _git809_open_pipe 8 "$reply" 0 400 || return 1
+  _git809_open_pipe 8 "$request" 0 400 || return 1
+  _git809_open_pipe 9 "$reply" 0 400 || return 1
   _GIT809_ALLOC_CONNECTED=1
 }
 _git809_connect_allocator || {
@@ -166,8 +166,8 @@ _git809_connect_allocator || {
 # Request a worker PID, then talk directly to its five worker channels.
 # The Python manager only allocates IDs; it never forwards Git output.
 git-ipc() {
-  local fd_allocate_request=3 fd_allocate_reply=8
-  local fd_worker_stdin=9 fd_worker_stdout=4 fd_worker_stderr=5
+  local fd_allocate_request=8 fd_allocate_reply=9
+  local fd_worker_stdin=3 fd_worker_stdout=4 fd_worker_stderr=5
   local fd_worker_exit=6 fd_worker_control=7
   if [[ ${_GIT809_ALLOC_CONNECTED:-} != 1 || $# -gt 31 ]]; then
     printf 'git-ipc requires a connected manager and at most 31 arguments\n' >&2
