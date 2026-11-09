@@ -32,6 +32,9 @@ jobs:
           export GIT809_WORKER_GIT="$(cygpath -w "$PWD/git.exe")"
           export GIT809_DRAIN_MODE=chunk100
           mkdir -p git809-stream-results
+          export GIT809_TRACE=1
+          export GIT_TRACE_GIT809_PRELOAD="$(cygpath -w "$PWD/git809-stream-results/worker-trace.log")"
+          trap 'rc=$?; if [[ -n ${_GIT809_MANAGER_LOG:-} && -f ${_GIT809_MANAGER_LOG:-} ]]; then cp -- "$_GIT809_MANAGER_LOG" git809-stream-results/manager.log; fi; exit "$rc"' EXIT
           export GIT809_TIMING_LOG="$PWD/git809-stream-results/phases.csv"
           bash -n experiments/issue-809/git-ipc-request.sh || exit 21
           source experiments/issue-809/git-manager.sh 3 || exit 22
