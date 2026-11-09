@@ -212,7 +212,9 @@ def test_allocator_isolation():
         time.sleep(.001)
       raise TimeoutError("persistent allocator reply timeout")
 
-    for number in range(80):
+    initial_handles=W.DWORD()
+    assert K.GetProcessHandleCount(K.GetCurrentProcess(),C.byref(initial_handles))
+    for number in range(6000):
       if number!=40:
         pool.ready.put(f"{1001+number}\n")
         with pool.lock:
@@ -223,9 +225,13 @@ def test_allocator_isolation():
         assert read_line()==b"WAIT\n"
       else:
         assert read_line()==f"{1001+number}\n".encode("ascii"),number
+    final_handles=W.DWORD()
+    assert K.GetProcessHandleCount(K.GetCurrentProcess(),C.byref(final_handles))
+    assert final_handles.value-initial_handles.value<16,(
+      initial_handles.value,final_handles.value)
     assert not pool.errors,pool.errors
-    print("GIT809_ALLOCATOR_PASS persistent-80-requests-shortage-held-probes",
-          flush=True)
+    print("GIT809_ALLOCATOR_PASS persistent-6000-requests-shortage-held-probes",
+          "handles",initial_handles.value,final_handles.value,flush=True)
   finally:
     pool.closing.set()
     with pool.lock:
