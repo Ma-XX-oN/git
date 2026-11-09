@@ -84,12 +84,12 @@ def run_case(case, args, legacy_crt=False, direct_exit=False):
           "stdout_bytes", len(stdout), flush=True)
     outcome = (stdout, stderr, exit_status)
     expected_result = expected if args == ["--version"] else b""
-    if legacy_crt and not direct_exit:
+    if not direct_exit:
       if launcher_status == 0:
         assert stdout == expected_result, (case, stdout, expected_result)
         assert not stderr, (case, stderr)
         assert exit_status == b"EXIT 0\n", (case, exit_status)
-        print("GIT809_DETOURS_LEGACY_NO_CRASH", case, flush=True)
+        print("GIT809_DETOURS_LONGJMP_SUCCESS", case, flush=True)
       else:
         assert launcher_status == 0xC0000005, (case, launcher_status)
         assert not exit_status, (case, exit_status)
@@ -97,7 +97,7 @@ def run_case(case, args, legacy_crt=False, direct_exit=False):
         trace = log.read_text(encoding="utf-8", errors="replace")
         assert "path=exception.address=" in trace, (case, "no fault record")
         assert "path=exception.frame=0." in trace, (case, "no faulting stack frame")
-        print("GIT809_DETOURS_LEGACY_CRASH_CAPTURED", case,
+        print("GIT809_DETOURS_LONGJMP_CRASH_CAPTURED", case,
               hex(launcher_status), flush=True)
     else:
       assert stdout == expected_result, (case, stdout, expected_result)
