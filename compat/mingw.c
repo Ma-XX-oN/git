@@ -3776,8 +3776,8 @@ void git_preinit_exit_diagnostic(const char *event, int status)
 
   if (!git_preinit_exit_log_path[0])
     return;
-  count = status < 0 ? snprintf(message, sizeof(message), "%s\\r\\n", event) :
-    snprintf(message, sizeof(message), "%s status=%d\\r\\n", event, status);
+  count = status < 0 ? snprintf(message, sizeof(message), "%s\r\n", event) :
+    snprintf(message, sizeof(message), "%s status=%d\r\n", event, status);
   if (count < 0 || count >= sizeof(message))
     return;
   length = (DWORD)count;
@@ -3786,18 +3786,18 @@ void git_preinit_exit_diagnostic(const char *event, int status)
                      NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
   if (file == INVALID_HANDLE_VALUE) {
     snprintf(error_message, sizeof(error_message),
-             "Git809 diagnostic open failed error=%lu\\n", GetLastError());
+             "Git809 diagnostic open failed error=%lu\n", GetLastError());
     OutputDebugStringA(error_message);
     return;
   }
   if (!WriteFile(file, message, length, &written, NULL) || written != length) {
     snprintf(error_message, sizeof(error_message),
-             "Git809 diagnostic write failed error=%lu written=%lu expected=%lu\\n",
+             "Git809 diagnostic write failed error=%lu written=%lu expected=%lu\n",
              GetLastError(), written, length);
     OutputDebugStringA(error_message);
   }
   if (!CloseHandle(file))
-    OutputDebugStringA("Git809 diagnostic close failed\\n");
+    OutputDebugStringA("Git809 diagnostic close failed\n");
 }
 
 static void git_preinit_atexit_log(void)
