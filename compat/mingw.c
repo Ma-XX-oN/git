@@ -3763,21 +3763,46 @@ static volatile int git_preinit_exit_status;
  */
 static wchar_t git_preinit_exit_log_path[4096];
 
-static void git_preinit_atexit_log(void)
+/*
+ * Use a new Win32 handle for every diagnostic: Git may already have closed
+ * Trace2 and trace_printf_key's descriptors during shutdown.
+ */
+void git_preinit_exit_diagnostic(const char *event, int status)
 {
-  static const char message[] = "exiting...\r\n";
+  char message[160], error_message[200];
   HANDLE file;
-  DWORD written;
+  DWORD written = 0, length;
+  int count;
 
-  if (!git_preinit_exit_log_path[0])
+  if (!git_preinit_active || !git_preinit_exit_log_path[0])
     return;
+  count = status < 0 ? snprintf(message, sizeof(message), "%s\\r\\n", event) :
+    snprintf(message, sizeof(message), "%s status=%d\\r\\n", event, status);
+  if (count < 0 || count >= sizeof(message))
+    return;
+  length = (DWORD)count;
   file = CreateFileW(git_preinit_exit_log_path, FILE_APPEND_DATA,
                      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                      NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-  if (file == INVALID_HANDLE_VALUE)
+  if (file == INVALID_HANDLE_VALUE) {
+    snprintf(error_message, sizeof(error_message),
+             "Git809 diagnostic open failed error=%lu\\n", GetLastError());
+    OutputDebugStringA(error_message);
     return;
-  WriteFile(file, message, sizeof(message) - 1, &written, NULL);
-  CloseHandle(file);
+  }
+  if (!WriteFile(file, message, length, &written, NULL) || written != length) {
+    snprintf(error_message, sizeof(error_message),
+             "Git809 diagnostic write failed error=%lu written=%lu expected=%lu\\n",
+             GetLastError(), written, length);
+    OutputDebugStringA(error_message);
+  }
+  if (!CloseHandle(file))
+    OutputDebugStringA("Git809 diagnostic close failed\\n");
+}
+
+static void git_preinit_atexit_log(void)
+{
+  git_preinit_exit_diagnostic("exiting...", -1);
 }
 
 /*
