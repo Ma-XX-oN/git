@@ -409,141 +409,87 @@ def parse_get_request(frame):
 
 
 def allocation_server(owner_pid:int,pool:Pool):
-  """Serve concurrent GET/reply channels without blocking other clients.
-
-  Each connection owns its pending connect/read/write. The completion queue
-  retains a backlog of listeners while distinguishing real GET requests from
-  the short-lived Git Bash open probes. Replies use their separate per-request
-  named-pipe channel.
-  """
-  port = CompletionPort()
-  pool.notify = port.wake
-  address = r"\\.\pipe\git809-allocate-req-" + str(owner_pid)
-  backlog = max(4, 2 * pool.target)
-  requests = []
-  replies = []
-  first = True
-  print(f"ALLOCATOR_START {address} backlog={backlog}", flush=True)
-
-  def finish_reply(reply):
-    """Release one private reply channel after completion or failure."""
-    reply["pair"].close()
-    replies.remove(reply)
-
+  """Serve serial GET lines and PID lines over two permanent named pipes."""
+  port=CompletionPort()
+  pool.notify=port.wake
+  request=None
+  reply=None
   try:
+    # Both pairs exist before the shell opens either endpoint.
+    request=TransportPair(port,r"\\.\pipe\git809-allocate-req-"+str(owner_pid),0)
+    reply=TransportPair(port,r"\\.\pipe\git809-allocate-reply-"+str(owner_pid),0)
+    print(f"ALLOCATOR_START persistent owner={owner_pid}",flush=True)
+
+    while not pool.closing.is_set() and (
+        request.selected is None or reply.selected is None):
+      port.drain()
+      request.advance()
+      reply.advance()
+      if request.selected is None or reply.selected is None:
+        deadline=min(pair.deadline for pair in (request,reply)
+                     if pair.selected is None)
+        port.wait(max(1,int((deadline-time.monotonic())*1000)))
+
+    if pool.closing.is_set():
+      return
+    inbound=request.selected
+    outbound=reply.selected
+    frame=bytearray()
+    state="get"
+    deadline=None
+    answer=None
+    inbound.issue("read",size=4)
+
     while not pool.closing.is_set():
       port.drain()
-      now = time.monotonic()
-      for pipe in list(requests):
-        try:
-          while pipe.result is not None:
-            count = pipe.take()
-            if count < 0 or (pipe.phase == "read" and count == 0):
-              break
-            if pipe.phase == "connect":
-              pipe.phase = "read"
-              pipe.deadline = now + 2
-            else:
-              pipe.frame.extend(pipe.buffer.raw[:count])
-              if b"\n" in pipe.frame:
-                client_pid, sequence, marker = parse_get_request(bytes(pipe.frame))
-                reply_address = (rf"\\.\pipe\git809-allocate-reply-{owner_pid}"
-                                 rf"-{client_pid}-{sequence}")
-                replies.append({"pair": TransportPair(port, reply_address, marker),
-                                "phase": "select", "deadline": now + 2})
-                break
-              if len(pipe.frame) >= 64:
-                raise ValueError("oversized request")
-            pipe.issue("read", size=64 - len(pipe.frame))
-            # A buffered GET completes immediately. Dispatch it before
-            # replenishing listeners so the client's reply pipe is ready.
-            port.drain()
-          else:
-            if pipe.deadline is None or now < pipe.deadline:
-              continue
-            print("ALLOCATOR_IDLE_PROBE_EXPIRED", flush=True)
-        except Exception as error:
-          print("ALLOCATOR_CONNECTION_ERROR " + repr(error), flush=True)
-        pipe.close()
-        requests.remove(pipe)
 
-      for reply in list(replies):
-        try:
-          pair = reply["pair"]
-          if reply["phase"] == "select":
-            chosen = pair.advance()
-            if chosen is None:
-              continue
-            reply["phase"] = "worker"
-            reply["deadline"] = now + 5
-          chosen = pair.selected
-          if reply["phase"] == "worker":
-            answer = pool.alloc()
-            if answer is None and now < reply["deadline"]:
-              continue
-            reply["answer"] = (answer or "WAIT\n").encode("ascii")
-            chosen.issue("write", reply["answer"])
-            reply["phase"] = "write"
-            reply["deadline"] = now + 2
-          if chosen.result is not None:
-            count = chosen.take()
-            if reply["phase"] == "write":
-              if count != len(reply["answer"]):
-                raise RuntimeError("short allocation reply write")
-              # Keep the server open until the client consumes its reply and
-              # closes. A pending read observes disconnect without blocking
-              # the allocator in FlushFileBuffers.
-              chosen.issue("read")
-              reply["phase"] = "disconnect"
-            else:
-              if count > 0:
-                raise RuntimeError("unexpected bytes after reply marker")
-              finish_reply(reply)
-              continue
-          if now >= reply["deadline"]:
-            raise TimeoutError("allocation reply timeout")
-        except Exception as error:
-          print("ALLOCATOR_CONNECTION_ERROR " + repr(error), flush=True)
-          finish_reply(reply)
+      if state=="get" and inbound.result is not None:
+        count=inbound.take()
+        if count<=0:
+          raise ConnectionError("persistent GET channel closed")
+        frame.extend(inbound.buffer.raw[:count])
+        if not b"GET\n".startswith(frame):
+          raise ValueError("invalid persistent GET line")
+        if frame==b"GET\n":
+          frame.clear()
+          deadline=time.monotonic()+5
+          state="allocate"
+        else:
+          inbound.issue("read",size=4-len(frame))
 
-      # Keep ready listeners available before servicing the next request.
-      listeners = sum(pipe.phase == "connect" for pipe in requests)
-      while listeners < backlog:
-        pipe = Pipe(port, address, first=first)
-        first = False
-        pipe.frame = bytearray()
-        pipe.deadline = None
-        requests.append(pipe)
-        listeners += 1
-      if any(pipe.result is not None for pipe in port.pipes.values()):
-        continue
-      # A notification may have been drained while advancing another reply.
-      # Recheck its predicate before sleeping so readiness/shutdown cannot
-      # be lost between dispatch and the next blocking wait.
-      if pool.closing.is_set():
-        break
-      if not pool.ready.empty() and any(reply["phase"] == "worker"
-                                        for reply in replies):
-        continue
-      deadlines = [pipe.deadline for pipe in requests if pipe.deadline is not None]
-      deadlines.extend(reply["pair"].deadline if reply["phase"] == "select"
-                       else reply["deadline"] for reply in replies)
-      wait = max(0, int((min(deadlines) - time.monotonic()) * 1000) + 1) if (
-        deadlines) else 0xffffffff
-      port.wait(wait)
+      if state=="allocate":
+        answer=pool.alloc()
+        if answer is not None or time.monotonic()>=deadline:
+          answer=(answer or "WAIT\n").encode("ascii")
+          assert answer.endswith(b"\n")
+          outbound.issue("write",data=answer)
+          state="reply"
+
+      if state=="reply" and outbound.result is not None:
+        if outbound.take()!=len(answer):
+          raise ConnectionError("short persistent PID reply")
+        inbound.issue("read",size=4)
+        state="get"
+
+      if state=="allocate":
+        # A READY notification wakes this wait before the five-second limit.
+        port.wait(max(1,int((deadline-time.monotonic())*1000)))
+      elif (inbound.result is None and outbound.result is None and
+            not pool.closing.is_set()):
+        port.wait(0xffffffff)
   except Exception as error:
-    with pool.lock:
-      pool.errors.append("allocation listener failed: " + repr(error))
-    print("ALLOCATOR_FATAL " + repr(error), flush=True)
+    if not pool.closing.is_set():
+      with pool.lock:
+        pool.errors.append("persistent allocator failed: "+repr(error))
+      print("ALLOCATOR_FATAL "+repr(error),flush=True)
     raise
   finally:
-    # Serialize readiness notifications with queue teardown.
     with pool.lock:
-      pool.notify = None
-    for reply in list(replies):
-      finish_reply(reply)
-    for pipe in requests:
-      pipe.close()
+      pool.notify=None
+    if reply is not None:
+      reply.close()
+    if request is not None:
+      request.close()
     port.close()
 
 
