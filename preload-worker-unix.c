@@ -19,7 +19,7 @@ static jmp_buf preload_exit_jump;
 static volatile int preload_exit_active;
 static volatile int preload_exit_status;
 
-NORETURN void git_preload_worker_exit(int status)
+static NORETURN void git_preload_worker_exit(int status)
 {
   if (preload_exit_active) {
     preload_exit_status = status;
@@ -42,8 +42,9 @@ static void git_preload_remove_fifos(const char *directory)
   int i;
 
   for (i = 0; i < 5; i++) {
-    if (snprintf(path, sizeof(path), "%s/%s", directory, names[i]) <
-        sizeof(path))
+    int length = snprintf(path, sizeof(path), "%s/%s", directory,
+                          names[i]);
+    if (length >= 0 && (size_t)length < sizeof(path))
       unlink(path);
   }
   rmdir(directory);
@@ -129,9 +130,12 @@ int git_preload_unix_worker(const char *directory)
   if (!frame)
     return 121;
   for (i = 0; i < 5; i++) {
-    if (snprintf(paths[i], sizeof(paths[i]), "%s/%s",
-                 directory, suffixes[i]) >= sizeof(paths[i]))
-      return 121;
+    int length = snprintf(paths[i], sizeof(paths[i]), "%s/%s",
+                          directory, suffixes[i]);
+    if (length < 0 || (size_t)length >= sizeof(paths[i])) {
+      rc = 121;
+      goto cleanup;
+    }
   }
 
   printf("READY %ld\n", (long)getpid());
