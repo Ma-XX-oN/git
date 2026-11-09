@@ -192,10 +192,15 @@ extern "C" BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID)
   real_exit_process = kernel ?
     reinterpret_cast<ExitProcessFn>(GetProcAddress(kernel, "ExitProcess")) :
     nullptr;
-  // The Git for Windows SDK builds this worker with UCRT64. Prefer
-  // its runtime rather than hooking an unrelated loaded MSVCRT.
-  HMODULE crt = GetModuleHandleW(L"ucrtbase.dll");
-  if (!crt)
+  // The default is the worker's UCRT. The legacy switch is diagnostic
+  // only: reproduce the previous incorrect MSVCRT hook selection.
+  wchar_t legacy[2] = {};
+  const bool legacy_crt = GetEnvironmentVariableW(
+    L"GIT809_DETOURS_LEGACY_CRT", legacy, 2) == 1 &&
+    legacy[0] == L'1';
+  HMODULE crt = GetModuleHandleW(
+    legacy_crt ? L"msvcrt.dll" : L"ucrtbase.dll");
+  if (!crt && !legacy_crt)
     crt = GetModuleHandleW(L"msvcrt.dll");
   real_crt_exit = crt ?
     reinterpret_cast<CRunFn>(GetProcAddress(crt, "exit")) : nullptr;
