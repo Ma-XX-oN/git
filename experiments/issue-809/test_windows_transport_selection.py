@@ -221,12 +221,12 @@ def test_allocator_isolation():
     assert not pool.errors,pool.errors
     print("GIT809_ALLOCATOR_PASS persistent-80-requests-held-probes",flush=True)
   finally:
-    for handle in handles:
-      K.CloseHandle(handle)
     pool.closing.set()
     with pool.lock:
       if pool.notify:
         pool.notify()
+    for handle in handles:
+      K.CloseHandle(handle)
     thread.join(timeout=5)
     assert not thread.is_alive(),"persistent allocator cleanup stuck"
     assert not pool.errors,pool.errors
