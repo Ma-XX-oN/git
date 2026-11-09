@@ -54,6 +54,36 @@ in the uploaded diagnostic artifact, as well as the Detours PDB files.
 Fail if any required symbol material is missing. Do not treat build
 success or `-g` being present as proof that symbols survived linking.
 
+## Windows exit-status capture: no nonlocal jump
+
+The Windows worker now registers the existing `common_exit()` callback to
+write `EXIT <status>\\n` to its selected named-pipe instance, close that
+status handle and return to the normal C runtime `exit()`. There is **no
+Windows `setjmp()`/`longjmp()` recovery**, no environment switch enabling
+the old path, and no bypass of normal CRT termination.
+
+The immediate call-site path `git.c -> exit(common_exit(...)) -> CRT exit()`
+is intentional: `common_exit()` has the status before normal CRT shutdown.
+The worker's ordinary cleanup path still handles early transport errors.
+Client code must drain stdout and stderr before reading the separate status
+channel. The status is a transport protocol record, not a substitute for
+ensuring output reaches its consumers.
+
+Native verification: the Detours workflow checks all 240 worker processes
+per build with correct and legacy hooks and also exercises both `-O0`
+and `-O2` symbol-bearing Git binaries. The separate Windows stress and
+benchmark workflow checks malformed requests, probe lifetime, 1 MiB output,
+and 6,000 replenishment commands, and compares baseline
+`3fad35ddb27449a32255ffacfdfebd697e6409b2` against updated SHA on
+the same runner with matching `-g -O2 -Wall` settings. Retain both
+benchmark JSON datasets and report medians/P95 per worker count; do not use
+old-runner timings to claim a speedup.
+
+Unix uses its existing exit mechanism unchanged. Abnormal termination
+(`_exit()`, `ExitProcess()`, fatal exceptions) still does not guarantee
+a normal exit-status message, and must be treated as transport failure by
+the caller. A normal status callback is not a crash handler.
+
 ## Crash investigation and symbolization
 
 1. Record the exact source SHA, compiler/linker flags, architecture, and
