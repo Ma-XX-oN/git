@@ -19,6 +19,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 
 if os.name != "nt":
   raise RuntimeError("Windows native Git worker manager required")
@@ -309,9 +310,18 @@ class Pool:
       if self.owner_winpid is None:
         raise RuntimeError("owner_winpid not initialized")
       worker_env["GIT809_PRELOAD_OWNER_WINPID"]=str(self.owner_winpid)
+      trace_dir = worker_env.get("GIT809_NATIVE_TRACE_DIR")
+      if trace_dir:
+        trace_path = Path(trace_dir).resolve()
+        trace_path.mkdir(parents=True, exist_ok=True)
+        worker_env["GIT_TRACE_GIT809_PRELOAD"] = str(
+          trace_path / ("worker-" + uuid.uuid4().hex + ".log"))
       p=subprocess.Popen([str(self.git),"--preload"],
         stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,
         env=worker_env,bufsize=0)
+      if trace_dir:
+        print("WORKER_TRACE pid=" + str(p.pid) + " path=" +
+              worker_env["GIT_TRACE_GIT809_PRELOAD"], flush=True)
     except OSError as error:
       with self.lock:
         self.errors.append("worker spawn failed: "+repr(error))
