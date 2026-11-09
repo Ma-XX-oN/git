@@ -1,0 +1,47 @@
+{
+  "before": {
+    "samples": 160,
+    "median_ms": 7.3614999999999995,
+    "p95_ms": 9.902,
+    "round_medians_ms": [
+      7.417,
+      7.3469999999999995
+    ]
+  },
+  "after": {
+    "samples": 160,
+    "median_ms": 6.544499999999999,
+    "p95_ms": 9.574,
+    "round_medians_ms": [
+      6.7490000000000006,
+      6.367
+    ]
+  },
+  "stress": {
+    "commands": 6000,
+    "diagnostics_enabled": true,
+    "median_ms": 13.2315,
+    "manager_handle_range": [
+      134,
+      143
+    ],
+    "cpu": {
+      "cpu_user_seconds": 171.453125,
+      "cpu_kernel_seconds": 207.859375,
+      "cpu_total_seconds": 379.3125,
+      "processes": 6201,
+      "active_at_capture": 0
+    }
+  },
+  "sha256": {
+    "compat/mingw.c": "2b5bae609613d06e8577e89f057f4a4b28fb8440a2ae139892cfac1e7cc68245",
+    "experiments/issue-809/git-manager.sh": "a03a3be48a666870a3a2da901cb3515afbfb047f4c71a3b7e3b57e1d21ea0fcb",
+    "experiments/issue-809/windows_git_ipc_pool.py": "dbac846fa80114f53e715d047e1351ffea486e06f06a6d9a764f3a0d0fcc0fd7",
+    "experiments/issue-809/pool_size_ab_benchmark.py": "7ceffd6debdb7a74d44a6979d0c8a6041c7b91820f20aae32a6927d44a66f60d",
+    "experiments/issue-809/TRANSPORT-CONTRACT.md": "4e9a1506209857b3637179739de52103928e8df1a4b973280423e9ba1ac1a980",
+    "experiments/issue-809/test_windows_transport_selection.py": "319ddb82655506103c0a559f529abb17309ef6795071d206446a98df0bbdb288",
+    "experiments/issue-809/test_windows_worker_lifecycle.py": "c677017dbaad15661629d8c1ca75689501d1c3a082a64a0cebb9c6b9b915dfcb",
+    ".github/workflows/issue-809-direct-stream.yml": "828d89877002762dc9e7b5f37a61f401f3ffc9ed0e25982d4ee75751efffa020",
+    "git.exe": "d8c7adcdbf6ea21299c74ca5381fd2916252e7b33540a7e47c88bbff0e6f747a"
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "comparison": {
+    "main-coordinator": {
+      "samples": 160,
+      "median_ms": 7.894,
+      "p95_ms": 12.998,
+      "direct": {
+        "samples": 160,
+        "median_ms": 56.329499999999996,
+        "p95_ms": 64.77
+      },
+      "tree_cpu_seconds": 17.921875,
+      "tree_processes": 526,
+      "round_medians_ms": [
+        7.5415,
+        11.413
+      ]
+    },
+    "peer-spin": {
+      "samples": 160,
+      "median_ms": 7.5095,
+      "p95_ms": 12.919,
+      "direct": {
+        "samples": 160,
+        "median_ms": 55.587,
+        "p95_ms": 65.929
+      },
+      "tree_cpu_seconds": 17.328125,
+      "tree_processes": 526,
+      "round_medians_ms": [
+        7.4645,
+        7.607
+      ]
+    }
+  },
+  "order": [
+    "main-coordinator",
+    "peer-spin",
+    "peer-spin",
+    "main-coordinator"
+  ],
+  "workers": 3,
+  "stress": {
+    "samples": 6000,
+    "median_ms": 12.331,
+    "p95_ms": 17.502,
+    "handles_min": 134,
+    "handles_max": 147,
+    "job": {
+      "cpu_user_seconds": 155.34375,
+      "cpu_kernel_seconds": 170.0625,
+      "cpu_total_seconds": 325.40625,
+      "processes": 6226,
+      "active_at_capture": 0
+    },
+    "directory": "C:\\Users\\adria\\AppData\\Local\\Temp\\git809-peer-spin-stress"
+  },
+  "base_head": "7bec8ad176",
+  "head": "7bec8ad1761390bd171f7f9edd093b56db44ff43",
+  "current_sha256": {
+    "compat/mingw.c": "31f7d78be725044a192fbadeb44e58ddd392c0c5fc89397c6c862e213cacad0f",
+    "experiments/issue-809/TRANSPORT-CONTRACT.md": "6b67627ca843f97c9cc77e5e7c58a19938b0025fa3d99d97f5e62beb8d895de3",
+    "experiments/issue-809/git-manager.sh": "3a8d160caed43288e676ed73895aca0b1c4e95bc5852390e71f1ccf259510700",
+    "experiments/issue-809/windows_git_ipc_pool.py": "bfe865ea678d5973eba422c8efc3d6236980113920f1b16898db387944888a55",
+    "experiments/issue-809/test_windows_worker_lifecycle.py": "c1551a9a31d251d27c03a6dd8d19a0a07cbbf041920adee36d561456f8530105",
+    "experiments/issue-809/test_windows_peer_rendezvous.py": "e8f16829c757302f68389ae33cfad985ce990e1cfa5ccc0ff052d1001d23f6c7",
+    "git.exe": "4b9a22bd04b110b98bb00443b2533593019726630a8b9f66835301b78fe0d561"
+  },
+  "baseline_binary_sha256": "d0b358d877d377100a1798b53fb572f22db1be5745998743a0440280d7a838aa"
+}

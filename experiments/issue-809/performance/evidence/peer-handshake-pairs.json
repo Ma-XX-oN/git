@@ -1,0 +1,1350 @@
+[
+  {
+    "round": 1,
+    "mode": "main-coordinator",
+    "binary": "C:\\Users\\adria\\AppData\\Local\\Temp\\git809-main-handshake-baseline\\git.exe",
+    "samples": [
+      {
+        "normal_ms": 63.126,
+        "ipc_ms": 6.84
+      },
+      {
+        "normal_ms": 61.157,
+        "ipc_ms": 13.938
+      },
+      {
+        "normal_ms": 64.074,
+        "ipc_ms": 6.11
+      },
+      {
+        "normal_ms": 64.77,
+        "ipc_ms": 8.685
+      },
+      {
+        "normal_ms": 67.681,
+        "ipc_ms": 8.338
+      },
+      {
+        "normal_ms": 69.84,
+        "ipc_ms": 7.903
+      },
+      {
+        "normal_ms": 62.5,
+        "ipc_ms": 5.667
+      },
+      {
+        "normal_ms": 56.25,
+        "ipc_ms": 11.451
+      },
+      {
+        "normal_ms": 53.583,
+        "ipc_ms": 7.234
+      },
+      {
+        "normal_ms": 59.969,
+        "ipc_ms": 7.288
+      },
+      {
+        "normal_ms": 55.946,
+        "ipc_ms": 6.744
+      },
+      {
+        "normal_ms": 57.643,
+        "ipc_ms": 6.141
+      },
+      {
+        "normal_ms": 56.211,
+        "ipc_ms": 6.123
+      },
+      {
+        "normal_ms": 57.83,
+        "ipc_ms": 12.242
+      },
+      {
+        "normal_ms": 59.089,
+        "ipc_ms": 7.248
+      },
+      {
+        "normal_ms": 56.031,
+        "ipc_ms": 6.505
+      },
+      {
+        "normal_ms": 53.975,
+        "ipc_ms": 13.444
+      },
+      {
+        "normal_ms": 97.635,
+        "ipc_ms": 7.313
+      },
+      {
+        "normal_ms": 59.002,
+        "ipc_ms": 6.965
+      },
+      {
+        "normal_ms": 122.038,
+        "ipc_ms": 6.76
+      },
+      {
+        "normal_ms": 60.93,
+        "ipc_ms": 6.767
+      },
+      {
+        "normal_ms": 57.789,
+        "ipc_ms": 12.935
+      },
+      {
+        "normal_ms": 59.541,
+        "ipc_ms": 8.842
+      },
+      {
+        "normal_ms": 59.266,
+        "ipc_ms": 11.464
+      },
+      {
+        "normal_ms": 58.674,
+        "ipc_ms": 7.977
+      },
+      {
+        "normal_ms": 74.694,
+        "ipc_ms": 7.141
+      },
+      {
+        "normal_ms": 60.862,
+        "ipc_ms": 5.588
+      },
+      {
+        "normal_ms": 50.237,
+        "ipc_ms": 12.116
+      },
+      {
+        "normal_ms": 56.652,
+        "ipc_ms": 6.362
+      },
+      {
+        "normal_ms": 54.211,
+        "ipc_ms": 6.128
+      },
+      {
+        "normal_ms": 52.85,
+        "ipc_ms": 5.788
+      },
+      {
+        "normal_ms": 59.475,
+        "ipc_ms": 13.303
+      },
+      {
+        "normal_ms": 56.08,
+        "ipc_ms": 12.239
+      },
+      {
+        "normal_ms": 57.718,
+        "ipc_ms": 6.666
+      },
+      {
+        "normal_ms": 59.392,
+        "ipc_ms": 7.631
+      },
+      {
+        "normal_ms": 56.892,
+        "ipc_ms": 7.789
+      },
+      {
+        "normal_ms": 53.854,
+        "ipc_ms": 6.367
+      },
+      {
+        "normal_ms": 58.107,
+        "ipc_ms": 11.839
+      },
+      {
+        "normal_ms": 56.416,
+        "ipc_ms": 6.647
+      },
+      {
+        "normal_ms": 56.496,
+        "ipc_ms": 11.949
+      },
+      {
+        "normal_ms": 54.512,
+        "ipc_ms": 5.487
+      },
+      {
+        "normal_ms": 55.456,
+        "ipc_ms": 12.717
+      },
+      {
+        "normal_ms": 51.256,
+        "ipc_ms": 16.188
+      },
+      {
+        "normal_ms": 56.318,
+        "ipc_ms": 11.202
+      },
+      {
+        "normal_ms": 54.542,
+        "ipc_ms": 6.26
+      },
+      {
+        "normal_ms": 57.056,
+        "ipc_ms": 11.456
+      },
+      {
+        "normal_ms": 53.848,
+        "ipc_ms": 6.688
+      },
+      {
+        "normal_ms": 57.707,
+        "ipc_ms": 6.763
+      },
+      {
+        "normal_ms": 50.238,
+        "ipc_ms": 12.07
+      },
+      {
+        "normal_ms": 57.876,
+        "ipc_ms": 11.223
+      },
+      {
+        "normal_ms": 54.78,
+        "ipc_ms": 10.858
+      },
+      {
+        "normal_ms": 60.785,
+        "ipc_ms": 5.706
+      },
+      {
+        "normal_ms": 57.048,
+        "ipc_ms": 5.731
+      },
+      {
+        "normal_ms": 57.112,
+        "ipc_ms": 12.163
+      },
+      {
+        "normal_ms": 53.059,
+        "ipc_ms": 11.624
+      },
+      {
+        "normal_ms": 59.306,
+        "ipc_ms": 6.08
+      },
+      {
+        "normal_ms": 55.687,
+        "ipc_ms": 6.031
+      },
+      {
+        "normal_ms": 56.25,
+        "ipc_ms": 7.452
+      },
+      {
+        "normal_ms": 52.315,
+        "ipc_ms": 6.35
+      },
+      {
+        "normal_ms": 57.491,
+        "ipc_ms": 12.551
+      },
+      {
+        "normal_ms": 54.763,
+        "ipc_ms": 7.185
+      },
+      {
+        "normal_ms": 56.446,
+        "ipc_ms": 12.915
+      },
+      {
+        "normal_ms": 55.463,
+        "ipc_ms": 6.233
+      },
+      {
+        "normal_ms": 55.487,
+        "ipc_ms": 7.856
+      },
+      {
+        "normal_ms": 52.642,
+        "ipc_ms": 8.147
+      },
+      {
+        "normal_ms": 62.694,
+        "ipc_ms": 12.931
+      },
+      {
+        "normal_ms": 68.578,
+        "ipc_ms": 11.83
+      },
+      {
+        "normal_ms": 59.156,
+        "ipc_ms": 6.679
+      },
+      {
+        "normal_ms": 60.626,
+        "ipc_ms": 13.22
+      },
+      {
+        "normal_ms": 55.968,
+        "ipc_ms": 12.223
+      },
+      {
+        "normal_ms": 56.341,
+        "ipc_ms": 6.871
+      },
+      {
+        "normal_ms": 54.616,
+        "ipc_ms": 6.196
+      },
+      {
+        "normal_ms": 53.785,
+        "ipc_ms": 5.697
+      },
+      {
+        "normal_ms": 55.166,
+        "ipc_ms": 11.646
+      },
+      {
+        "normal_ms": 52.268,
+        "ipc_ms": 5.935
+      },
+      {
+        "normal_ms": 54.536,
+        "ipc_ms": 12.667
+      },
+      {
+        "normal_ms": 55.387,
+        "ipc_ms": 6.22
+      },
+      {
+        "normal_ms": 53.173,
+        "ipc_ms": 11.924
+      },
+      {
+        "normal_ms": 48.745,
+        "ipc_ms": 12.419
+      },
+      {
+        "normal_ms": 55.187,
+        "ipc_ms": 11.608
+      }
+    ],
+    "shell_wall_seconds": 6.212300000013784,
+    "normal_median_ms": 56.471000000000004,
+    "ipc_median_ms": 7.5415,
+    "job": {
+      "cpu_user_seconds": 4.359375,
+      "cpu_kernel_seconds": 4.84375,
+      "cpu_total_seconds": 9.203125,
+      "processes": 263,
+      "active_at_capture": 0
+    }
+  },
+  {
+    "round": 2,
+    "mode": "peer-spin",
+    "binary": "C:\\Users\\adria\\projects\\git\\git.exe",
+    "samples": [
+      {
+        "normal_ms": 58.597,
+        "ipc_ms": 13.818
+      },
+      {
+        "normal_ms": 52.501,
+        "ipc_ms": 5.981
+      },
+      {
+        "normal_ms": 54.293,
+        "ipc_ms": 7.271
+      },
+      {
+        "normal_ms": 52.392,
+        "ipc_ms": 12.256
+      },
+      {
+        "normal_ms": 51.686,
+        "ipc_ms": 6.797
+      },
+      {
+        "normal_ms": 58.219,
+        "ipc_ms": 12.006
+      },
+      {
+        "normal_ms": 56.906,
+        "ipc_ms": 11.758
+      },
+      {
+        "normal_ms": 61.686,
+        "ipc_ms": 14.028
+      },
+      {
+        "normal_ms": 60.559,
+        "ipc_ms": 6.394
+      },
+      {
+        "normal_ms": 70.547,
+        "ipc_ms": 8.284
+      },
+      {
+        "normal_ms": 66.543,
+        "ipc_ms": 8.455
+      },
+      {
+        "normal_ms": 62.342,
+        "ipc_ms": 12.561
+      },
+      {
+        "normal_ms": 60.522,
+        "ipc_ms": 7.335
+      },
+      {
+        "normal_ms": 61.192,
+        "ipc_ms": 8.273
+      },
+      {
+        "normal_ms": 61.761,
+        "ipc_ms": 6.259
+      },
+      {
+        "normal_ms": 58.669,
+        "ipc_ms": 12.189
+      },
+      {
+        "normal_ms": 53.158,
+        "ipc_ms": 6.271
+      },
+      {
+        "normal_ms": 56.183,
+        "ipc_ms": 6.216
+      },
+      {
+        "normal_ms": 54.869,
+        "ipc_ms": 5.943
+      },
+      {
+        "normal_ms": 53.856,
+        "ipc_ms": 6.233
+      },
+      {
+        "normal_ms": 55.339,
+        "ipc_ms": 6.189
+      },
+      {
+        "normal_ms": 61.978,
+        "ipc_ms": 6.579
+      },
+      {
+        "normal_ms": 75.503,
+        "ipc_ms": 5.531
+      },
+      {
+        "normal_ms": 53.188,
+        "ipc_ms": 11.25
+      },
+      {
+        "normal_ms": 54.694,
+        "ipc_ms": 6.375
+      },
+      {
+        "normal_ms": 56.801,
+        "ipc_ms": 11.996
+      },
+      {
+        "normal_ms": 55.877,
+        "ipc_ms": 12.925
+      },
+      {
+        "normal_ms": 56.52,
+        "ipc_ms": 12.182
+      },
+      {
+        "normal_ms": 56.587,
+        "ipc_ms": 8.573
+      },
+      {
+        "normal_ms": 53.402,
+        "ipc_ms": 12.445
+      },
+      {
+        "normal_ms": 52.046,
+        "ipc_ms": 6.938
+      },
+      {
+        "normal_ms": 53.951,
+        "ipc_ms": 6.255
+      },
+      {
+        "normal_ms": 53.39,
+        "ipc_ms": 6.92
+      },
+      {
+        "normal_ms": 59.152,
+        "ipc_ms": 6.636
+      },
+      {
+        "normal_ms": 53.047,
+        "ipc_ms": 7.55
+      },
+      {
+        "normal_ms": 50.49,
+        "ipc_ms": 6.963
+      },
+      {
+        "normal_ms": 52.487,
+        "ipc_ms": 7.028
+      },
+      {
+        "normal_ms": 57.102,
+        "ipc_ms": 12.018
+      },
+      {
+        "normal_ms": 51.876,
+        "ipc_ms": 6.765
+      },
+      {
+        "normal_ms": 53.275,
+        "ipc_ms": 11.902
+      },
+      {
+        "normal_ms": 56.163,
+        "ipc_ms": 12.598
+      },
+      {
+        "normal_ms": 57.422,
+        "ipc_ms": 6.137
+      },
+      {
+        "normal_ms": 54.02,
+        "ipc_ms": 11.645
+      },
+      {
+        "normal_ms": 58.121,
+        "ipc_ms": 6.202
+      },
+      {
+        "normal_ms": 58.073,
+        "ipc_ms": 12.328
+      },
+      {
+        "normal_ms": 59.404,
+        "ipc_ms": 7.469
+      },
+      {
+        "normal_ms": 54.813,
+        "ipc_ms": 11.735
+      },
+      {
+        "normal_ms": 59.603,
+        "ipc_ms": 7.17
+      },
+      {
+        "normal_ms": 54.08,
+        "ipc_ms": 6.513
+      },
+      {
+        "normal_ms": 55.027,
+        "ipc_ms": 7.46
+      },
+      {
+        "normal_ms": 55.627,
+        "ipc_ms": 11.535
+      },
+      {
+        "normal_ms": 59.681,
+        "ipc_ms": 6.686
+      },
+      {
+        "normal_ms": 61.593,
+        "ipc_ms": 5.736
+      },
+      {
+        "normal_ms": 53.318,
+        "ipc_ms": 11.466
+      },
+      {
+        "normal_ms": 53.465,
+        "ipc_ms": 6.889
+      },
+      {
+        "normal_ms": 56.125,
+        "ipc_ms": 5.847
+      },
+      {
+        "normal_ms": 52.443,
+        "ipc_ms": 5.525
+      },
+      {
+        "normal_ms": 57.771,
+        "ipc_ms": 11.953
+      },
+      {
+        "normal_ms": 59.035,
+        "ipc_ms": 6.268
+      },
+      {
+        "normal_ms": 66.67,
+        "ipc_ms": 11.81
+      },
+      {
+        "normal_ms": 61.836,
+        "ipc_ms": 11.154
+      },
+      {
+        "normal_ms": 62.916,
+        "ipc_ms": 5.798
+      },
+      {
+        "normal_ms": 66.791,
+        "ipc_ms": 6.483
+      },
+      {
+        "normal_ms": 57.332,
+        "ipc_ms": 5.701
+      },
+      {
+        "normal_ms": 58.383,
+        "ipc_ms": 7.571
+      },
+      {
+        "normal_ms": 55.354,
+        "ipc_ms": 6.379
+      },
+      {
+        "normal_ms": 54.528,
+        "ipc_ms": 6.649
+      },
+      {
+        "normal_ms": 53.342,
+        "ipc_ms": 13.296
+      },
+      {
+        "normal_ms": 51.251,
+        "ipc_ms": 7.012
+      },
+      {
+        "normal_ms": 52.286,
+        "ipc_ms": 11.806
+      },
+      {
+        "normal_ms": 54.61,
+        "ipc_ms": 5.672
+      },
+      {
+        "normal_ms": 58.588,
+        "ipc_ms": 6.783
+      },
+      {
+        "normal_ms": 57.822,
+        "ipc_ms": 12.919
+      },
+      {
+        "normal_ms": 56.308,
+        "ipc_ms": 12.295
+      },
+      {
+        "normal_ms": 70.169,
+        "ipc_ms": 15.065
+      },
+      {
+        "normal_ms": 59.833,
+        "ipc_ms": 11.452
+      },
+      {
+        "normal_ms": 55.221,
+        "ipc_ms": 12.229
+      },
+      {
+        "normal_ms": 54.431,
+        "ipc_ms": 11.482
+      },
+      {
+        "normal_ms": 55.753,
+        "ipc_ms": 12.295
+      },
+      {
+        "normal_ms": 53.162,
+        "ipc_ms": 14.356
+      }
+    ],
+    "shell_wall_seconds": 6.033615399966948,
+    "normal_median_ms": 56.173,
+    "ipc_median_ms": 7.4645,
+    "job": {
+      "cpu_user_seconds": 4.078125,
+      "cpu_kernel_seconds": 4.609375,
+      "cpu_total_seconds": 8.6875,
+      "processes": 263,
+      "active_at_capture": 0
+    }
+  },
+  {
+    "round": 3,
+    "mode": "peer-spin",
+    "binary": "C:\\Users\\adria\\projects\\git\\git.exe",
+    "samples": [
+      {
+        "normal_ms": 54.24,
+        "ipc_ms": 15.155
+      },
+      {
+        "normal_ms": 57.611,
+        "ipc_ms": 12.544
+      },
+      {
+        "normal_ms": 57.328,
+        "ipc_ms": 8.175
+      },
+      {
+        "normal_ms": 56.166,
+        "ipc_ms": 6.352
+      },
+      {
+        "normal_ms": 61.426,
+        "ipc_ms": 7.979
+      },
+      {
+        "normal_ms": 56.784,
+        "ipc_ms": 11.988
+      },
+      {
+        "normal_ms": 66.593,
+        "ipc_ms": 7.578
+      },
+      {
+        "normal_ms": 64.125,
+        "ipc_ms": 7.941
+      },
+      {
+        "normal_ms": 59.73,
+        "ipc_ms": 7.067
+      },
+      {
+        "normal_ms": 62.97,
+        "ipc_ms": 7.636
+      },
+      {
+        "normal_ms": 60.209,
+        "ipc_ms": 6.207
+      },
+      {
+        "normal_ms": 57.812,
+        "ipc_ms": 6.936
+      },
+      {
+        "normal_ms": 61.348,
+        "ipc_ms": 7.242
+      },
+      {
+        "normal_ms": 74.641,
+        "ipc_ms": 7.88
+      },
+      {
+        "normal_ms": 58.56,
+        "ipc_ms": 7.697
+      },
+      {
+        "normal_ms": 59.611,
+        "ipc_ms": 6.713
+      },
+      {
+        "normal_ms": 53.678,
+        "ipc_ms": 6.492
+      },
+      {
+        "normal_ms": 54.106,
+        "ipc_ms": 11.719
+      },
+      {
+        "normal_ms": 55.547,
+        "ipc_ms": 5.917
+      },
+      {
+        "normal_ms": 55.264,
+        "ipc_ms": 7.978
+      },
+      {
+        "normal_ms": 53.876,
+        "ipc_ms": 5.943
+      },
+      {
+        "normal_ms": 57.013,
+        "ipc_ms": 6.79
+      },
+      {
+        "normal_ms": 52.261,
+        "ipc_ms": 11.387
+      },
+      {
+        "normal_ms": 58.068,
+        "ipc_ms": 21.522
+      },
+      {
+        "normal_ms": 54.829,
+        "ipc_ms": 5.721
+      },
+      {
+        "normal_ms": 56.35,
+        "ipc_ms": 6.512
+      },
+      {
+        "normal_ms": 54.448,
+        "ipc_ms": 6.326
+      },
+      {
+        "normal_ms": 57.421,
+        "ipc_ms": 7.124
+      },
+      {
+        "normal_ms": 58.317,
+        "ipc_ms": 11.938
+      },
+      {
+        "normal_ms": 57.787,
+        "ipc_ms": 12.836
+      },
+      {
+        "normal_ms": 58.61,
+        "ipc_ms": 11.954
+      },
+      {
+        "normal_ms": 63.852,
+        "ipc_ms": 11.726
+      },
+      {
+        "normal_ms": 65.929,
+        "ipc_ms": 5.777
+      },
+      {
+        "normal_ms": 56.746,
+        "ipc_ms": 11.373
+      },
+      {
+        "normal_ms": 52.8,
+        "ipc_ms": 6.053
+      },
+      {
+        "normal_ms": 57.506,
+        "ipc_ms": 7.317
+      },
+      {
+        "normal_ms": 53.081,
+        "ipc_ms": 8.014
+      },
+      {
+        "normal_ms": 58.916,
+        "ipc_ms": 12.008
+      },
+      {
+        "normal_ms": 55.396,
+        "ipc_ms": 6.689
+      },
+      {
+        "normal_ms": 57.25,
+        "ipc_ms": 6.636
+      },
+      {
+        "normal_ms": 53.75,
+        "ipc_ms": 6.594
+      },
+      {
+        "normal_ms": 54.648,
+        "ipc_ms": 12.01
+      },
+      {
+        "normal_ms": 51.897,
+        "ipc_ms": 5.78
+      },
+      {
+        "normal_ms": 56.34,
+        "ipc_ms": 11.412
+      },
+      {
+        "normal_ms": 54.07,
+        "ipc_ms": 6.485
+      },
+      {
+        "normal_ms": 53.526,
+        "ipc_ms": 12.303
+      },
+      {
+        "normal_ms": 52.152,
+        "ipc_ms": 5.618
+      },
+      {
+        "normal_ms": 52.949,
+        "ipc_ms": 6.201
+      },
+      {
+        "normal_ms": 48.623,
+        "ipc_ms": 6.854
+      },
+      {
+        "normal_ms": 54.03,
+        "ipc_ms": 5.938
+      },
+      {
+        "normal_ms": 55.692,
+        "ipc_ms": 5.821
+      },
+      {
+        "normal_ms": 54.86,
+        "ipc_ms": 12.402
+      },
+      {
+        "normal_ms": 50.767,
+        "ipc_ms": 5.631
+      },
+      {
+        "normal_ms": 55.063,
+        "ipc_ms": 11.836
+      },
+      {
+        "normal_ms": 55.091,
+        "ipc_ms": 11.523
+      },
+      {
+        "normal_ms": 57.602,
+        "ipc_ms": 11.414
+      },
+      {
+        "normal_ms": 51.819,
+        "ipc_ms": 6.616
+      },
+      {
+        "normal_ms": 56.526,
+        "ipc_ms": 11.383
+      },
+      {
+        "normal_ms": 52.41,
+        "ipc_ms": 6.619
+      },
+      {
+        "normal_ms": 51.677,
+        "ipc_ms": 12.468
+      },
+      {
+        "normal_ms": 52.138,
+        "ipc_ms": 5.96
+      },
+      {
+        "normal_ms": 53.9,
+        "ipc_ms": 6.215
+      },
+      {
+        "normal_ms": 53.745,
+        "ipc_ms": 7.078
+      },
+      {
+        "normal_ms": 56.836,
+        "ipc_ms": 6.351
+      },
+      {
+        "normal_ms": 51.773,
+        "ipc_ms": 6.184
+      },
+      {
+        "normal_ms": 56.156,
+        "ipc_ms": 12.263
+      },
+      {
+        "normal_ms": 54.777,
+        "ipc_ms": 6.091
+      },
+      {
+        "normal_ms": 54.41,
+        "ipc_ms": 11.354
+      },
+      {
+        "normal_ms": 55.227,
+        "ipc_ms": 11.993
+      },
+      {
+        "normal_ms": 55.273,
+        "ipc_ms": 6.686
+      },
+      {
+        "normal_ms": 53.978,
+        "ipc_ms": 8.351
+      },
+      {
+        "normal_ms": 55.084,
+        "ipc_ms": 11.449
+      },
+      {
+        "normal_ms": 55.946,
+        "ipc_ms": 6.482
+      },
+      {
+        "normal_ms": 53.808,
+        "ipc_ms": 12.142
+      },
+      {
+        "normal_ms": 51.503,
+        "ipc_ms": 11.192
+      },
+      {
+        "normal_ms": 54.524,
+        "ipc_ms": 12.568
+      },
+      {
+        "normal_ms": 51.141,
+        "ipc_ms": 11.573
+      },
+      {
+        "normal_ms": 53.35,
+        "ipc_ms": 12.254
+      },
+      {
+        "normal_ms": 53.182,
+        "ipc_ms": 8.002
+      },
+      {
+        "normal_ms": 52.779,
+        "ipc_ms": 5.877
+      }
+    ],
+    "shell_wall_seconds": 5.957565299991984,
+    "normal_median_ms": 55.159,
+    "ipc_median_ms": 7.607,
+    "job": {
+      "cpu_user_seconds": 4.109375,
+      "cpu_kernel_seconds": 4.53125,
+      "cpu_total_seconds": 8.640625,
+      "processes": 263,
+      "active_at_capture": 0
+    }
+  },
+  {
+    "round": 4,
+    "mode": "main-coordinator",
+    "binary": "C:\\Users\\adria\\AppData\\Local\\Temp\\git809-main-handshake-baseline\\git.exe",
+    "samples": [
+      {
+        "normal_ms": 53.367,
+        "ipc_ms": 6.7
+      },
+      {
+        "normal_ms": 56.576,
+        "ipc_ms": 12.97
+      },
+      {
+        "normal_ms": 53.624,
+        "ipc_ms": 11.622
+      },
+      {
+        "normal_ms": 54.217,
+        "ipc_ms": 12.157
+      },
+      {
+        "normal_ms": 54.015,
+        "ipc_ms": 6.985
+      },
+      {
+        "normal_ms": 57.296,
+        "ipc_ms": 12.234
+      },
+      {
+        "normal_ms": 59.979,
+        "ipc_ms": 6.538
+      },
+      {
+        "normal_ms": 89.792,
+        "ipc_ms": 7.885
+      },
+      {
+        "normal_ms": 62.286,
+        "ipc_ms": 6.317
+      },
+      {
+        "normal_ms": 59.705,
+        "ipc_ms": 6.992
+      },
+      {
+        "normal_ms": 61.316,
+        "ipc_ms": 6.825
+      },
+      {
+        "normal_ms": 58.172,
+        "ipc_ms": 11.752
+      },
+      {
+        "normal_ms": 60.267,
+        "ipc_ms": 7.847
+      },
+      {
+        "normal_ms": 67.051,
+        "ipc_ms": 11.765
+      },
+      {
+        "normal_ms": 61.345,
+        "ipc_ms": 12.43
+      },
+      {
+        "normal_ms": 61.964,
+        "ipc_ms": 12.167
+      },
+      {
+        "normal_ms": 54.296,
+        "ipc_ms": 6.961
+      },
+      {
+        "normal_ms": 55.611,
+        "ipc_ms": 5.861
+      },
+      {
+        "normal_ms": 52.707,
+        "ipc_ms": 11.928
+      },
+      {
+        "normal_ms": 58.894,
+        "ipc_ms": 12.092
+      },
+      {
+        "normal_ms": 54.768,
+        "ipc_ms": 13.032
+      },
+      {
+        "normal_ms": 56.93,
+        "ipc_ms": 12.548
+      },
+      {
+        "normal_ms": 57.204,
+        "ipc_ms": 6.597
+      },
+      {
+        "normal_ms": 52.238,
+        "ipc_ms": 11.355
+      },
+      {
+        "normal_ms": 55.451,
+        "ipc_ms": 6.572
+      },
+      {
+        "normal_ms": 56.066,
+        "ipc_ms": 6.322
+      },
+      {
+        "normal_ms": 55.838,
+        "ipc_ms": 5.64
+      },
+      {
+        "normal_ms": 56.279,
+        "ipc_ms": 12.773
+      },
+      {
+        "normal_ms": 57.477,
+        "ipc_ms": 6.75
+      },
+      {
+        "normal_ms": 54.921,
+        "ipc_ms": 6.718
+      },
+      {
+        "normal_ms": 55.798,
+        "ipc_ms": 6.84
+      },
+      {
+        "normal_ms": 55.359,
+        "ipc_ms": 6.5
+      },
+      {
+        "normal_ms": 55.751,
+        "ipc_ms": 12.801
+      },
+      {
+        "normal_ms": 56.549,
+        "ipc_ms": 7.497
+      },
+      {
+        "normal_ms": 53.945,
+        "ipc_ms": 11.979
+      },
+      {
+        "normal_ms": 57.874,
+        "ipc_ms": 13.283
+      },
+      {
+        "normal_ms": 54.207,
+        "ipc_ms": 12.243
+      },
+      {
+        "normal_ms": 56.131,
+        "ipc_ms": 6.22
+      },
+      {
+        "normal_ms": 53.995,
+        "ipc_ms": 12.055
+      },
+      {
+        "normal_ms": 56.618,
+        "ipc_ms": 11.59
+      },
+      {
+        "normal_ms": 55.043,
+        "ipc_ms": 13.307
+      },
+      {
+        "normal_ms": 55.316,
+        "ipc_ms": 6.768
+      },
+      {
+        "normal_ms": 57.395,
+        "ipc_ms": 12.255
+      },
+      {
+        "normal_ms": 54.408,
+        "ipc_ms": 6.305
+      },
+      {
+        "normal_ms": 53.532,
+        "ipc_ms": 7.285
+      },
+      {
+        "normal_ms": 57.914,
+        "ipc_ms": 12.439
+      },
+      {
+        "normal_ms": 52.884,
+        "ipc_ms": 11.859
+      },
+      {
+        "normal_ms": 55.644,
+        "ipc_ms": 11.786
+      },
+      {
+        "normal_ms": 55.213,
+        "ipc_ms": 11.606
+      },
+      {
+        "normal_ms": 56.856,
+        "ipc_ms": 12.176
+      },
+      {
+        "normal_ms": 56.795,
+        "ipc_ms": 12.289
+      },
+      {
+        "normal_ms": 55.358,
+        "ipc_ms": 12.108
+      },
+      {
+        "normal_ms": 51.649,
+        "ipc_ms": 8.525
+      },
+      {
+        "normal_ms": 56.205,
+        "ipc_ms": 6.051
+      },
+      {
+        "normal_ms": 54.249,
+        "ipc_ms": 7.18
+      },
+      {
+        "normal_ms": 56.349,
+        "ipc_ms": 6.218
+      },
+      {
+        "normal_ms": 54.542,
+        "ipc_ms": 12.029
+      },
+      {
+        "normal_ms": 53.743,
+        "ipc_ms": 11.418
+      },
+      {
+        "normal_ms": 54.727,
+        "ipc_ms": 7.263
+      },
+      {
+        "normal_ms": 61.049,
+        "ipc_ms": 12.077
+      },
+      {
+        "normal_ms": 52.384,
+        "ipc_ms": 12.438
+      },
+      {
+        "normal_ms": 57.288,
+        "ipc_ms": 7.01
+      },
+      {
+        "normal_ms": 54.325,
+        "ipc_ms": 11.554
+      },
+      {
+        "normal_ms": 55.597,
+        "ipc_ms": 12.246
+      },
+      {
+        "normal_ms": 51.413,
+        "ipc_ms": 6.774
+      },
+      {
+        "normal_ms": 62.927,
+        "ipc_ms": 7.544
+      },
+      {
+        "normal_ms": 58.745,
+        "ipc_ms": 12.363
+      },
+      {
+        "normal_ms": 58.86,
+        "ipc_ms": 11.982
+      },
+      {
+        "normal_ms": 57.587,
+        "ipc_ms": 6.807
+      },
+      {
+        "normal_ms": 58.72,
+        "ipc_ms": 5.739
+      },
+      {
+        "normal_ms": 52.689,
+        "ipc_ms": 5.887
+      },
+      {
+        "normal_ms": 61.567,
+        "ipc_ms": 7.315
+      },
+      {
+        "normal_ms": 58.297,
+        "ipc_ms": 6.615
+      },
+      {
+        "normal_ms": 54.38,
+        "ipc_ms": 11.408
+      },
+      {
+        "normal_ms": 57.182,
+        "ipc_ms": 5.952
+      },
+      {
+        "normal_ms": 64.085,
+        "ipc_ms": 12.998
+      },
+      {
+        "normal_ms": 56.695,
+        "ipc_ms": 12.811
+      },
+      {
+        "normal_ms": 56.292,
+        "ipc_ms": 12.409
+      },
+      {
+        "normal_ms": 54.777,
+        "ipc_ms": 7.09
+      },
+      {
+        "normal_ms": 58.91,
+        "ipc_ms": 11.719
+      }
+    ],
+    "shell_wall_seconds": 6.067148400004953,
+    "normal_median_ms": 56.168,
+    "ipc_median_ms": 11.413,
+    "job": {
+      "cpu_user_seconds": 4.171875,
+      "cpu_kernel_seconds": 4.546875,
+      "cpu_total_seconds": 8.71875,
+      "processes": 263,
+      "active_at_capture": 0
+    }
+  }
+]

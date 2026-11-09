@@ -1,0 +1,12 @@
+{
+  "source": "Recorded output of the original differential run; raw test file was subsequently regenerated for the changed-only approach.",
+  "cases": 14,
+  "passed": 11,
+  "failed": [
+    "empty-no-drive-directories",
+    "value-size-32768",
+    "value-size-40000"
+  ],
+  "failure": "baseline exit 0, one-call prototype exit 94 (context application failed)",
+  "adopted": false
+}

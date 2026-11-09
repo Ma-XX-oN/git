@@ -154,6 +154,14 @@ binary stdout/stderr and interactive stdin tests are implemented and pass.
 
 ## Implementation notes
 
+### Performance evidence
+
+Record changes, comparison controls and raw measurements in the
+[performance journal](PERFORMANCE-JOURNAL.md). Before/after gains require the
+same laptop experiment or the same CI job, with workload, worker count, build
+flags and instrumentation held constant. Different-machine or different-job
+observations do not establish a gain from a code change.
+
 The serial allocation protocol has one owner shell and one persistent
 request/reply pair. It does not support simultaneous allocations through the
 same descriptors; the stress suite exercises serial reuse, held probes,
