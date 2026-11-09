@@ -1,0 +1,3 @@
+LIBRARY git809_detours_exit
+EXPORTS
+  DetourFinishHelperProcess @1
