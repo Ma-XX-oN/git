@@ -10,12 +10,15 @@ using ExitProcessFn = VOID (WINAPI *)(UINT);
 using CRunFn = void (__cdecl *)(int);
 using AbortFn = void (__cdecl *)(void);
 using RaiseFn = int (__cdecl *)(int);
+using SignalHandler = void (__cdecl *)(int);
+using SignalFn = SignalHandler (__cdecl *)(int, SignalHandler);
 
 static ExitProcessFn real_exit_process = nullptr;
 static CRunFn real_crt_exit = nullptr;
 static CRunFn real_crt__exit = nullptr;
 static AbortFn real_abort = nullptr;
 static RaiseFn real_raise = nullptr;
+static SignalFn real_signal = nullptr;
 static wchar_t log_path[MAX_PATH * 4] = {};
 static wchar_t fallback_path[MAX_PATH * 4] = {};
 static thread_local bool logging = false;
@@ -82,6 +85,12 @@ static int __cdecl hook_raise(int signal_number)
   return real_raise(signal_number);
 }
 
+static SignalHandler __cdecl hook_signal(int sig, SignalHandler handler)
+{
+  emit("crt.signal-registration", sig);
+  return real_signal(sig, handler);
+}
+
 static bool attach(PVOID *original, PVOID hook)
 {
   return DetourAttach(original, hook) == NO_ERROR;
@@ -117,6 +126,8 @@ extern "C" BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID)
     reinterpret_cast<AbortFn>(GetProcAddress(crt, "abort")) : nullptr;
   real_raise = crt ?
     reinterpret_cast<RaiseFn>(GetProcAddress(crt, "raise")) : nullptr;
+  real_signal = crt ?
+    reinterpret_cast<SignalFn>(GetProcAddress(crt, "signal")) : nullptr;
 
   if (!real_exit_process || !real_crt_exit || !real_crt__exit)
     return FALSE;
@@ -135,6 +146,9 @@ extern "C" BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID)
   if (ok && real_raise)
     ok = attach(reinterpret_cast<PVOID*>(&real_raise),
                 reinterpret_cast<PVOID>(hook_raise));
+  if (ok && real_signal)
+    ok = attach(reinterpret_cast<PVOID*>(&real_signal),
+                reinterpret_cast<PVOID>(hook_signal));
   if (!ok) {
     DetourTransactionAbort();
     return FALSE;
