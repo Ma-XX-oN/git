@@ -9,6 +9,7 @@ on:
       - experiments/issue-809/test_detours_exit_worker.py
       - compat/mingw.c
       - .github/workflows/issue-809-exit-detours.yml
+      - experiments/issue-809/README.md
   workflow_dispatch:
 permissions:
   contents: read
@@ -31,7 +32,10 @@ jobs:
         shell: bash
         run: |
           . /etc/profile
-          make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git.exe
+          make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease \
+            CFLAGS='-g -O0 -fno-omit-frame-pointer -Wall' git.exe
+          objdump -h git.exe | grep -F .debug_info
+          objdump -h git.exe | grep -F .debug_line
       - name: Build pinned Microsoft Detours 4.0.1 and instrumentation
         shell: pwsh
         run: |
@@ -54,10 +58,16 @@ jobs:
           $library = "$env:RUNNER_TEMP\detours\lib.X64\detours.lib"
           if (-not (Test-Path $library)) { throw 'Detours library missing' }
           $dir = "experiments\issue-809"
-          cl /nologo /std:c++17 /EHsc /W4 /WX /MT /LD "/I$include" "$dir\detours_exit_trace.cpp" /link "/OUT:$env:RUNNER_TEMP\git809_detours_exit.dll" "/DEF:$dir\detours_exit_trace.def" $library
+          New-Item -ItemType Directory -Force exit-detours-results | Out-Null
+          cl /nologo /std:c++17 /EHsc /W4 /WX /MT /Zi /Od /LD "/I$include" "$dir\detours_exit_trace.cpp" /link /DEBUG:FULL "/PDB:$env:RUNNER_TEMP\git809_detours_exit.pdb" "/OUT:$env:RUNNER_TEMP\git809_detours_exit.dll" "/DEF:$dir\detours_exit_trace.def" $library
           if ($LASTEXITCODE -ne 0) { throw 'Detours exit tracer compilation failed' }
-          cl /nologo /std:c++17 /EHsc /W4 /WX /MT "/I$include" "$dir\detours_launcher.cpp" /link "/OUT:$env:RUNNER_TEMP\git809_detours_launcher.exe" $library
+          cl /nologo /std:c++17 /EHsc /W4 /WX /MT /Zi /Od "/I$include" "$dir\detours_launcher.cpp" /link /DEBUG:FULL "/PDB:$env:RUNNER_TEMP\git809_detours_launcher.pdb" "/OUT:$env:RUNNER_TEMP\git809_detours_launcher.exe" $library
           if ($LASTEXITCODE -ne 0) { throw 'Detours launcher compilation failed' }
+          foreach ($file in @("git809_detours_exit.pdb", "git809_detours_launcher.pdb")) {
+            $source = Join-Path $env:RUNNER_TEMP $file
+            if (-not (Test-Path $source)) { throw "Debug symbols missing: $source" }
+            Copy-Item $source exit-detours-results
+          }
           Get-FileHash "$env:RUNNER_TEMP\git809_detours_exit.dll" -Algorithm SHA256
           Get-FileHash "$env:RUNNER_TEMP\git809_detours_launcher.exe" -Algorithm SHA256
       - name: Trace exact-SHA worker exit entry points
