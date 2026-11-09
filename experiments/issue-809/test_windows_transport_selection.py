@@ -169,12 +169,19 @@ def test_allocator_isolation():
       self.lock=threading.Lock()
       self.errors=[]
       self.notify=None
+      self.replacements=0
+      self.replacement_release=threading.Event()
 
     def alloc(self):
       try:
         return self.ready.get_nowait()
       except queue.Empty:
         return None
+
+    def replenish(self):
+      """Record replacement requests without starting fixture subprocesses."""
+      self.replacements+=1
+      assert self.replacement_release.wait(10),"replacement test was not released"
 
   pool=ReadyPool()
   owner=90000000+int(uuid.uuid4().hex[:6],16)
@@ -225,6 +232,9 @@ def test_allocator_isolation():
         assert read_line()==b"WAIT\n"
       else:
         assert read_line()==f"{1001+number}\n".encode("ascii"),number
+      if number==0:
+        # The first PID must arrive while replacement startup is held.
+        pool.replacement_release.set()
     final_handles=W.DWORD()
     assert K.GetProcessHandleCount(K.GetCurrentProcess(),C.byref(final_handles))
     assert final_handles.value-initial_handles.value<16,(
@@ -233,6 +243,7 @@ def test_allocator_isolation():
     print("GIT809_ALLOCATOR_PASS persistent-6000-requests-shortage-held-probes",
           "handles",initial_handles.value,final_handles.value,flush=True)
   finally:
+    pool.replacement_release.set()
     pool.closing.set()
     with pool.lock:
       if pool.notify:
@@ -242,6 +253,7 @@ def test_allocator_isolation():
     thread.join(timeout=5)
     assert not thread.is_alive(),"persistent allocator cleanup stuck"
     assert not pool.errors,pool.errors
+    assert pool.replacements==5999,pool.replacements
 
 
 def test_shutdown_after_drained_wakeup():

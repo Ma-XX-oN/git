@@ -114,9 +114,26 @@ open for the shell's lifetime. The same completion port serves request reads,
 reply writes, worker-ready notifications, and shutdown. Reads accumulate
 `GET\n`, and the manager replies with exactly one line. When the READY
 queue is empty, it waits up to five seconds before replying `WAIT\n`.
+Submit each PID reply before starting its asynchronous replacement, so thread
+startup does not delay delivery of a worker that is already READY. Each
+successful allocation starts exactly one replacement; `WAIT` starts none.
 The manager does not create, flush, or close a reply pipe per command.
 The worker's five native channels and their independent connection
 handling remain unchanged.
+
+### Windows worker completion
+
+The worker completes stdout and stderr before publishing an exit result:
+flush each CRT stream and its native pipe, then close that stream's descriptor;
+then write the complete `EXIT <status>\n` record, flush the status pipe until
+the client consumes it, and close it. The client drains both output streams
+to EOF before reading the status. The same status writer serves command exit
+and transport-error cleanup, which releases output handles first.
+
+The `common_exit()` callback performs this completion and returns to normal
+CRT shutdown. Windows completion does not use `setjmp()` or `longjmp()`.
+Abrupt process termination can bypass the callback and remains a transport
+failure rather than a successfully delivered Git exit result.
 
 
 ## Existing output limitation

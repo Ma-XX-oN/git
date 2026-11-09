@@ -3749,12 +3749,9 @@ static BOOL WINAPI handle_ctrl_c(DWORD ctrl_type)
  * To be more compatible with the core git code, we convert
  * argv into UTF8 and pass them directly to main().
  */
-#include <setjmp.h>
-static jmp_buf git_preinit_jump;
 /* Set GIT_TRACE_GIT809_PRELOAD to an absolute file path for worker diagnostics. */
 static struct trace_key git809_preload_trace = TRACE_KEY_INIT(GIT809_PRELOAD);
-static volatile int git_preinit_active;
-static volatile int git_preinit_exit_status;
+static HANDLE *git_preinit_status_pipe;
 
 /*
  * Snapshot the trace path before Git can modify its environment. CRT shutdown
@@ -3812,19 +3809,73 @@ static void git_preinit_atexit_log(void)
  */
 /*
  * Preserve Git's existing common_exit() tracing on the caller side.
- * In this function call the actual CRT exit(), without tracing twice.
+ * Return to the existing CRT exit() call after completion, without tracing twice.
  */
 #undef exit
-NORETURN void git_preinit_worker_exit(int status)
+/** @brief Write, flush and close one owned status pipe after output EOF. */
+static int git_preinit_send_status(HANDLE *pipe, int status)
 {
-  if (git_preinit_active) {
-    git_preinit_exit_diagnostic("preload exit callback", status);
+  char record[64];
+  DWORD count = 0, error = 0;
+  int length = snprintf(record, sizeof(record), "EXIT %d\n", status);
+
+  trace_printf_key(&git809_preload_trace,
+    "pid=%lu status-write begin rc=%d\n", GetCurrentProcessId(), status);
+  if (length <= 0 || (size_t)length >= sizeof(record))
+    error = ERROR_INVALID_DATA;
+  else if (!WriteFile(*pipe, record, (DWORD)length, &count, NULL))
+    error = GetLastError();
+  else if (count != (DWORD)length)
+    error = ERROR_WRITE_FAULT;
+  else {
     trace_printf_key(&git809_preload_trace,
-      "pid=%lu preload exit callback status=%d\n", GetCurrentProcessId(), status);
-    git_preinit_exit_status = status;
-    longjmp(git_preinit_jump, 1);
+      "pid=%lu status-flush begin bytes=%lu\n", GetCurrentProcessId(), count);
+    if (!FlushFileBuffers(*pipe))
+      error = GetLastError();
+    else
+      trace_printf_key(&git809_preload_trace,
+	"pid=%lu status-flush done\n", GetCurrentProcessId());
   }
-  exit(status);
+  DisconnectNamedPipe(*pipe);
+  if (!CloseHandle(*pipe) && !error)
+    error = GetLastError();
+  *pipe = INVALID_HANDLE_VALUE;
+  if (error) {
+    trace_printf_key(&git809_preload_trace,
+      "pid=%lu status delivery error=%lu rc=%d\n",
+      GetCurrentProcessId(), error, status);
+    git_preinit_exit_diagnostic("exit status delivery FAILED", status);
+    return -1;
+  }
+  git_preinit_exit_diagnostic("exit status delivered", status);
+  return 0;
+}
+
+/** @brief Deliver output EOF and status before returning to normal CRT exit. */
+static void git_preinit_worker_exit(int status)
+{
+  DWORD pid = GetCurrentProcessId();
+
+  set_preload_exit_callback(NULL);
+  git_preinit_exit_diagnostic("preload exit callback", status);
+  trace_printf_key(&git809_preload_trace,
+    "pid=%lu preload exit callback status=%d\n", pid, status);
+  /*
+   * Windows waits until readers consume all pipe bytes. Closing each
+   * descriptor then provides EOF. The client drains both concurrently.
+   */
+  trace_printf_key(&git809_preload_trace, "pid=%lu flush stdout begin\n", pid);
+  fflush(stdout);
+  FlushFileBuffers((HANDLE)_get_osfhandle(_fileno(stdout)));
+  _close(_fileno(stdout));
+  trace_printf_key(&git809_preload_trace, "pid=%lu flush stderr begin\n", pid);
+  fflush(stderr);
+  FlushFileBuffers((HANDLE)_get_osfhandle(_fileno(stderr)));
+  _close(_fileno(stderr));
+  trace_printf_key(&git809_preload_trace, "pid=%lu flush done\n", pid);
+  _close(0);
+  if (git_preinit_send_status(git_preinit_status_pipe, status))
+    ExitProcess(138);
 }
 #define exit(code) exit(common_exit(__FILE__, __LINE__, (code)))
 /*
@@ -4252,11 +4303,10 @@ static int git_preinit_worker(void)
   HANDLE pipes[5][2];
   struct git809_connections connections = {0};
   char *frame = NULL;
-  char result[64];
   const DWORD frame_capacity = 131072;
   DWORD used = 0, n;
   int request_complete = 0;
-  int i, j, count, pos, rc = 120, written, infd, outfd, errfd;
+  int i, j, count, pos, rc = 120, infd, outfd, errfd;
   const char *args[33] = {0};
   DWORD pid = GetCurrentProcessId();
   HANDLE token = NULL;
@@ -4471,38 +4521,19 @@ static int git_preinit_worker(void)
     rc = 134;
     goto cleanup;
   }
-  git_preinit_active = 1;
+  git_preinit_status_pipe = &pipes[3][1];
   trace_printf_key(&git809_preload_trace,
     "pid=%lu command begin argc=%d\n", pid, count);
   set_preload_exit_callback(git_preinit_worker_exit);
-  if (!setjmp(git_preinit_jump)) {
-    init_git(args);
-    rc = cmd_main(count, args);
-    trace_printf_key(&git809_preload_trace,
-      "pid=%lu cmd_main returned rc=%d\n", pid, rc);
-    set_preload_exit_callback(NULL);
-    rc = common_exit(__FILE__, __LINE__, rc);
-  } else {
-    rc = git_preinit_exit_status;
-  }
+  init_git(args);
+  rc = cmd_main(count, args);
+  trace_printf_key(&git809_preload_trace,
+    "pid=%lu cmd_main returned rc=%d\n", pid, rc);
+  rc = common_exit(__FILE__, __LINE__, rc);
   set_preload_exit_callback(NULL);
-  git_preinit_active = 0;
+  git_preinit_status_pipe = NULL;
   trace_printf_key(&git809_preload_trace,
     "pid=%lu command done rc=%d\n", pid, rc);
-  fflush(stdout);
-  fflush(stderr);
-  /*
-   * Windows waits until readers consume all pipe bytes. Closing each
-   * descriptor then provides EOF. The client drains both concurrently.
-   */
-  trace_printf_key(&git809_preload_trace, "pid=%lu flush stdout begin\n", pid);
-  FlushFileBuffers((HANDLE)_get_osfhandle(_fileno(stdout)));
-  trace_printf_key(&git809_preload_trace, "pid=%lu flush stderr begin\n", pid);
-  FlushFileBuffers((HANDLE)_get_osfhandle(_fileno(stderr)));
-  trace_printf_key(&git809_preload_trace, "pid=%lu flush done\n", pid);
-  _close(_fileno(stdout));
-  _close(_fileno(stderr));
-  _close(0);
 cleanup:
   if (connections.threads[0] || connections.threads[1])
     git809_finish_connections(&connections);
@@ -4518,22 +4549,9 @@ cleanup:
       }
     }
   }
-  written = snprintf(result, sizeof(result), "EXIT %d\n", rc);
-  if (pipes[3][1] != INVALID_HANDLE_VALUE) {
-    trace_printf_key(&git809_preload_trace,
-      "pid=%lu status-write begin rc=%d\n", pid, rc);
-    if (written > 0 && written < sizeof(result) &&
-        WriteFile(pipes[3][1], result, written, &n, NULL)) {
-      trace_printf_key(&git809_preload_trace,
-        "pid=%lu status-flush begin bytes=%lu\n", pid, n);
-      FlushFileBuffers(pipes[3][1]);
-      trace_printf_key(&git809_preload_trace,
-        "pid=%lu status-flush done\n", pid);
-    }
-    DisconnectNamedPipe(pipes[3][1]);
-    CloseHandle(pipes[3][1]);
-    pipes[3][1] = INVALID_HANDLE_VALUE;
-  }
+  if (pipes[3][1] != INVALID_HANDLE_VALUE &&
+      git_preinit_send_status(&pipes[3][1], rc))
+    rc = 138;
   for (i = 0; i < 5; i++)
     for (j = 0; j < 2; j++)
       if (pipes[i][j] != INVALID_HANDLE_VALUE)

@@ -179,7 +179,7 @@ git-ipc() {
   [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE start bashpid=%s\n' "$BASHPID" >>"$_GIT809_MANAGER_LOG"
   _GIT809_REQUEST_SEQ=$(( ${_GIT809_REQUEST_SEQ:-0} + 1 ))
   local marker=$(( _GIT809_REQUEST_SEQ % 10 ))
-  local pid i count header arg status line
+  local pid i count header status line
   local _git809_t_start _git809_t_alloc _git809_t_connect _git809_t_send _git809_t_drained
   if [[ -n ${GIT809_TIMING_LOG:-} ]]; then _git809_t_start=$EPOCHREALTIME; fi
   if ! printf 'GET\n' >&8; then
@@ -227,19 +227,24 @@ git-ipc() {
 
   count=$(( $# + 1 ))
   printf -v header '\\x%02x\\x00\\x00\\x00' "$count"
-  printf '%b' "$header" >&"$fd_worker_control" || { close_fhs; printf 'GIT-IPC ERROR: worker request write failed\n' >&2; return 255; }
-  printf 'git\x00' >&"$fd_worker_control" || { close_fhs; printf 'GIT-IPC ERROR: worker request write failed\n' >&2; return 255; }
-  for arg in "$@"; do
-    printf '%s\x00' "$arg" >&"$fd_worker_control" || { close_fhs; printf 'GIT-IPC ERROR: worker request write failed\n' >&2; return 255; }
-  done
-  _git809_write_context windows >&"$fd_worker_control" || {
+  {
+    printf '%b%s\0' "$header" git || { close_fhs; printf 'GIT-IPC ERROR: worker request write failed\n' >&2; return 255; }
+    if (( $# )); then
+      printf '%s\0' "$@" || { close_fhs; printf 'GIT-IPC ERROR: worker request write failed\n' >&2; return 255; }
+    fi
+    _git809_write_context windows || {
+      close_fhs
+      printf 'GIT-IPC ERROR: context frame write failed\n' >&2
+      return 255
+    }
+    printf 'end\0' || {
+      close_fhs
+      printf 'GIT-IPC ERROR: request end tag write failed\n' >&2
+      return 255
+    }
+  } >&"$fd_worker_control" || {
     close_fhs
-    printf 'GIT-IPC ERROR: context frame write failed\n' >&2
-    return 255
-  }
-  printf 'end\0' >&"$fd_worker_control" || {
-    close_fhs
-    printf 'GIT-IPC ERROR: request end tag write failed\n' >&2
+    printf 'GIT-IPC ERROR: worker request write failed\n' >&2
     return 255
   }
   # Keep both writers open until output EOF: neither connection marker

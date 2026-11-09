@@ -87,10 +87,21 @@ jobs:
             print('GIT809_PHASE',name,'median_ms',round(statistics.median(values),4),flush=True)
           print('GIT809_DRAIN_SHA',os.environ['GITHUB_SHA'])
           PY
+      - name: Measure IPC latency without diagnostic tracing
+        shell: bash
+        run: |
+          . /etc/profile
+          set -euo pipefail
+          unset GIT809_TRACE GIT_TRACE_GIT809_PRELOAD GIT809_TIMING_LOG GIT809_NATIVE_TRACE_DIR
+          PYTHON_EXE="$(cygpath -u "$pythonLocation")/python.exe"
+          export GIT809_MANAGER_PYTHON="$(cygpath -w "$PYTHON_EXE")"
+          "$PYTHON_EXE" experiments/issue-809/pool_size_ab_benchmark.py
       - name: Preserve timings
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: git809-native-direct-export-windows
-          path: git809-stream-results/
+          path: |
+            git809-stream-results/
+            git809-bash-pipe-results/
           if-no-files-found: warn

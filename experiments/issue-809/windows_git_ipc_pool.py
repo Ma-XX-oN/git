@@ -357,9 +357,7 @@ class Pool:
         self.children.remove(p)
       if p.poll() is None:
         break
-      threading.Thread(target=self.spawn,daemon=True).start()
-    # Start replacement before replying to client. Never join this thread.
-    threading.Thread(target=self.spawn,daemon=True).start()
+      self.replenish()
     self.allocations+=1
     if self.allocations % 100 == 0:
       handles=W.DWORD()
@@ -371,6 +369,10 @@ class Pool:
               flush=True)
     print("ALLOCATED "+str(p.pid),flush=True)
     return str(p.pid)+"\n"
+
+  def replenish(self):
+    """Start one replacement without waiting for its READY message."""
+    threading.Thread(target=self.spawn,daemon=True).start()
 
   def close(self):
     """Wake the allocator and terminate workers still owned by the manager."""
@@ -460,9 +462,13 @@ def allocation_server(owner_pid:int,pool:Pool):
       if state=="allocate":
         answer=pool.alloc()
         if answer is not None or time.monotonic()>=deadline:
+          allocated=answer is not None
           answer=(answer or "WAIT\n").encode("ascii")
           assert answer.endswith(b"\n")
           outbound.issue("write",data=answer)
+          # Start replacement after submitting the reply. Never join this thread.
+          if allocated:
+            pool.replenish()
           state="reply"
 
       if state=="reply" and outbound.result is not None:

@@ -65,7 +65,8 @@ def run_case(git, name, arguments, expected_status, expected_output,
              stdin_marker=b"1", malformed=False, fragmented=False,
              missing_end=False, delayed_request=False, delayed_output=False,
              abandoned_probes=False, duplicate_control=False, held_probes=False,
-             marker_order=None):
+             marker_order=None, status_after_output=False, delayed_status=False,
+             expected_errors=b""):
     """Run a worker with stdin held open while output and status are drained."""
     env = os.environ.copy()
     env["GIT809_PRELOAD_OWNER_WINPID"] = str(os.getpid())
@@ -124,11 +125,30 @@ def run_case(git, name, arguments, expected_status, expected_output,
                 K.CloseHandle(handles.pop("param-env-cwd"))
         if delayed_output:
             time.sleep(.1)
+        if status_after_output:
+            # Leave command output unread: its flush must prevent an early result.
+            deadline = time.monotonic() + 3
+            available = W.DWORD()
+            while time.monotonic() < deadline:
+                assert K.PeekNamedPipe(handles["stdout"], None, 0, None,
+                                       C.byref(available), None)
+                if available.value:
+                    break
+                time.sleep(.001)
+            assert available.value, "command did not produce output"
+            time.sleep(.05)
+            assert K.PeekNamedPipe(handles["exit-code"], None, 0, None,
+                                   C.byref(available), None)
+            assert available.value == 0, "exit result preceded output consumption"
         output = read_to_eof(handles["stdout"])
         errors = read_to_eof(handles["stderr"])
+        if delayed_status:
+            # The worker must retain the record until the client consumes it.
+            time.sleep(.05)
+            assert worker.poll() is None, "worker exited before status consumption"
         status = read_to_eof(handles["exit-code"])
         assert output == expected_output, (name, output)
-        assert not errors, (name, errors)
+        assert errors == expected_errors, (name, errors)
         assert status == f"EXIT {expected_status}\n".encode(), (name, status)
         assert worker.wait(timeout=5) == expected_status
         print("GIT809_WORKER_LIFECYCLE_PASS", name, flush=True)
@@ -164,6 +184,13 @@ if __name__ == "__main__":
                    os.environ["GIT809_WORKER_GIT"]).resolve())
     version = subprocess.check_output([git, "--version"])
     run_case(git, "stdin-held-open", ["--version"], 0, version)
+    run_case(git, "output-flush-precedes-status", ["--version"], 0, version,
+             status_after_output=True, delayed_status=True)
+    failure = subprocess.run([git, "--git809-invalid-option"], capture_output=True)
+    assert failure.returncode != 0 and failure.stderr
+    run_case(git, "nonzero-exit-with-stderr", ["--git809-invalid-option"],
+             failure.returncode, failure.stdout, expected_errors=failure.stderr,
+             delayed_status=True)
     run_case(git, "abandoned-probes-on-every-channel", ["--version"],
              0, version, abandoned_probes=True)
     run_case(git, "probes-stay-open-on-every-channel", ["--version"],

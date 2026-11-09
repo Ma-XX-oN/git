@@ -8,9 +8,12 @@ source-injection build script or retired worker startup flag is used.
 Round order 1,2,3,4,5,4,3,2,1 reduces time-order bias. Each OS uses one Git build and one native CI runner.
 Startup, manager creation and initial worker preparation are excluded from
 per-command timings but reported separately.
+Tracing is controlled by caller-supplied environment variables. Leave tracing
+and phase timers unset for performance measurements.
 """
 from __future__ import annotations
 
+from collections import Counter
 from decimal import Decimal
 import json
 import math
@@ -163,9 +166,13 @@ def run_case(bash, script, git_shell, environment, workers, round_index, windows
     allocations = [x for x in manager.splitlines() if x.startswith("ALLOCATED ")]
     # one verification invocation plus 120 timed commands
     assert len(allocations) == N + 1, (workers, len(allocations), manager[-1200:])
-    assert len(set(allocations)) == len(allocations), "worker PID allocated twice"
     ready = [x for x in manager.splitlines() if x.startswith("WORKER_READY ")]
     assert len(ready) >= workers, "initial pool incomplete"
+    # Numeric PIDs can be reused after exit; each allocation needs a READY event.
+    allocated_by_pid = Counter(x.split()[-1] for x in allocations)
+    ready_by_pid = Counter(x.split()[-1] for x in ready)
+    assert all(ready_by_pid[pid] >= count for pid, count in allocated_by_pid.items()), (
+        "worker allocation lacks corresponding READY event", allocated_by_pid, ready_by_pid)
     return {
         "workers": workers, "round": round_index,
         "direct": summarize(direct), "ipc": summarize(ipc),
@@ -202,8 +209,8 @@ def main():
     env["GIT809_PLATFORM"] = "windows" if windows else "unix"
     env["GIT809_WORKER_GIT"] = native
     env["GIT809_MANAGER_PYTHON"] = env.get("GIT809_MANAGER_PYTHON") or sys.executable
-    if windows:
-        trace_dir = (OUT / "native-worker").resolve()
+    if windows and env.get("GIT809_NATIVE_TRACE_DIR"):
+        trace_dir = Path(env["GIT809_NATIVE_TRACE_DIR"]).resolve()
         trace_dir.mkdir(parents=True, exist_ok=True)
         env["GIT809_NATIVE_TRACE_DIR"] = str(trace_dir)
     report = {
