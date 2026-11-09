@@ -3756,11 +3756,28 @@ static struct trace_key git809_preload_trace = TRACE_KEY_INIT(GIT809_PRELOAD);
 static volatile int git_preinit_active;
 static volatile int git_preinit_exit_status;
 
-/* Diagnostic only: this runs on normal CRT exit, not on longjmp or _exit. */
+/*
+ * Snapshot the trace path before Git can modify its environment. CRT shutdown
+ * can run after Git's trace descriptors are closed; do not use trace_printf_key
+ * or any of its file descriptors from this atexit diagnostic.
+ */
+static wchar_t git_preinit_exit_log_path[4096];
+
 static void git_preinit_atexit_log(void)
 {
-  trace_printf_key(&git809_preload_trace, "pid=%lu exiting...\n",
-                   GetCurrentProcessId());
+  static const char message[] = "exiting...\r\n";
+  HANDLE file;
+  DWORD written;
+
+  if (!git_preinit_exit_log_path[0])
+    return;
+  file = CreateFileW(git_preinit_exit_log_path, FILE_APPEND_DATA,
+                     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                     NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+  if (file == INVALID_HANDLE_VALUE)
+    return;
+  WriteFile(file, message, sizeof(message) - 1, &written, NULL);
+  CloseHandle(file);
 }
 
 /*
@@ -4225,6 +4242,18 @@ static int git_preinit_worker(void)
   for (i = 0; i < 5; i++)
     for (j = 0; j < 2; j++)
       pipes[i][j] = INVALID_HANDLE_VALUE;
+  {
+    DWORD length = GetEnvironmentVariableW(L"GIT_TRACE_GIT809_PRELOAD",
+                                          git_preinit_exit_log_path,
+                                          ARRAY_SIZE(git_preinit_exit_log_path));
+    if (!length || length >= ARRAY_SIZE(git_preinit_exit_log_path) ||
+        !((git_preinit_exit_log_path[1] == L':' &&
+           (git_preinit_exit_log_path[2] == L'\\' ||
+            git_preinit_exit_log_path[2] == L'/')) ||
+          (git_preinit_exit_log_path[0] == L'\\' &&
+           git_preinit_exit_log_path[1] == L'\\')))
+      git_preinit_exit_log_path[0] = L'\0';
+  }
   if (atexit(git_preinit_atexit_log)) {
     rc = 137;
     goto cleanup;
