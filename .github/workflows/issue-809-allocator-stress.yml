@@ -37,7 +37,6 @@ jobs:
           "$PYTHON_EXE" -m py_compile experiments/issue-809/windows_git_ipc_pool.py experiments/issue-809/test_windows_transport_selection.py
           "$PYTHON_EXE" experiments/issue-809/test_windows_peer_rendezvous.py || exit 18
           "$PYTHON_EXE" experiments/issue-809/test_windows_transport_selection.py || exit 19
-          "$PYTHON_EXE" experiments/issue-809/test_windows_worker_lifecycle.py "$GIT809_WORKER_GIT" || exit 20
           bash -n experiments/issue-809/git-ipc-request.sh || exit 21
           source experiments/issue-809/git-manager.sh 3 || exit 22
           trap 'rc=$?; if [[ -n ${_GIT809_MANAGER_LOG:-} && -f $_GIT809_MANAGER_LOG ]]; then cp -- "$_GIT809_MANAGER_LOG" git809-stream-results/manager.log; if (( rc != 0 )); then tail -n 120 -- "$_GIT809_MANAGER_LOG" >&2; fi; fi; exit "$rc"' EXIT
@@ -72,10 +71,461 @@ jobs:
             exit 23
           fi
           [[ "$(cat git809-stream-results/smoke.out)" == "$("$GIT809_WORKER_GIT" --version)" ]] || exit 23
+          export GIT809_ABLATION_CWD=1 GIT809_ABLATION_ENV=1
+          printf 'sample,begin,end\n' >git809-stream-results/stress.csv
+          for ((i=0;i<6000;i++)); do
+            a=$EPOCHREALTIME
+            git-ipc --version >/dev/null || {
+              printf 'GIT809_ALLOCATOR_STRESS_FAIL iteration=%s\n' "$i" >&2
+              exit 42
+            }
+            b=$EPOCHREALTIME
+            printf '%s,%s,%s\n' "$i" "$a" "$b" >>git809-stream-results/stress.csv
+            if (( i % 500 == 0 )); then printf 'GIT809_STRESS_PROGRESS %s\n' "$i"; fi
+          done
+          printf 'GIT809_STRESS_COMMANDS_COMPLETE count=6000\n'
           cd experiments/issue-809
           [[ "$(git-ipc rev-parse --show-prefix)" == "experiments/issue-809/" ]] || exit 24
           cd ../..
-          for v in 'simple' 'sp ace' 'slash\back' 'quote"value' '$(echo DO-NOT-EXECUTE)' $'line1\nline2' $'tab\tvalue' $'carriage\rreturn' $'unicode-\u00e9-\u2603' $'single'\''quote' $'tick\x60value' ""; do
+          for v in 'simple' 'sp ace' 'slash\back' 'quote"value' '$(echo DO-NOT-EXECUTE)' 
+          # Confirm allocated worker exits when its owning Bash terminates.
+          export GIT809_SHELL_LIBRARY="$PWD/experiments/issue-809/git-manager.sh"
+          "$PYTHON_EXE" - <<'PY'
+          import ctypes as C, os, shutil, subprocess
+          from ctypes import wintypes as W
+          k=C.WinDLL("kernel32",use_last_error=True)
+          k.OpenProcess.argtypes=[W.DWORD,W.BOOL,W.DWORD]
+          k.OpenProcess.restype=W.HANDLE
+          k.WaitForSingleObject.argtypes=[W.HANDLE,W.DWORD]
+          k.WaitForSingleObject.restype=W.DWORD
+          k.CloseHandle.argtypes=[W.HANDLE]
+          k.CloseHandle.restype=W.BOOL
+          bash=shutil.which("bash")
+          assert bash,"Git Bash not found"
+          script=r'''
+          source "$GIT809_SHELL_LIBRARY" 3 || exit 51
+          printf 'OWNER_WINPID %s\n' "$_GIT809_OWNER_WINPID"
+          printf 'GET\n' >&8 || exit 52
+          IFS= read -r allocated <&9 || exit 53
+          printf 'ALLOCATED_PID %s\n' "$allocated"
+          sleep 120
+          '''
+          child=subprocess.Popen([bash,"--noprofile","--norc","-c",script],
+            stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=os.environ.copy(),
+            text=True,encoding="utf-8")
+          worker_handle=None
+          try:
+            owner_line=child.stdout.readline().strip()
+            assert owner_line.startswith("OWNER_WINPID "),owner_line
+            worker_line=child.stdout.readline().strip()
+            assert worker_line.startswith("ALLOCATED_PID "),worker_line
+            pid=int(worker_line.split()[1])
+            worker_handle=k.OpenProcess(0x00100000,False,pid)
+            assert worker_handle,f"allocated Git worker {pid} not found"
+            assert k.WaitForSingleObject(worker_handle,0)==258,"worker exited before Bash owner"
+            child.kill()
+            child.wait(timeout=5)
+            state=k.WaitForSingleObject(worker_handle,5000)
+            assert state==0,f"worker {pid} survived owning Bash exit: wait={state}"
+            print("GIT809_OWNER_DEATH_PASS allocated_worker_pid",pid,flush=True)
+          finally:
+            if child.poll() is None: child.kill()
+            child.wait(timeout=5)
+            if worker_handle: k.CloseHandle(worker_handle)
+          PY
+          cp -- "$_GIT809_MANAGER_LOG" git809-stream-results/manager.log
+          "$PYTHON_EXE" - <<'PY'
+          import csv,statistics,os,re
+          from decimal import Decimal
+          x=list(csv.DictReader(open('git809-stream-results/stress.csv',newline='',encoding='utf-8')))
+          assert len(x)==6000,len(x)
+          d=[float((Decimal(z['end'])-Decimal(z['begin']))*1000) for z in x]
+          assert min(d)>0
+          print('GIT809_STRESS_PASS count',len(d),'median_ms',round(statistics.median(d),4),flush=True)
+          p='git809-stream-results/manager.log'
+          log=open(p,encoding='utf-8',errors='replace').read()
+          handles=[(int(a),int(h),int(w)) for a,h,w in re.findall(r'ALLOC_RESOURCE allocations=(\d+) manager_handles=(\d+) tracked_workers=(\d+)',log)]
+          assert len(handles)>=55,len(handles)
+          middle=[h for a,h,w in handles if a>=100 and a<=5500]
+          assert max(middle)-min(middle)<120,(min(middle),max(middle))
+          assert max(w for a,h,w in handles)<100, max(w for a,h,w in handles)
+          print('GIT809_MANAGER_HANDLES first_last',handles[0],handles[-1],
+                'min_max',min(middle),max(middle),flush=True)
+          print('GIT809_STRESS_SHA',os.environ['GITHUB_SHA'])
+          PY
+      - name: Preserve timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-native-direct-export-windows
+          path: git809-stream-results/
+          if-no-files-found: warn
+line1\nline2' 
+          # Confirm allocated worker exits when its owning Bash terminates.
+          export GIT809_SHELL_LIBRARY="$PWD/experiments/issue-809/git-manager.sh"
+          "$PYTHON_EXE" - <<'PY'
+          import ctypes as C, os, shutil, subprocess
+          from ctypes import wintypes as W
+          k=C.WinDLL("kernel32",use_last_error=True)
+          k.OpenProcess.argtypes=[W.DWORD,W.BOOL,W.DWORD]
+          k.OpenProcess.restype=W.HANDLE
+          k.WaitForSingleObject.argtypes=[W.HANDLE,W.DWORD]
+          k.WaitForSingleObject.restype=W.DWORD
+          k.CloseHandle.argtypes=[W.HANDLE]
+          k.CloseHandle.restype=W.BOOL
+          bash=shutil.which("bash")
+          assert bash,"Git Bash not found"
+          script=r'''
+          source "$GIT809_SHELL_LIBRARY" 3 || exit 51
+          printf 'OWNER_WINPID %s\n' "$_GIT809_OWNER_WINPID"
+          printf 'GET\n' >&8 || exit 52
+          IFS= read -r allocated <&9 || exit 53
+          printf 'ALLOCATED_PID %s\n' "$allocated"
+          sleep 120
+          '''
+          child=subprocess.Popen([bash,"--noprofile","--norc","-c",script],
+            stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=os.environ.copy(),
+            text=True,encoding="utf-8")
+          worker_handle=None
+          try:
+            owner_line=child.stdout.readline().strip()
+            assert owner_line.startswith("OWNER_WINPID "),owner_line
+            worker_line=child.stdout.readline().strip()
+            assert worker_line.startswith("ALLOCATED_PID "),worker_line
+            pid=int(worker_line.split()[1])
+            worker_handle=k.OpenProcess(0x00100000,False,pid)
+            assert worker_handle,f"allocated Git worker {pid} not found"
+            assert k.WaitForSingleObject(worker_handle,0)==258,"worker exited before Bash owner"
+            child.kill()
+            child.wait(timeout=5)
+            state=k.WaitForSingleObject(worker_handle,5000)
+            assert state==0,f"worker {pid} survived owning Bash exit: wait={state}"
+            print("GIT809_OWNER_DEATH_PASS allocated_worker_pid",pid,flush=True)
+          finally:
+            if child.poll() is None: child.kill()
+            child.wait(timeout=5)
+            if worker_handle: k.CloseHandle(worker_handle)
+          PY
+          cp -- "$_GIT809_MANAGER_LOG" git809-stream-results/manager.log
+          "$PYTHON_EXE" - <<'PY'
+          import csv,statistics,os,re
+          from decimal import Decimal
+          x=list(csv.DictReader(open('git809-stream-results/stress.csv',newline='',encoding='utf-8')))
+          assert len(x)==6000,len(x)
+          d=[float((Decimal(z['end'])-Decimal(z['begin']))*1000) for z in x]
+          assert min(d)>0
+          print('GIT809_STRESS_PASS count',len(d),'median_ms',round(statistics.median(d),4),flush=True)
+          p='git809-stream-results/manager.log'
+          log=open(p,encoding='utf-8',errors='replace').read()
+          handles=[(int(a),int(h),int(w)) for a,h,w in re.findall(r'ALLOC_RESOURCE allocations=(\d+) manager_handles=(\d+) tracked_workers=(\d+)',log)]
+          assert len(handles)>=55,len(handles)
+          middle=[h for a,h,w in handles if a>=100 and a<=5500]
+          assert max(middle)-min(middle)<120,(min(middle),max(middle))
+          assert max(w for a,h,w in handles)<100, max(w for a,h,w in handles)
+          print('GIT809_MANAGER_HANDLES first_last',handles[0],handles[-1],
+                'min_max',min(middle),max(middle),flush=True)
+          print('GIT809_STRESS_SHA',os.environ['GITHUB_SHA'])
+          PY
+      - name: Preserve timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-native-direct-export-windows
+          path: git809-stream-results/
+          if-no-files-found: warn
+tab\tvalue' 
+          # Confirm allocated worker exits when its owning Bash terminates.
+          export GIT809_SHELL_LIBRARY="$PWD/experiments/issue-809/git-manager.sh"
+          "$PYTHON_EXE" - <<'PY'
+          import ctypes as C, os, shutil, subprocess
+          from ctypes import wintypes as W
+          k=C.WinDLL("kernel32",use_last_error=True)
+          k.OpenProcess.argtypes=[W.DWORD,W.BOOL,W.DWORD]
+          k.OpenProcess.restype=W.HANDLE
+          k.WaitForSingleObject.argtypes=[W.HANDLE,W.DWORD]
+          k.WaitForSingleObject.restype=W.DWORD
+          k.CloseHandle.argtypes=[W.HANDLE]
+          k.CloseHandle.restype=W.BOOL
+          bash=shutil.which("bash")
+          assert bash,"Git Bash not found"
+          script=r'''
+          source "$GIT809_SHELL_LIBRARY" 3 || exit 51
+          printf 'OWNER_WINPID %s\n' "$_GIT809_OWNER_WINPID"
+          printf 'GET\n' >&8 || exit 52
+          IFS= read -r allocated <&9 || exit 53
+          printf 'ALLOCATED_PID %s\n' "$allocated"
+          sleep 120
+          '''
+          child=subprocess.Popen([bash,"--noprofile","--norc","-c",script],
+            stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=os.environ.copy(),
+            text=True,encoding="utf-8")
+          worker_handle=None
+          try:
+            owner_line=child.stdout.readline().strip()
+            assert owner_line.startswith("OWNER_WINPID "),owner_line
+            worker_line=child.stdout.readline().strip()
+            assert worker_line.startswith("ALLOCATED_PID "),worker_line
+            pid=int(worker_line.split()[1])
+            worker_handle=k.OpenProcess(0x00100000,False,pid)
+            assert worker_handle,f"allocated Git worker {pid} not found"
+            assert k.WaitForSingleObject(worker_handle,0)==258,"worker exited before Bash owner"
+            child.kill()
+            child.wait(timeout=5)
+            state=k.WaitForSingleObject(worker_handle,5000)
+            assert state==0,f"worker {pid} survived owning Bash exit: wait={state}"
+            print("GIT809_OWNER_DEATH_PASS allocated_worker_pid",pid,flush=True)
+          finally:
+            if child.poll() is None: child.kill()
+            child.wait(timeout=5)
+            if worker_handle: k.CloseHandle(worker_handle)
+          PY
+          cp -- "$_GIT809_MANAGER_LOG" git809-stream-results/manager.log
+          "$PYTHON_EXE" - <<'PY'
+          import csv,statistics,os,re
+          from decimal import Decimal
+          x=list(csv.DictReader(open('git809-stream-results/stress.csv',newline='',encoding='utf-8')))
+          assert len(x)==6000,len(x)
+          d=[float((Decimal(z['end'])-Decimal(z['begin']))*1000) for z in x]
+          assert min(d)>0
+          print('GIT809_STRESS_PASS count',len(d),'median_ms',round(statistics.median(d),4),flush=True)
+          p='git809-stream-results/manager.log'
+          log=open(p,encoding='utf-8',errors='replace').read()
+          handles=[(int(a),int(h),int(w)) for a,h,w in re.findall(r'ALLOC_RESOURCE allocations=(\d+) manager_handles=(\d+) tracked_workers=(\d+)',log)]
+          assert len(handles)>=55,len(handles)
+          middle=[h for a,h,w in handles if a>=100 and a<=5500]
+          assert max(middle)-min(middle)<120,(min(middle),max(middle))
+          assert max(w for a,h,w in handles)<100, max(w for a,h,w in handles)
+          print('GIT809_MANAGER_HANDLES first_last',handles[0],handles[-1],
+                'min_max',min(middle),max(middle),flush=True)
+          print('GIT809_STRESS_SHA',os.environ['GITHUB_SHA'])
+          PY
+      - name: Preserve timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-native-direct-export-windows
+          path: git809-stream-results/
+          if-no-files-found: warn
+carriage\rreturn' 
+          # Confirm allocated worker exits when its owning Bash terminates.
+          export GIT809_SHELL_LIBRARY="$PWD/experiments/issue-809/git-manager.sh"
+          "$PYTHON_EXE" - <<'PY'
+          import ctypes as C, os, shutil, subprocess
+          from ctypes import wintypes as W
+          k=C.WinDLL("kernel32",use_last_error=True)
+          k.OpenProcess.argtypes=[W.DWORD,W.BOOL,W.DWORD]
+          k.OpenProcess.restype=W.HANDLE
+          k.WaitForSingleObject.argtypes=[W.HANDLE,W.DWORD]
+          k.WaitForSingleObject.restype=W.DWORD
+          k.CloseHandle.argtypes=[W.HANDLE]
+          k.CloseHandle.restype=W.BOOL
+          bash=shutil.which("bash")
+          assert bash,"Git Bash not found"
+          script=r'''
+          source "$GIT809_SHELL_LIBRARY" 3 || exit 51
+          printf 'OWNER_WINPID %s\n' "$_GIT809_OWNER_WINPID"
+          printf 'GET\n' >&8 || exit 52
+          IFS= read -r allocated <&9 || exit 53
+          printf 'ALLOCATED_PID %s\n' "$allocated"
+          sleep 120
+          '''
+          child=subprocess.Popen([bash,"--noprofile","--norc","-c",script],
+            stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=os.environ.copy(),
+            text=True,encoding="utf-8")
+          worker_handle=None
+          try:
+            owner_line=child.stdout.readline().strip()
+            assert owner_line.startswith("OWNER_WINPID "),owner_line
+            worker_line=child.stdout.readline().strip()
+            assert worker_line.startswith("ALLOCATED_PID "),worker_line
+            pid=int(worker_line.split()[1])
+            worker_handle=k.OpenProcess(0x00100000,False,pid)
+            assert worker_handle,f"allocated Git worker {pid} not found"
+            assert k.WaitForSingleObject(worker_handle,0)==258,"worker exited before Bash owner"
+            child.kill()
+            child.wait(timeout=5)
+            state=k.WaitForSingleObject(worker_handle,5000)
+            assert state==0,f"worker {pid} survived owning Bash exit: wait={state}"
+            print("GIT809_OWNER_DEATH_PASS allocated_worker_pid",pid,flush=True)
+          finally:
+            if child.poll() is None: child.kill()
+            child.wait(timeout=5)
+            if worker_handle: k.CloseHandle(worker_handle)
+          PY
+          cp -- "$_GIT809_MANAGER_LOG" git809-stream-results/manager.log
+          "$PYTHON_EXE" - <<'PY'
+          import csv,statistics,os,re
+          from decimal import Decimal
+          x=list(csv.DictReader(open('git809-stream-results/stress.csv',newline='',encoding='utf-8')))
+          assert len(x)==6000,len(x)
+          d=[float((Decimal(z['end'])-Decimal(z['begin']))*1000) for z in x]
+          assert min(d)>0
+          print('GIT809_STRESS_PASS count',len(d),'median_ms',round(statistics.median(d),4),flush=True)
+          p='git809-stream-results/manager.log'
+          log=open(p,encoding='utf-8',errors='replace').read()
+          handles=[(int(a),int(h),int(w)) for a,h,w in re.findall(r'ALLOC_RESOURCE allocations=(\d+) manager_handles=(\d+) tracked_workers=(\d+)',log)]
+          assert len(handles)>=55,len(handles)
+          middle=[h for a,h,w in handles if a>=100 and a<=5500]
+          assert max(middle)-min(middle)<120,(min(middle),max(middle))
+          assert max(w for a,h,w in handles)<100, max(w for a,h,w in handles)
+          print('GIT809_MANAGER_HANDLES first_last',handles[0],handles[-1],
+                'min_max',min(middle),max(middle),flush=True)
+          print('GIT809_STRESS_SHA',os.environ['GITHUB_SHA'])
+          PY
+      - name: Preserve timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-native-direct-export-windows
+          path: git809-stream-results/
+          if-no-files-found: warn
+unicode-\u00e9-\u2603' 
+          # Confirm allocated worker exits when its owning Bash terminates.
+          export GIT809_SHELL_LIBRARY="$PWD/experiments/issue-809/git-manager.sh"
+          "$PYTHON_EXE" - <<'PY'
+          import ctypes as C, os, shutil, subprocess
+          from ctypes import wintypes as W
+          k=C.WinDLL("kernel32",use_last_error=True)
+          k.OpenProcess.argtypes=[W.DWORD,W.BOOL,W.DWORD]
+          k.OpenProcess.restype=W.HANDLE
+          k.WaitForSingleObject.argtypes=[W.HANDLE,W.DWORD]
+          k.WaitForSingleObject.restype=W.DWORD
+          k.CloseHandle.argtypes=[W.HANDLE]
+          k.CloseHandle.restype=W.BOOL
+          bash=shutil.which("bash")
+          assert bash,"Git Bash not found"
+          script=r'''
+          source "$GIT809_SHELL_LIBRARY" 3 || exit 51
+          printf 'OWNER_WINPID %s\n' "$_GIT809_OWNER_WINPID"
+          printf 'GET\n' >&8 || exit 52
+          IFS= read -r allocated <&9 || exit 53
+          printf 'ALLOCATED_PID %s\n' "$allocated"
+          sleep 120
+          '''
+          child=subprocess.Popen([bash,"--noprofile","--norc","-c",script],
+            stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=os.environ.copy(),
+            text=True,encoding="utf-8")
+          worker_handle=None
+          try:
+            owner_line=child.stdout.readline().strip()
+            assert owner_line.startswith("OWNER_WINPID "),owner_line
+            worker_line=child.stdout.readline().strip()
+            assert worker_line.startswith("ALLOCATED_PID "),worker_line
+            pid=int(worker_line.split()[1])
+            worker_handle=k.OpenProcess(0x00100000,False,pid)
+            assert worker_handle,f"allocated Git worker {pid} not found"
+            assert k.WaitForSingleObject(worker_handle,0)==258,"worker exited before Bash owner"
+            child.kill()
+            child.wait(timeout=5)
+            state=k.WaitForSingleObject(worker_handle,5000)
+            assert state==0,f"worker {pid} survived owning Bash exit: wait={state}"
+            print("GIT809_OWNER_DEATH_PASS allocated_worker_pid",pid,flush=True)
+          finally:
+            if child.poll() is None: child.kill()
+            child.wait(timeout=5)
+            if worker_handle: k.CloseHandle(worker_handle)
+          PY
+          cp -- "$_GIT809_MANAGER_LOG" git809-stream-results/manager.log
+          "$PYTHON_EXE" - <<'PY'
+          import csv,statistics,os,re
+          from decimal import Decimal
+          x=list(csv.DictReader(open('git809-stream-results/stress.csv',newline='',encoding='utf-8')))
+          assert len(x)==6000,len(x)
+          d=[float((Decimal(z['end'])-Decimal(z['begin']))*1000) for z in x]
+          assert min(d)>0
+          print('GIT809_STRESS_PASS count',len(d),'median_ms',round(statistics.median(d),4),flush=True)
+          p='git809-stream-results/manager.log'
+          log=open(p,encoding='utf-8',errors='replace').read()
+          handles=[(int(a),int(h),int(w)) for a,h,w in re.findall(r'ALLOC_RESOURCE allocations=(\d+) manager_handles=(\d+) tracked_workers=(\d+)',log)]
+          assert len(handles)>=55,len(handles)
+          middle=[h for a,h,w in handles if a>=100 and a<=5500]
+          assert max(middle)-min(middle)<120,(min(middle),max(middle))
+          assert max(w for a,h,w in handles)<100, max(w for a,h,w in handles)
+          print('GIT809_MANAGER_HANDLES first_last',handles[0],handles[-1],
+                'min_max',min(middle),max(middle),flush=True)
+          print('GIT809_STRESS_SHA',os.environ['GITHUB_SHA'])
+          PY
+      - name: Preserve timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-native-direct-export-windows
+          path: git809-stream-results/
+          if-no-files-found: warn
+single'\''quote' 
+          # Confirm allocated worker exits when its owning Bash terminates.
+          export GIT809_SHELL_LIBRARY="$PWD/experiments/issue-809/git-manager.sh"
+          "$PYTHON_EXE" - <<'PY'
+          import ctypes as C, os, shutil, subprocess
+          from ctypes import wintypes as W
+          k=C.WinDLL("kernel32",use_last_error=True)
+          k.OpenProcess.argtypes=[W.DWORD,W.BOOL,W.DWORD]
+          k.OpenProcess.restype=W.HANDLE
+          k.WaitForSingleObject.argtypes=[W.HANDLE,W.DWORD]
+          k.WaitForSingleObject.restype=W.DWORD
+          k.CloseHandle.argtypes=[W.HANDLE]
+          k.CloseHandle.restype=W.BOOL
+          bash=shutil.which("bash")
+          assert bash,"Git Bash not found"
+          script=r'''
+          source "$GIT809_SHELL_LIBRARY" 3 || exit 51
+          printf 'OWNER_WINPID %s\n' "$_GIT809_OWNER_WINPID"
+          printf 'GET\n' >&8 || exit 52
+          IFS= read -r allocated <&9 || exit 53
+          printf 'ALLOCATED_PID %s\n' "$allocated"
+          sleep 120
+          '''
+          child=subprocess.Popen([bash,"--noprofile","--norc","-c",script],
+            stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=os.environ.copy(),
+            text=True,encoding="utf-8")
+          worker_handle=None
+          try:
+            owner_line=child.stdout.readline().strip()
+            assert owner_line.startswith("OWNER_WINPID "),owner_line
+            worker_line=child.stdout.readline().strip()
+            assert worker_line.startswith("ALLOCATED_PID "),worker_line
+            pid=int(worker_line.split()[1])
+            worker_handle=k.OpenProcess(0x00100000,False,pid)
+            assert worker_handle,f"allocated Git worker {pid} not found"
+            assert k.WaitForSingleObject(worker_handle,0)==258,"worker exited before Bash owner"
+            child.kill()
+            child.wait(timeout=5)
+            state=k.WaitForSingleObject(worker_handle,5000)
+            assert state==0,f"worker {pid} survived owning Bash exit: wait={state}"
+            print("GIT809_OWNER_DEATH_PASS allocated_worker_pid",pid,flush=True)
+          finally:
+            if child.poll() is None: child.kill()
+            child.wait(timeout=5)
+            if worker_handle: k.CloseHandle(worker_handle)
+          PY
+          cp -- "$_GIT809_MANAGER_LOG" git809-stream-results/manager.log
+          "$PYTHON_EXE" - <<'PY'
+          import csv,statistics,os,re
+          from decimal import Decimal
+          x=list(csv.DictReader(open('git809-stream-results/stress.csv',newline='',encoding='utf-8')))
+          assert len(x)==6000,len(x)
+          d=[float((Decimal(z['end'])-Decimal(z['begin']))*1000) for z in x]
+          assert min(d)>0
+          print('GIT809_STRESS_PASS count',len(d),'median_ms',round(statistics.median(d),4),flush=True)
+          p='git809-stream-results/manager.log'
+          log=open(p,encoding='utf-8',errors='replace').read()
+          handles=[(int(a),int(h),int(w)) for a,h,w in re.findall(r'ALLOC_RESOURCE allocations=(\d+) manager_handles=(\d+) tracked_workers=(\d+)',log)]
+          assert len(handles)>=55,len(handles)
+          middle=[h for a,h,w in handles if a>=100 and a<=5500]
+          assert max(middle)-min(middle)<120,(min(middle),max(middle))
+          assert max(w for a,h,w in handles)<100, max(w for a,h,w in handles)
+          print('GIT809_MANAGER_HANDLES first_last',handles[0],handles[-1],
+                'min_max',min(middle),max(middle),flush=True)
+          print('GIT809_STRESS_SHA',os.environ['GITHUB_SHA'])
+          PY
+      - name: Preserve timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git809-native-direct-export-windows
+          path: git809-stream-results/
+          if-no-files-found: warn
+tick\x60value' ""; do
             actual="$(GIT_EDITOR="$v" git-ipc var GIT_EDITOR)" || { printf 'failed %q\n' "$v" >&2; exit 31; }
             [[ "$actual" == "$v" ]] || { printf 'mismatch expected=%q actual=%q\n' "$v" "$actual" >&2; exit 32; }
           done
@@ -89,18 +539,7 @@ jobs:
             [[ "$(cat git809-stream-results/serial.out)" == "$expected_version" ]] || exit 38
           done
           printf 'GIT809_SERIAL_REPLY_PASS 24\n'
-          export GIT809_ABLATION_CWD=1 GIT809_ABLATION_ENV=1
-          printf 'sample,begin,end\n' >git809-stream-results/stress.csv
-          for ((i=0;i<6000;i++)); do
-            a=$EPOCHREALTIME
-            git-ipc --version >/dev/null || {
-              printf 'GIT809_ALLOCATOR_STRESS_FAIL iteration=%s\n' "$i" >&2
-              exit 42
-            }
-            b=$EPOCHREALTIME
-            printf '%s,%s,%s\n' "$i" "$a" "$b" >>git809-stream-results/stress.csv
-            if (( i % 500 == 0 )); then printf 'GIT809_STRESS_PROGRESS %s\n' "$i"; fi
-          done
+          "$PYTHON_EXE" experiments/issue-809/test_windows_worker_lifecycle.py "$GIT809_WORKER_GIT" || exit 20
           git-ipc rev-parse --show-toplevel >/dev/null || exit 43
           # Confirm allocated worker exits when its owning Bash terminates.
           export GIT809_SHELL_LIBRARY="$PWD/experiments/issue-809/git-manager.sh"
