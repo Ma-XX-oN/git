@@ -3774,7 +3774,7 @@ void git_preinit_exit_diagnostic(const char *event, int status)
   DWORD written = 0, length;
   int count;
 
-  if (!git_preinit_active || !git_preinit_exit_log_path[0])
+  if (!git_preinit_exit_log_path[0])
     return;
   count = status < 0 ? snprintf(message, sizeof(message), "%s\\r\\n", event) :
     snprintf(message, sizeof(message), "%s status=%d\\r\\n", event, status);
@@ -3818,6 +3818,7 @@ static void git_preinit_atexit_log(void)
 NORETURN void git_preinit_worker_exit(int status)
 {
   if (git_preinit_active) {
+    git_preinit_exit_diagnostic("preload exit callback", status);
     trace_printf_key(&git809_preload_trace,
       "pid=%lu preload exit callback status=%d\n", GetCurrentProcessId(), status);
     git_preinit_exit_status = status;
@@ -4146,6 +4147,7 @@ static DWORD WINAPI git_preinit_watch_owner(LPVOID context)
 {
   HANDLE owner = (HANDLE)context;
   WaitForSingleObject(owner, INFINITE);
+  git_preinit_exit_diagnostic("ExitProcess owner-death", 137);
   ExitProcess(137);
   return 0;
 }
