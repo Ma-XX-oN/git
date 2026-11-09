@@ -105,9 +105,9 @@ extern "C" BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID)
   DisableThreadLibraryCalls(module);
   DetourRestoreAfterWith();
   GetEnvironmentVariableW(L"GIT809_DETOURS_LOG", log_path,
-                          static_cast<DWORD>(_countof(log_path)));
+                          static_cast<DWORD>(sizeof(log_path) / sizeof(log_path[0])));
   GetEnvironmentVariableW(L"GIT809_DETOURS_FALLBACK", fallback_path,
-                          static_cast<DWORD>(_countof(fallback_path)));
+                          static_cast<DWORD>(sizeof(fallback_path) / sizeof(fallback_path[0])));
   if (!log_path[0] && !fallback_path[0])
     return FALSE;
 
