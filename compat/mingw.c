@@ -3767,7 +3767,7 @@ static wchar_t git_preinit_exit_log_path[4096];
  * Use a new Win32 handle for every diagnostic: Git may already have closed
  * Trace2 and trace_printf_key's descriptors during shutdown.
  */
-void git_preinit_exit_diagnostic(const char *event, int status)
+static void git_preinit_exit_diagnostic(const char *event, int status)
 {
   char message[160], error_message[200];
   HANDLE file;
@@ -3815,7 +3815,7 @@ static void git_preinit_atexit_log(void)
  * In this function call the actual CRT exit(), without tracing twice.
  */
 #undef exit
-NORETURN void git_preinit_worker_exit(int status)
+static NORETURN void git_preinit_worker_exit(int status)
 {
   if (git_preinit_active) {
     git_preinit_exit_diagnostic("preload exit callback", status);
@@ -4251,7 +4251,7 @@ static int git_preinit_worker(void)
   const char *const *suffixes = git809_channel_names;
   HANDLE pipes[5][2];
   struct git809_connections connections = {0};
-  char *frame = NULL;
+  char *volatile frame = NULL;
   char result[64];
   const DWORD frame_capacity = 131072;
   DWORD used = 0, n;
