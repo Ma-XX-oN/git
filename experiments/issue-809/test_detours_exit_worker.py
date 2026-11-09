@@ -73,12 +73,17 @@ def run_case(case, args):
     stdout = read_to_eof(handles["stdout"])
     stderr = read_to_eof(handles["stderr"])
     exit_status = read_to_eof(handles["exit-code"])
+    launcher_status = process.wait(timeout=8)
+    print("GIT809_DETOURS_PROCESS_EXIT", case,
+          "launcher_status", launcher_status,
+          "status_bytes", repr(exit_status),
+          "stdout_bytes", len(stdout), flush=True)
     outcome = (stdout, stderr, exit_status)
     expected_result = expected if args == ["--version"] else b""
     assert stdout == expected_result, (case, stdout, expected_result)
     assert not stderr, (case, stderr)
     assert exit_status == b"EXIT 0\n", (case, exit_status)
-    assert process.wait(timeout=8) == 0, case
+    assert launcher_status == 0, (case, launcher_status)
     print("GIT809_DETOURS_WORKER_PASS", case, flush=True)
   finally:
     for handle in handles.values():
