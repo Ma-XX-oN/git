@@ -1776,15 +1776,15 @@ static const wchar_t *wcschrnul(const wchar_t *s, wchar_t c)
 	return s;
 }
 
-/* Compare only keys */
+/** @brief Compare only keys */
 static int wenvcmp(const void *a, const void *b)
 {
 	wchar_t *p = *(wchar_t **)a, *q = *(wchar_t **)b;
 	size_t p_len, q_len;
 
 	/* Find the keys */
-	p_len = wcschrnul(p, L'=') - p;
-	q_len = wcschrnul(q, L'=') - q;
+	p_len = wcschrnul(p + (*p == L'='), L'=') - p;
+	q_len = wcschrnul(q + (*q == L'='), L'=') - q;
 
 	/* If the length differs, include the shorter key's NUL */
 	if (p_len < q_len)
@@ -1795,9 +1795,12 @@ static int wenvcmp(const void *a, const void *b)
 	return _wcsnicmp(p, q, p_len);
 }
 
-/*
+/**
+ * @brief Build a sorted Unicode environment with inherited or snapshot values.
+ *
  * Build an environment block combining the inherited environment
  * merged with the given list of settings.
+ * With inherit disabled, retain only Windows drive-directory entries first.
  *
  * Values of the form "KEY=VALUE" in deltaenv override inherited values.
  * Values of the form "KEY" in deltaenv delete inherited values.
@@ -1807,7 +1810,7 @@ static int wenvcmp(const void *a, const void *b)
  * We return a contiguous block of UNICODE strings with a final trailing
  * zero word.
  */
-static wchar_t *make_environment_block(char **deltaenv)
+static wchar_t *make_environment_block(const char *const *deltaenv, int inherit)
 {
 	wchar_t *wenv = GetEnvironmentStringsW(), *wdeltaenv, *result, *p;
 	size_t wlen, s, delta_size, size;
@@ -1818,7 +1821,7 @@ static wchar_t *make_environment_block(char **deltaenv)
 	size = 1; /* for extra NUL at the end */
 
 	/* If there is no deltaenv to apply, simply return a copy. */
-	if (!deltaenv || !*deltaenv) {
+	if (inherit && (!deltaenv || !*deltaenv)) {
 		for (p = wenv; p && *p; ) {
 			size_t s = wcslen(p) + 1;
 			size += s;
@@ -1836,11 +1839,15 @@ static wchar_t *make_environment_block(char **deltaenv)
 	 * skipping duplicate keys
 	 */
 	for (p = wenv; p && *p; ) {
-		ALLOC_GROW(array, nr + 1, alloc);
 		s = wcslen(p) + 1;
-		array[nr++] = p;
+		/* Windows' =C: drive-directory pseudo-variables are not exported
+		 * by Bash; preserve them rather than treating them as ordinary keys. */
+		if (inherit || *p == L'=') {
+			ALLOC_GROW(array, nr + 1, alloc);
+			array[nr++] = p;
+			size += s;
+		}
 		p += s;
-		size += s;
 	}
 
 	/* (over-)assess size needed for wchar version of deltaenv */
@@ -1857,9 +1864,12 @@ static wchar_t *make_environment_block(char **deltaenv)
 	}
 
 	git_stable_qsort(array, nr, sizeof(*array), wenvcmp);
-	ALLOC_ARRAY(result, size + delta_size);
+	ALLOC_ARRAY(result, size + delta_size + 1);
 
 	for (p = result, i = 0; i < nr; i++) {
+		const wchar_t *key = array[i], *value;
+		size_t key_size;
+
 		/* Skip any duplicate keys; last one wins */
 		while (i + 1 < nr && !wenvcmp(array + i, array + i + 1))
 		       i++;
@@ -1868,15 +1878,104 @@ static wchar_t *make_environment_block(char **deltaenv)
 		if (!wcschr(array[i], L'='))
 			continue;
 
-		size = wcslen(array[i]) + 1;
-		COPY_ARRAY(p, array[i], size);
+		/* A snapshot retains the first alias spelling and the last value,
+		 * matching successive SetEnvironmentVariableW calls after a clear. */
+		if (inherit)
+			key = array[i];
+		value = wcschrnul(array[i] + (*array[i] == L'='), L'=');
+		key_size = wcschrnul(key + (*key == L'='), L'=') - key;
+		COPY_ARRAY(p, key, key_size);
+		p += key_size;
+		size = wcslen(value) + 1;
+		COPY_ARRAY(p, value, size);
 		p += size;
 	}
+	if (p == result)
+		*p++ = L'\0';
 	*p = L'\0';
 
 	free(array);
 	free(wdeltaenv);
 	FreeEnvironmentStringsW(wenv);
+	return result;
+}
+
+/** @brief Change or remove one ordinary variable without modifying its entry. */
+static int update_environment_entry(const wchar_t *entry, int remove)
+{
+	const wchar_t *equal = wcschr(entry, L'=');
+	size_t length = equal - entry;
+	wchar_t *name;
+	int ok;
+	DWORD error;
+
+	ALLOC_ARRAY(name, length + 1);
+	wmemcpy(name, entry, length);
+	name[length] = L'\0';
+	ok = SetEnvironmentVariableW(name, remove ? NULL : equal + 1);
+	error = ok ? 0 : GetLastError();
+	free(name);
+	if (!ok) {
+		errno = err_win_to_posix(error);
+		return -1;
+	}
+	return 0;
+}
+
+/** @brief Replace a UTF-8 snapshot, updating only variables that differ. */
+int mingw_replace_environment(const char *const *environment)
+{
+	wchar_t *block = make_environment_block(environment, 0);
+	wchar_t *original = GetEnvironmentStringsW(), *p = block, *entry;
+	wchar_t **current = NULL;
+	size_t nr = 0, alloc = 0, i = 0;
+	int result = -1;
+	DWORD error = GetLastError();
+
+	if (!original) {
+		free(block);
+		errno = err_win_to_posix(error);
+		return -1;
+	}
+	for (entry = original; *entry; entry += wcslen(entry) + 1) {
+		if (*entry == L'=')
+			continue;
+		ALLOC_GROW(current, nr + 1, alloc);
+		current[nr++] = entry;
+	}
+	git_stable_qsort(current, nr, sizeof(*current), wenvcmp);
+	while (i < nr || *p) {
+		int comparison;
+
+		while (*p == L'=')
+			p += wcslen(p) + 1;
+		if (i == nr && !*p)
+			break;
+		comparison = !*p ? -1 : i == nr ? 1 :
+			wenvcmp(current + i, &p);
+		if (comparison < 0) {
+			if (update_environment_entry(current[i++], 1))
+				goto done;
+		} else {
+			if (comparison || wcscmp(current[i], p)) {
+				/* Delete/recreate a changed spelling to preserve name case. */
+				if (!comparison && wcsncmp(current[i], p,
+						wcschr(p, L'=') - p) &&
+				    update_environment_entry(current[i], 1))
+					goto done;
+				if (update_environment_entry(p, 0))
+					goto done;
+			}
+			if (!comparison)
+				i++;
+			p += wcslen(p) + 1;
+		}
+	}
+	result = 0;
+done:
+	free(current);
+	FreeEnvironmentStringsW(original);
+	free(block);
 	return result;
 }
 
@@ -2084,7 +2183,7 @@ static pid_t mingw_spawnve_fd(const char *cmd, const char **argv, char **deltaen
 	xutftowcs(wargs, args.buf, 2 * args.len + 1);
 	strbuf_release(&args);
 
-	wenvblk = make_environment_block(deltaenv);
+	wenvblk = make_environment_block((const char *const *)deltaenv, 1);
 
 	memset(&pi, 0, sizeof(pi));
 	if (stdhandles_count &&

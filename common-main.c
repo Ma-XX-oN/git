@@ -1,9 +1,20 @@
 #include "git-compat-util.h"
 #include "common-init.h"
+#include "preload-worker.h"
 
 int main(int argc, const char **argv)
 {
 	int result;
+
+	if (argc > 1 && !strcmp(argv[1], "--preload-worker")) {
+		result = preload_worker_main(argc, argv);
+		/* The worker has already reported and flushed its own status. */
+#ifdef GIT_WINDOWS_NATIVE
+		return result;
+#else
+		_exit(result);
+#endif
+	}
 
 	init_git(argv);
 	result = cmd_main(argc, argv);

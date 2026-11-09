@@ -464,6 +464,8 @@ libgit_sources = [
   'pathspec.c',
   'pkt-line.c',
   'preload-index.c',
+  'preload-context.c',
+  'preload-worker.c',
   'pretty.c',
   'prio-queue.c',
   'progress.c',
@@ -1302,6 +1304,11 @@ if host_machine.system() == 'darwin'
 endif
 
 # Configure general compatibility wrappers.
+if host_machine.system() == 'windows'
+  libgit_sources += ['preload-worker-win32.c', 'preload-transport-win32.c']
+else
+  libgit_sources += ['preload-worker-posix.c', 'preload-transport-posix.c']
+endif
 if host_machine.system() == 'cygwin'
   compat_sources += [
     'compat/win32/path-utils.c',

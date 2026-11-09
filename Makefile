@@ -848,6 +848,7 @@ TEST_BUILTINS_OBJS += test-path-utils.o
 TEST_BUILTINS_OBJS += test-path-walk.o
 TEST_BUILTINS_OBJS += test-pcre2-config.o
 TEST_BUILTINS_OBJS += test-pkt-line.o
+TEST_BUILTINS_OBJS += test-preload.o
 TEST_BUILTINS_OBJS += test-proc-receive.o
 TEST_BUILTINS_OBJS += test-progress.o
 TEST_BUILTINS_OBJS += test-reach.o
@@ -1254,7 +1255,16 @@ LIB_OBJS += path.o
 LIB_OBJS += path-walk.o
 LIB_OBJS += pathspec.o
 LIB_OBJS += pkt-line.o
+LIB_OBJS += preload-context.o
 LIB_OBJS += preload-index.o
+LIB_OBJS += preload-worker.o
+ifneq ($(filter MINGW Windows,$(uname_S)),)
+LIB_OBJS += preload-worker-win32.o
+LIB_OBJS += preload-transport-win32.o
+else
+LIB_OBJS += preload-worker-posix.o
+LIB_OBJS += preload-transport-posix.o
+endif
 LIB_OBJS += pretty.o
 LIB_OBJS += prio-queue.o
 LIB_OBJS += progress.o

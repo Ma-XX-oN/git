@@ -1,0 +1,122 @@
+= Preloaded Git workers
+
+`git --preload-worker` starts a single-use Git process that waits for one
+command. On POSIX systems it takes the manager-created FIFO directory as its
+sole additional argument. On Windows it creates private named pipes using its
+native process ID. The owning shell's PID must be supplied in
+`GIT_PRELOAD_OWNER_PID` or `GIT_PRELOAD_OWNER_WINPID`, respectively.
+
+The Bash client in `contrib/preload/git-manager.sh` starts the platform's
+Python pool manager. Set `GIT_PRELOAD_WORKER_GIT` to the built native Git and
+`GIT_PRELOAD_MANAGER_PYTHON` to Python, then source the script with a worker
+count from 1 through 32. Call `git-ipc` with ordinary Git arguments. Calls from
+one owner are serial; the persistent allocator connection permits one
+outstanding request. The default pool contains three workers.
+
+The manager returns only workers that have reported READY. It replies with
+the selected worker before scheduling a replacement. Every worker runs one
+command and terminates, so repository state cannot leak into the next call.
+The manager implementation remains Python; a native `--preload-manager` is a
+separate task.
+
+== Modules and ownership
+
+`preload-worker.c` owns dispatch and the command-completion hook.
+`preload-worker-win32.c` and `preload-worker-posix.c` own platform-specific
+worker lifecycle and owner monitoring. `preload-context.c` validates and
+applies the command's complete working-directory and environment snapshot.
+The export decoder accepts restricted Bash quoting; it never evaluates shell
+commands or substitutions.
+
+`preload-transport.h` exposes an opaque transport. Start prepares endpoints
+before READY, wait completes connection selection, and release cancels and
+joins pending connection work before freeing storage. Configuration strings
+are borrowed until release. A detached descriptor transfers ownership to the
+caller; all other channels remain owned by the transport. Only the applicable
+Windows or POSIX implementation is built. The unrelated index preloading
+implementation is independent of these modules.
+
+== Worker request and completion
+
+Each worker exposes stdin, stdout, stderr, exit-code and param-env-cwd
+channels. The client opens stdout, stderr, status, stdin and context in that
+order. The context request begins with a little-endian 32-bit argument count
+including `git`, followed by that many NUL-terminated UTF-8 arguments.
+Optional fields follow: `cwd` and its NUL-terminated path, `cwd-win` and its
+newline-terminated Windows path plus NUL, `env` and a little-endian byte length
+plus a double-NUL-terminated environment block, or `env-export` and a
+NUL-terminated restricted Bash export stream. Windows requests end with `end`
+and NUL; POSIX requests end when the context writer closes. Argument count
+and frame size are bounded by the worker.
+
+Environment snapshots replace inherited variables, including removals. The
+Windows environment is case insensitive: duplicate names retain the first
+spelling and last value. Context is applied before ordinary Git initialization.
+
+Completion flushes and closes stdout and stderr before writing `EXIT n` plus
+newline on the status channel. Windows flushes the status pipe before closing
+it, retaining the record until the client reads it. Clients drain both output
+streams before reading status. Owner death terminates allocated as well as
+idle workers; the manager also releases workers and allocation endpoints.
+
+== Windows connection identification
+
+Observed Git Bash/MSYS2 opens can make an additional connection that carries
+no application marker. Its upstream cause is not established here. Connection
+arrival order does not identify the application connection, and a probe may
+remain open, so closing state is not a reliable discriminator either.
+
+Each logical Windows channel therefore has two pipe instances. The client
+writes a marker immediately after opening the application connection. The
+server consumes that byte before exposing application traffic. Pipe handles
+are duplex even for application output channels, because the marker travels
+from client to server. Worker names have the form
+`\\.\pipe\git-preload-<pid>-<channel>`.
+
+Two connector threads each handle one instance of every channel using
+blocking ConnectNamedPipe and ReadFile calls. Their shared selection state
+records the first marker and detects duplicate or invalid markers. The winner
+cancels the other instance's pending operation with CancelIoEx and rendezvous
+with its peer before either thread advances to the next channel. Cancellation
+can race with submission, so cancellation retries until the peer has arrived
+or cancellation has found pending I/O. Transport release waits for the
+threads before destroying their shared state. Handles passed to the CRT stay
+synchronous; this worker does not use overlapped I/O.
+
+Worker channels use the call's decimal marker; all five must agree.
+Persistent manager allocation channels use `0` once when connected, since
+subsequent serial requests reuse the same accepted connection. The Python
+manager's event-driven connection implementation is separate from the native
+worker's blocking transport.
+
+POSIX FIFOs do not exhibit this Windows probe connection behavior. They use
+ordinary directional FIFO opens in the agreed order, with no marker selection
+or connector threads.
+
+== Diagnostics and limits
+
+`GIT_TRACE_PRELOAD` enables worker tracing. Startup, connection, malformed
+request, marker, owner-death and cleanup failures are operational diagnostics.
+Detailed investigative diagnostics are retained until migration acceptance
+has passed and are removed in a separate validated cleanup.
+
+The Bash client supports text output and commands that do not consume caller
+stdin. Windows supplies an EOF-producing NUL input handle. Embedded NUL output
+and arbitrary binary streams require a different client and are not supported
+by this Bash interface. Do not infer general stdin streaming support from the
+presence of the stdin channel.
+
+== Validation and performance
+
+Run `t/t5790-preload.sh` for normal regression integration and the scripts in
+`t/preload/` for native lifecycle, allocator and serial stress coverage.
+`t/perf/p5790-preload.sh` records paired direct and preloaded command timings.
+Windows, Linux and macOS acceptance includes the Git regression suite, both
+Makefile and Meson builds, ownership/cleanup and 6,000 serial commands.
+
+Compare the migration with tag `working-version-two` on the same laptop or
+within one CI job, using each revision's matching client and manager, the
+same compiler options, worker count, workload and full context transfer.
+Tracing, investigative timing and ablations must be disabled for performance
+measurements. Keep raw samples with the exact revisions and environment.
+Historical experimental evidence remains available from that tag.
