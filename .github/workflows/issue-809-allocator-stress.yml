@@ -102,10 +102,10 @@ jobs:
             if (( i % 500 == 0 )); then printf 'GIT809_STRESS_PROGRESS %s\n' "$i"; fi
           done
           git-ipc rev-parse --show-toplevel >/dev/null || exit 43
-          # Hand a worker to a second Bash; kill the shell and assert the worker exits.
+          # Confirm allocated worker exits when its owning Bash terminates.
           export GIT809_SHELL_LIBRARY="$PWD/experiments/issue-809/git-manager.sh"
           "$PYTHON_EXE" - <<'PY'
-          import ctypes as C, os, re, shutil, subprocess, sys
+          import ctypes as C, os, shutil, subprocess
           from ctypes import wintypes as W
           k=C.WinDLL("kernel32",use_last_error=True)
           k.OpenProcess.argtypes=[W.DWORD,W.BOOL,W.DWORD]
@@ -129,15 +129,11 @@ jobs:
             text=True,encoding="utf-8")
           worker_handle=None
           try:
-            line=child.stdout.readline().strip()
-            if not line.startswith("OWNER_WINPID "):
-              rc=child.wait(timeout=8)
-                 worker_line=child.stdout.readline().strip()
+            owner_line=child.stdout.readline().strip()
+            assert owner_line.startswith("OWNER_WINPID "),owner_line
+            worker_line=child.stdout.readline().strip()
             assert worker_line.startswith("ALLOCATED_PID "),worker_line
             pid=int(worker_line.split()[1])
-E_HOLD_PASS allocated_pid (\d+)",result.stdout)
-            assert match,(result.stdout,result.stderr)
-            pid=int(match.group(1))
             worker_handle=k.OpenProcess(0x00100000,False,pid)
             assert worker_handle,f"allocated Git worker {pid} not found"
             assert k.WaitForSingleObject(worker_handle,0)==258,"worker exited before Bash owner"
@@ -146,7 +142,6 @@ E_HOLD_PASS allocated_pid (\d+)",result.stdout)
             state=k.WaitForSingleObject(worker_handle,5000)
             assert state==0,f"worker {pid} survived owning Bash exit: wait={state}"
             print("GIT809_OWNER_DEATH_PASS allocated_worker_pid",pid,flush=True)
-            print("GIT809_PROBE_HOLD_PASS owner_shell",owner,flush=True)
           finally:
             if child.poll() is None: child.kill()
             child.wait(timeout=5)
