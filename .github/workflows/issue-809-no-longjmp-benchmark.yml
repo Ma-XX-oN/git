@@ -5,6 +5,8 @@ on:
     paths:
       - compat/mingw.c
       - experiments/issue-809/pool_size_ab_benchmark.py
+      - experiments/issue-809/test_detours_exit_worker.py
+      - experiments/issue-809/README.md
       - .github/workflows/issue-809-no-longjmp-benchmark.yml
   workflow_dispatch:
 permissions:
