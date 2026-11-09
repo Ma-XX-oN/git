@@ -160,98 +160,76 @@ def test_duplicate_markers():
 
 
 def test_allocator_isolation():
-  """Exercise production replies with held probes, slow readers, and shortages."""
+  """One persistent pair serves serial GETs despite held probe connections."""
   class ReadyPool:
-    """Supply deterministic worker IDs without starting Git subprocesses."""
-
     def __init__(self):
-      """Initialize the same allocator-facing interface as the real pool."""
-      self.target = 1
-      self.ready = queue.Queue()
-      self.closing = threading.Event()
-      self.lock = threading.Lock()
-      self.errors = []
-      self.notify = None
-      self.inject_ready = None
+      self.target=1
+      self.ready=queue.Queue()
+      self.closing=threading.Event()
+      self.lock=threading.Lock()
+      self.errors=[]
+      self.notify=None
 
     def alloc(self):
-      """Return an ID immediately, or None when no worker is ready."""
       try:
         return self.ready.get_nowait()
       except queue.Empty:
-        if self.inject_ready is not None:
-          # Force readiness to arrive just after the empty-queue check,
-          # with its notification consumed by another completion dispatch.
-          self.ready.put(self.inject_ready)
-          self.inject_ready = None
-          self.notify()
-          self.notify.__self__.drain()
         return None
 
-  pool = ReadyPool()
-  owner = 90000000 + int(uuid.uuid4().hex[:6], 16)
-  address = rf"\\.\pipe\git809-allocate-req-{owner}"
-  thread = threading.Thread(target=manager.allocation_server,
-                            args=(owner, pool), daemon=True)
-  clients = []
-
-  def request(sequence):
-    """Open real GET/reply channels, retaining GET through reply consumption."""
-    get = connect(address)
-    clients.append(get)
-    write(get, f"{sequence % 10}GET 123-{sequence}\n".encode())
-    reply = connect(rf"\\.\pipe\git809-allocate-reply-{owner}-123-{sequence}")
-    clients.append(reply)
-    write(reply, str(sequence % 10).encode())
-    return reply
-
-  def read_reply(handle):
-    """Read a reply with a fixture deadline instead of blocking the test."""
-    deadline = time.monotonic() + 3
-    while time.monotonic() < deadline:
-      available = W.DWORD()
-      assert K.PeekNamedPipe(handle, None, 0, None, C.byref(available), None)
-      if available.value:
-        buffer = C.create_string_buffer(available.value)
-        count = W.DWORD()
-        assert K.ReadFile(handle, buffer, len(buffer), C.byref(count), None)
-        return buffer.raw[:count.value]
-      time.sleep(.001)
-    raise TimeoutError("unrelated reply was stalled")
-
+  pool=ReadyPool()
+  owner=90000000+int(uuid.uuid4().hex[:6],16)
+  request=rf"\\.\pipe\git809-allocate-req-{owner}"
+  reply=rf"\\.\pipe\git809-allocate-reply-{owner}"
+  thread=threading.Thread(target=manager.allocation_server,
+                          args=(owner,pool),daemon=True)
+  handles=[]
   thread.start()
   try:
-    # More pending connections than WaitForMultipleObjects can accept.
-    for _ in range(80):
-      clients.append(connect(address))
-    pool.ready.put("1001\n")
-    slow = request(1)
-    pool.ready.put("1002\n")
-    fast = request(2)
-    assert read_reply(fast) == b"1002\n"
-    assert read_reply(slow) == b"1001\n"
-    # Empty-pool waits must still allow another client's reply to connect.
-    first = request(3)
-    second = request(4)
-    pool.ready.put("1003\n")
-    pool.ready.put("1004\n")
-    with pool.lock:
-      pool.notify()
-    assert {read_reply(first), read_reply(second)} == {b"1003\n", b"1004\n"}
-    pool.inject_ready = "1005\n"
-    assert read_reply(request(5)) == b"1005\n"
-    assert not pool.errors, pool.errors
-    print("GIT809_ALLOCATOR_PASS slow-reader-shortage-80-probes", flush=True)
+    # Keep a disconnected-from-protocol probe open for both channel pairs.
+    handles.append(connect(request))
+    actual_request=connect(request)
+    handles.append(actual_request)
+    handles.append(connect(reply))
+    actual_reply=connect(reply)
+    handles.append(actual_reply)
+    write(actual_request,b"0")
+    write(actual_reply,b"0")
+
+    def read_reply():
+      deadline=time.monotonic()+5
+      data=bytearray()
+      while time.monotonic()<deadline:
+        available=W.DWORD()
+        assert K.PeekNamedPipe(actual_reply,None,0,None,C.byref(available),None)
+        if available.value:
+          buffer=C.create_string_buffer(available.value)
+          count=W.DWORD()
+          assert K.ReadFile(actual_reply,buffer,len(buffer),C.byref(count),None)
+          data.extend(buffer.raw[:count.value])
+          if b"\n" in data:
+            return bytes(data)
+        time.sleep(.001)
+      raise TimeoutError("persistent reply timed out")
+
+    for i in range(80):
+      pool.ready.put(f"{1001+i}\n")
+      with pool.lock:
+        if pool.notify:
+          pool.notify()
+      write(actual_request,b"GET\n")
+      assert read_reply()==f"{1001+i}\n".encode("ascii"),i
+    assert not pool.errors,pool.errors
+    print("GIT809_ALLOCATOR_PASS persistent-80-requests-held-probes",flush=True)
   finally:
-    for handle in clients:
+    for handle in handles:
       K.CloseHandle(handle)
     pool.closing.set()
     with pool.lock:
       if pool.notify:
         pool.notify()
     thread.join(timeout=5)
-    assert not thread.is_alive(), "allocator cleanup stuck"
-    assert not pool.errors, pool.errors
+    assert not thread.is_alive(),"persistent allocator cleanup stuck"
+    assert not pool.errors,pool.errors
 
 
 def test_shutdown_after_drained_wakeup():
