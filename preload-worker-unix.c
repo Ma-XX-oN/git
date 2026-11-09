@@ -245,8 +245,9 @@ int git_preload_unix_worker(const char *directory)
 cleanup:
   n = snprintf(result, sizeof(result), "EXIT %d\n", rc);
   if (fd[2] >= 0) {
-    if (n > 0 && (size_t)n < sizeof(result))
-      (void)write(fd[2], result, (size_t)n);
+    if (n > 0 && (size_t)n < sizeof(result) &&
+        write(fd[2], result, (size_t)n) != n)
+      rc = 131;
     close(fd[2]);
     fd[2] = -1;
   }
