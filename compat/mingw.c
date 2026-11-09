@@ -3756,6 +3756,13 @@ static struct trace_key git809_preload_trace = TRACE_KEY_INIT(GIT809_PRELOAD);
 static volatile int git_preinit_active;
 static volatile int git_preinit_exit_status;
 
+/* Diagnostic only: this runs on normal CRT exit, not on longjmp or _exit. */
+static void git_preinit_atexit_log(void)
+{
+  trace_printf_key(&git809_preload_trace, "pid=%lu exiting...\n",
+                   GetCurrentProcessId());
+}
+
 /*
  * The standard Git builtin dispatcher calls exit(ret) from git.c.
  * The temporary benchmark build intercepts that dispatcher exit only, so
@@ -3769,6 +3776,8 @@ static volatile int git_preinit_exit_status;
 NORETURN void git_preinit_worker_exit(int status)
 {
   if (git_preinit_active) {
+    trace_printf_key(&git809_preload_trace,
+      "pid=%lu preload exit callback status=%d\n", GetCurrentProcessId(), status);
     git_preinit_exit_status = status;
     longjmp(git_preinit_jump, 1);
   }
@@ -4216,6 +4225,10 @@ static int git_preinit_worker(void)
   for (i = 0; i < 5; i++)
     for (j = 0; j < 2; j++)
       pipes[i][j] = INVALID_HANDLE_VALUE;
+  if (atexit(git_preinit_atexit_log)) {
+    rc = 137;
+    goto cleanup;
+  }
   if (git_preinit_start_owner_watch()) {
     rc = 136;
     goto cleanup;
@@ -4409,6 +4422,8 @@ static int git_preinit_worker(void)
   if (!setjmp(git_preinit_jump)) {
     init_git(args);
     rc = cmd_main(count, args);
+    trace_printf_key(&git809_preload_trace,
+      "pid=%lu cmd_main returned rc=%d\n", pid, rc);
     set_preload_exit_callback(NULL);
     rc = common_exit(__FILE__, __LINE__, rc);
   } else {
