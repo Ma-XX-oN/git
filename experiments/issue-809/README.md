@@ -69,8 +69,8 @@ Client code must drain stdout and stderr before reading the separate status
 channel. The status is a transport protocol record, not a substitute for
 ensuring output reaches its consumers.
 
-Native verification: the Detours workflow checks all 240 worker processes
-per build with correct and legacy hooks and also exercises both `-O0`
+Native verification: the Detours workflow checks all 300 worker processes
+per build (including 60 nonzero exits) with correct and legacy hooks and also exercises both `-O0`
 and `-O2` symbol-bearing Git binaries. The separate Windows stress and
 benchmark workflow checks malformed requests, probe lifetime, 1 MiB output,
 and 6,000 replenishment commands, and compares baseline
