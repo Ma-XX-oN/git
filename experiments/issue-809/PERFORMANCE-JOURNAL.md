@@ -33,9 +33,9 @@ retain the limitations in [the transport contract](TRANSPORT-CONTRACT.md).
 |---|---:|---:|---:|---|
 | Peer-managed connection rendezvous | 7.8940 ms | 7.5095 ms | 0.3845 ms | Adopted in `b0412d606f` |
 | Reply-before-refill plus grouped Bash request writes | 7.3615 ms | 6.5445 ms | 0.8170 ms | Adopted in `82080aa670` |
-| Shell patterns instead of regex pipe validation | 6.7650 ms | 6.5045 ms | 0.2605 ms | Adopted in `f62fbc2d7b`; same-job CI measurement pending |
+| Shell patterns instead of regex pipe validation | 6.7650 ms | 6.5045 ms | 0.2605 ms | Adopted in `f62fbc2d7b`; same-job CI below |
 | One-call environment replacement | 5.2780 ms | 4.7915 ms | 0.4865 ms | Rejected: three compatibility failures |
-| Changed-only environment updates | 5.5045 ms | 4.9770 ms | 0.5275 ms | Temporary prototype; broader validation pending |
+| Changed-only environment updates | 5.5045 ms | 4.9770 ms | 0.5275 ms | Temporary prototype; final candidate below supersedes it |
 | Final candidate: regex to patterns (A/B) | 5.5645 ms | 5.2880 ms | 0.2765 ms | Same laptop ABCCBA experiment below |
 | Final candidate: native environment (B/C) | 5.2880 ms | 5.0450 ms | 0.2430 ms | Same laptop ABCCBA experiment below |
 | Final candidate: combined (A/C) | 5.5645 ms | 5.0450 ms | 0.5195 ms | Same laptop ABCCBA experiment below |
@@ -126,7 +126,7 @@ Changed key spelling is deleted and recreated to preserve case. It preserves
 Windows drive-directory entries and last-wins aliases. All 14 differential cases
 pass, including Unicode, empty/removed values, aliases, an empty environment,
 300 variables, invalid export syntax and long values. Native worker stress and
-same-job CI acceptance are still required before adopting it.
+same-job CI acceptance are required before adopting it; final results follow.
 
 The original 14-case prototype comparison compared case-folded names and values.
 The permanent differential test also checks exact name spelling. This exposed
@@ -144,7 +144,8 @@ Its matched laptop ABCCBA test measured A/B/C medians of 5.5645/5.2880/5.0450 ms
 with 240 calls per variant. Native B/C savings were 0.2430 ms, below the earlier
 prototype's 0.5275 ms observation; the final matched result takes precedence for
 this candidate. The 4–5 ms objective remains a CI objective and is not established
-by this laptop result. Same-job CI acceptance is pending.
+by this laptop result. The implementation is committed in `4d4fd64486`; its
+same-job CI results follow below.
 
 Evidence: [final laptop rounds, samples and identities](performance/evidence/adopted-environment-laptop.json),
 [16 exact context comparisons](performance/evidence/adopted-environment-cases.json),
@@ -203,7 +204,53 @@ Runs and raw data:
   [stress](https://github.com/Ma-XX-oN/git/actions/runs/42575044546),
   [samples](performance/evidence/ci-f62fbc2d7b.json).
 
+## Same-job CI comparison: `4d4fd64486`
+
+[Windows benchmark run 42583383809](https://github.com/Ma-XX-oN/git/actions/runs/42583383809)
+passed, including all 16 exact environment comparisons. Baseline `82080aa670`
+and candidate `4d4fd64486` were compiled in job `129047248715` with matching
+UCRT64 flags and DLL runtime, then measured in ABCCBA order. All variants use
+three workers, complete cwd/environment transfer and no diagnostic tracing.
+
+| Variant | Median, 240 calls | Round medians |
+|---|---:|---|
+| A: baseline native, regex validation | 4.4630 ms | 4.4620 / 4.4660 ms |
+| B: baseline native, pattern validation | 4.4160 ms | 4.4080 / 4.4170 ms |
+| C: changed-only native, pattern validation | 3.9670 ms | 4.0140 / 3.9415 ms |
+
+The same-job A/B reduction is **0.0470 ms**, B/C is **0.4490 ms**, and A/C is
+**0.4960 ms**. This run reaches the 4–5 ms CI objective. Its baseline was faster
+than the historical jobs too, so the improvement attributable to these changes
+is 0.4960 ms, not the difference from an earlier job's median. The separate
+standard 1–5-worker sweep measured three-worker round medians of 3.8460 and
+3.8975 ms; those are another cohort, not extra savings to add to the comparison.
+
+Evidence: [matched samples, flags and hashes](performance/evidence/ci-4d4fd64486-matched.json),
+[exact context comparisons](performance/evidence/ci-4d4fd64486-context.json),
+[standard untraced sweep](performance/evidence/ci-4d4fd64486-pool.json).
+The original downloaded workflow artifact remains unchanged; repository text
+copies use LF line endings.
+
+[Windows stress run 42583383974](https://github.com/Ma-XX-oN/git/actions/runs/42583383974)
+also passed on `4d4fd64486`, attempt 2, job `129048554841`: all 26 lifecycle
+cases, marker/cancellation/allocator tests and 6,000 Git commands. Manager handles
+were 134 at both the first and final observation (range 134–141). Its traced
+stress median of 9.346 ms is not an untraced performance measurement. Attempt 1
+exited while sourcing `/etc/profile` before compiler output; only the failed job
+was retried, without source changes. Both required native workflows passed.
+Evidence: [exact validation-result log excerpt](performance/evidence/ci-4d4fd64486-stress-excerpt.log).
+
 ## Recording the next change
+
+An additional temporary-client test replaced the PID regex with
+`[[ $pid == [1-9]*([0-9]) ]]` and the status regex/capture with
+`[[ $status == EXIT[[:space:]]+([0-9]) ]]` followed by `${status:5}`.
+Both output-drain branches were changed together. Against the same native binary
+and laptop in ABBA order, the medians were 5.0395 versus 4.8315 ms (0.2080 ms
+reduction, 160 calls per variant). All 782 PID/status recognition and extraction
+comparisons agreed with the original regexes with extglob disabled. This remains
+a prototype; it is not part of `4d4fd64486` or its same-job CI measurement.
+Evidence: [rounds, samples and identities](performance/evidence/status-validation-prototype.json).
 
 For each entry, retain the code commit or prototype patch, baseline identity,
 machine/run ID, compiler/runtime flags, worker count, workload, instrumentation,
