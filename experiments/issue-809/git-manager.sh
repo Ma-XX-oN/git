@@ -285,7 +285,13 @@ git-ipc() {
     [[ ${GIT809_TRACE:-} == 1 ]] && printf 'TRACE drained data pid=%s\n' "$pid" >>"$_GIT809_MANAGER_LOG"
     if [[ -n ${GIT809_TIMING_LOG:-} ]]; then _git809_t_drained=$EPOCHREALTIME; fi
     close_fhs "$fd_worker_stdin" "$fd_worker_control"
-    IFS= read -r status <&"$fd_worker_exit" || { close_fhs; printf 'GIT-IPC ERROR: exit-status read failed\n' >&2; return 255; }
+    IFS= read -r status <&"$fd_worker_exit" || {
+      read_rc=$?
+      printf 'GIT809_EXIT_READ_FAILURE pid=%s rc=%s partial=%q\n' "$pid" "$read_rc" "$status" >>"$_GIT809_MANAGER_LOG"
+      close_fhs
+      printf 'GIT-IPC ERROR: exit-status read failed (pid=%s rc=%s)\n' "$pid" "$read_rc" >&2
+      return 255
+    }
     close_fhs
     if [[ -n ${GIT809_TIMING_LOG:-} ]]; then
       printf '%s,%s,%s,%s,%s,%s\n' "$_git809_t_start" "$_git809_t_alloc" "$_git809_t_connect" "$_git809_t_send" "$_git809_t_drained" "$EPOCHREALTIME" >>"$GIT809_TIMING_LOG"
@@ -329,7 +335,13 @@ git-ipc() {
     fi
   done
   close_fhs "$fd_worker_stdin" "$fd_worker_control"
-  IFS= read -r status <&"$fd_worker_exit" || { close_fhs; printf 'GIT-IPC ERROR: exit-status read failed\n' >&2; return 255; }
+  IFS= read -r status <&"$fd_worker_exit" || {
+    read_rc=$?
+    printf 'GIT809_EXIT_READ_FAILURE pid=%s rc=%s partial=%q\n' "$pid" "$read_rc" "$status" >>"$_GIT809_MANAGER_LOG"
+    close_fhs
+    printf 'GIT-IPC ERROR: exit-status read failed (pid=%s rc=%s)\n' "$pid" "$read_rc" >&2
+    return 255
+  }
   close_fhs
   if [[ $status =~ ^EXIT[[:space:]]([0-9]+)$ ]]; then
     return "${BASH_REMATCH[1]}"
