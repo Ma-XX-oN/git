@@ -113,7 +113,9 @@ static int apply_environment_block(const char *buf, size_t len)
   return 0;
 }
 
+#define PRELOAD_EXPORT_STREAM_IMPLEMENTATION
 #include "preload-export-stream.h"
+#undef PRELOAD_EXPORT_STREAM_IMPLEMENTATION
 
 int preload_apply_context(const char *buf, size_t len)
 {
