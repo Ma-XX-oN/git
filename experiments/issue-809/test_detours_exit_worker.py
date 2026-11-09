@@ -83,16 +83,20 @@ def run_case(case, args, legacy_crt=False):
     outcome = (stdout, stderr, exit_status)
     expected_result = expected if args == ["--version"] else b""
     if legacy_crt:
-      # Negative control: confirm that the old hook selection faults and
-      # preserves an actual fault-context stack frame.
-      assert launcher_status != 0, (case, "legacy runtime did not fault")
-      assert not exit_status, (case, exit_status)
-      assert log.exists(), (case, "missing primary fault trace")
-      trace = log.read_text(encoding="utf-8", errors="replace")
-      assert "path=exception.address=" in trace, (case, "no fault record")
-      assert "path=exception.frame=0." in trace, (case, "no faulting stack frame")
-      print("GIT809_DETOURS_LEGACY_CRASH_CAPTURED", case,
-            hex(launcher_status), flush=True)
+      if launcher_status == 0:
+        assert stdout == expected_result, (case, stdout, expected_result)
+        assert not stderr, (case, stderr)
+        assert exit_status == b"EXIT 0\n", (case, exit_status)
+        print("GIT809_DETOURS_LEGACY_NO_CRASH", case, flush=True)
+      else:
+        assert launcher_status == 0xC0000005, (case, launcher_status)
+        assert not exit_status, (case, exit_status)
+        assert log.exists(), (case, "missing primary fault trace")
+        trace = log.read_text(encoding="utf-8", errors="replace")
+        assert "path=exception.address=" in trace, (case, "no fault record")
+        assert "path=exception.frame=0." in trace, (case, "no faulting stack frame")
+        print("GIT809_DETOURS_LEGACY_CRASH_CAPTURED", case,
+              hex(launcher_status), flush=True)
     else:
       assert stdout == expected_result, (case, stdout, expected_result)
       assert not stderr, (case, stderr)
@@ -119,4 +123,6 @@ def run_case(case, args, legacy_crt=False):
 
 
 run_case("git-version", ["--version"])
-run_case("git-version-legacy-crt", ["--version"], legacy_crt=True)
+for attempt in range(12):
+  run_case(f"git-version-legacy-crt-{attempt:02d}",
+           ["--version"], legacy_crt=True)
