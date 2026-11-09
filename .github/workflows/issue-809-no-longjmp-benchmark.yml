@@ -32,6 +32,14 @@ jobs:
           make -C "$baseline_dir" -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease CFLAGS='-g -O2 -Wall' git.exe
           make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease CFLAGS='-g -O2 -Wall' git.exe
           test -s "$baseline_dir/git.exe" && test -s "$PWD/git.exe"
+      - name: Verify native Windows worker streams, malformed requests and 1 MiB output
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m py_compile experiments/issue-809/test_windows_worker_lifecycle.py
+          if ($LASTEXITCODE -ne 0) { throw 'Lifecycle syntax check failed' }
+          python experiments/issue-809/test_windows_worker_lifecycle.py "$env:GITHUB_WORKSPACE\git.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'Native worker lifecycle tests failed' }
       - name: Verify input SHA and run existing matching 1-5 worker pool benchmark twice
         shell: bash
         run: |
