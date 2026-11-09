@@ -80,7 +80,11 @@ ubuntu-*|i386/debian-*|debian-*)
 	# See <https://github.com/uutils/coreutils/issues/10508>.
 	if test -x /usr/bin/gnudirname
 	then
-		ln -sfT /usr/bin/gnudirname /usr/bin/dirname
+		# Some Ubuntu runner images provide an ln implementation whose
+		# -f option does not replace the existing dirname entry.
+		# The CI environment is disposable; replace it explicitly.
+		rm -f /usr/bin/dirname &&
+		ln -s /usr/bin/gnudirname /usr/bin/dirname
 	fi
 
 	case "$distro" in
