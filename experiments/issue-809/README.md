@@ -30,6 +30,30 @@ MinGW/GCC DWARF symbols. The Git SDK Bash login profile resets `PATH`:
 run the Python PE/COFF debug-section verification in a separate PowerShell
 step where `actions/setup-python` is available.
 
+## Reuse the verified prior RWF #809 symbol workbench
+
+Before changing symbol-build logic, inspect these existing experiment branches:
+
+- `experiment-809-symbolized-detours-runtime`:
+  `.github/workflows/issue-809-symbolized-runtime.yml` uses the full
+  Git-for-Windows SDK and a matching symbol-bearing MSYS2 runtime.
+- `experiment-809-msys2-symbols-o0`:
+  `.github/workflows/issue-809-msys2-symbolized-detours.yml` verifies
+  the actual raw DLL's DWARF sections before symbolization.
+- `experiment-809-detours-handle-trace`:
+  `.github/workflows/issue-809-detours-handle-trace.yml` retains and
+  verifies matching runtime symbols before `addr2line`.
+
+**Runner-shell rule:** Git SDK's minimal Bash PATH did not expose
+`python` or `objdump` in native runs 42556061777 and 42555846182,
+respectively. Do not invoke these programs from that Bash step without
+verifying availability. Compile Git under Git SDK Bash and run
+`check_pe_debug_sections.py` using the installed native Python from a
+PowerShell step. Preserve the exact same-SHA, DWARF-bearing `git.exe`
+in the uploaded diagnostic artifact, as well as the Detours PDB files.
+Fail if any required symbol material is missing. Do not treat build
+success or `-g` being present as proof that symbols survived linking.
+
 ## Crash investigation and symbolization
 
 1. Record the exact source SHA, compiler/linker flags, architecture, and
