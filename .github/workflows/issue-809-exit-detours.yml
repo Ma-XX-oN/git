@@ -35,13 +35,6 @@ jobs:
           . /etc/profile
           make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease \
             CFLAGS='-g -O0 -fno-omit-frame-pointer -Wall' git.exe
-      - name: Assert Git worker DWARF debug symbols
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          # The minimal Git SDK Bash PATH does not expose Python or objdump.
-          # Validate the exact PE in the following native PowerShell step.
-          if ($LASTEXITCODE -ne 0) { throw 'Missing Git DWARF debug sections' }
       - name: Build pinned Microsoft Detours 4.0.1 and instrumentation
         shell: pwsh
         run: |
