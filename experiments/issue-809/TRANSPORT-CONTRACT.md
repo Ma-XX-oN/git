@@ -67,17 +67,22 @@ For every logical channel, the Windows server/receiving endpoint creates a pair 
 5. Two `T` markers on distinct instances of a pair indicate a protocol violation; report an error, do not arbitrarily select one.
 6. Close and release all handles, pending accept operations, and per-connection state on success, error, cancellation, and owner death.
 
-For allocation, GET and ID travel over distinct logical named-pipe names. The Windows reply name is unique for **every request**, identified by the Bash process ID and a monotonically increasing shell-local sequence; the GET frame carries that identity. Both the request parser and reply-name constructor validate its two unsigned decimal components. PID-only reply names are prohibited because successive calls from one Bash process overlap server-side close/recreation. The same T identification rule applies to both channels; concurrent clients must receive only their own replies.
+For allocation, GET and worker ID use two **persistent, separate logical
+channels**, connected once when the owning Bash shell sources git-manager.sh.
+The manager publishes both named-pipe pairs before READY. Both connections
+consume the initial ASCII `0` marker once, after which the shell sends
+`GET\n` and reads one worker ID followed by newline for each command.
+There is exactly one outstanding allocation per owning shell; a subsequent
+GET is not sent before the previous reply is consumed. Both descriptors
+remain open across commands and close on shell termination. The five
+per-worker channels remain one-shot and continue to use the per-command
+decimal digit `sequence % 10`.
 
-## Windows call marker
+Concurrent git-ipc calls using the same allocation descriptors are outside
+this serial-client protocol; no per-request reply pipe or identification is
+created. All application data remains unidirectional even though Windows
+named-pipe instances have duplex capability for the initial marker.
 
-For serial calls, `git-ipc` replaces each Windows `T` connection marker
-with the decimal digit `sequence % 10`, including GET, reply, and all
-five worker channels. The request ID remains `BashPID-sequence` and
-continues to determine the unique reply-pipe name. The manager verifies
-that the GET and reply marker match the sequence. The native worker
-requires the same digit on all five channels. No acknowledgment, additional
-connection, or stream-handling change is introduced.
 
 ## Transport-selection API
 
@@ -108,20 +113,17 @@ across successive channels. Connect and marker reads remain blocking; the
 main thread does not dispatch or acknowledge individual pairs. Connection
 deadlines and owner death still terminate stalled handshakes.
 
-The Python `git-manager` implements `TransportPair(port, address, marker)`.
-Its `advance()` returns the selected `Pipe` or None while selection is pending,
-and raises on failure. Production replies and selector tests use this same
-implementation. Each `Pipe` owns its native handle, OVERLAPPED, buffer, and
-operation result until completion or cancellation has been dequeued. A shared
-I/O completion port waits for all GET and reply operations without the
-64-event limit. No cross-language
-C library is introduced: GET and ID connect Bash with Python, while the five
-Git worker channels connect Bash with C.
+The Python `git-manager` uses two `TransportPair` objects during
+allocator startup: one for GET and one for worker-ID replies. Production
+and selector tests use the same overlapped marker-selection implementation.
+Each selected `Pipe` remains connected and retains its Win32 handle for
+the lifetime of the shell. The allocation loop reads `GET\n`, waits for a
+READY worker (at most five seconds), writes its PID or `WAIT\n`, and then
+reads the next GET. It never creates a per-command reply pipe or performs a
+blocking reply flush. Pool replenishment is asynchronous. The same I/O
+completion port handles both long-lived allocator channels and worker-ready
+notifications.
 
-Worker allocation is nonblocking: an empty READY queue leaves that request
-waiting for a readiness notification, with a five-second deadline before WAIT.
-After writing a reply, the manager waits asynchronously for client disconnect
-before closing the instance. It does not block other clients in a pipe flush.
 
 ## Existing output limitation
 
@@ -141,22 +143,12 @@ binary stdout/stderr and interactive stdin tests are implemented and pass.
 
 ## Implementation notes
 
-### Open design discrepancy: shared GET listener
-
-The current Python git-manager request side retains a **replenished pool of
-listener instances for the shared GET pipe name**, and identifies each real
-request by its `T` prefix. It does **not** call the same two-instance
-`TransportPair` used for each unique ID reply pipe. This is **not
-yet verified as satisfying the agreed pair-selection contract**. Unlike a
-private worker channel, GET accepts concurrent independent git-ipc clients:
-two distinct GET connections can both carry valid `T` markers without
-representing a duplicate marker on one client's transport pair.
-
-Do not replace the shared request listener with a single global two-instance
-pair without preserving concurrent-client isolation. The exact GET
-pair/acceptance model must be reconciled with this concurrency requirement
-before claiming full protocol acceptance.
+The persistent allocator pair is owned by the sourcing shell. Command
+substitutions inherit its descriptors for serial invocations. The manager
+has one outstanding allocation at a time and handles EOF, owner death, and
+pending I/O cancellation at shutdown. Native worker channels are
+unchanged; their call-specific marker must still match across all five
+channels.
 
 
-
-The original Windows single duplex GET/PID pipe and instance-order selection are superseded. The implementation branch introduces separate GET/ID names, T-based selection, and a separate command/context channel; native CI must verify all changes at the same SHA. Unix now uses separate FIFO descriptors rather than `O_RDWR` for its manager request FIFO.
+The original Windows single duplex GET/PID pipe and per-request reply names are superseded. The implementation branch introduces separate GET/ID names, T-based selection, and a separate command/context channel; native CI must verify all changes at the same SHA. Unix now uses separate FIFO descriptors rather than `O_RDWR` for its manager request FIFO.
