@@ -28,7 +28,7 @@ def read_ready(stream, results):
   results.put(stream.readline())
 
 
-def run_case(case, args):
+def run_case(case, args, legacy_crt=False):
   log = root / f"{case}.exit-detours.log"
   fallback = root / f"{case}.exit-fallback.log"
   native = root / f"{case}.native-trace.log"
@@ -36,6 +36,8 @@ def run_case(case, args):
   env["GIT809_PRELOAD_OWNER_WINPID"] = str(os.getpid())
   env["GIT809_DETOURS_LOG"] = str(log)
   env["GIT809_DETOURS_FALLBACK"] = str(fallback)
+  if legacy_crt:
+    env["GIT809_DETOURS_LEGACY_CRT"] = "1"
   env["GIT_TRACE_GIT809_PRELOAD"] = str(native)
   process = subprocess.Popen([launcher, dll, git, "--preload"],
                              env=env, stdin=subprocess.DEVNULL,
@@ -80,11 +82,23 @@ def run_case(case, args):
           "stdout_bytes", len(stdout), flush=True)
     outcome = (stdout, stderr, exit_status)
     expected_result = expected if args == ["--version"] else b""
-    assert stdout == expected_result, (case, stdout, expected_result)
-    assert not stderr, (case, stderr)
-    assert exit_status == b"EXIT 0\n", (case, exit_status)
-    assert launcher_status == 0, (case, launcher_status)
-    print("GIT809_DETOURS_WORKER_PASS", case, flush=True)
+    if legacy_crt:
+      # Negative control: confirm that the old hook selection faults and
+      # preserves an actual fault-context stack frame.
+      assert launcher_status != 0, (case, "legacy runtime did not fault")
+      assert not exit_status, (case, exit_status)
+      assert log.exists(), (case, "missing primary fault trace")
+      trace = log.read_text(encoding="utf-8", errors="replace")
+      assert "path=exception.address=" in trace, (case, "no fault record")
+      assert "path=exception.frame=0." in trace, (case, "no faulting stack frame")
+      print("GIT809_DETOURS_LEGACY_CRASH_CAPTURED", case,
+            hex(launcher_status), flush=True)
+    else:
+      assert stdout == expected_result, (case, stdout, expected_result)
+      assert not stderr, (case, stderr)
+      assert exit_status == b"EXIT 0\\n", (case, exit_status)
+      assert launcher_status == 0, (case, launcher_status)
+      print("GIT809_DETOURS_WORKER_PASS", case, flush=True)
   finally:
     for handle in handles.values():
       K.CloseHandle(handle)
@@ -105,3 +119,4 @@ def run_case(case, args):
 
 
 run_case("git-version", ["--version"])
+run_case("git-version-legacy-crt", ["--version"], legacy_crt=True)
