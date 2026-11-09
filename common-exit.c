@@ -1,10 +1,6 @@
 #include "git-compat-util.h"
+#include "common-init.h"
 #include "trace2.h"
-
-#ifdef GIT_WINDOWS_NATIVE
-/* Defined in compat/mingw.c; does not use Git's trace descriptor. */
-void git_preinit_exit_diagnostic(const char *event, int status);
-#endif
 
 static void (*preload_exit_callback)(int);
 
