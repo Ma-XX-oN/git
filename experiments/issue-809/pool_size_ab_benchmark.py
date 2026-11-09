@@ -11,6 +11,7 @@ per-command timings but reported separately.
 """
 from __future__ import annotations
 
+from collections import Counter
 from decimal import Decimal
 import json
 import math
@@ -165,9 +166,16 @@ def run_case(bash, script, git_shell, environment, workers, round_index, windows
     allocations = [x for x in manager.splitlines() if x.startswith("ALLOCATED ")]
     # one verification invocation plus 120 timed commands
     assert len(allocations) == N + 1, (workers, len(allocations), manager[-1200:])
-    assert len(set(allocations)) == len(allocations), "worker PID allocated twice"
     ready = [x for x in manager.splitlines() if x.startswith("WORKER_READY ")]
     assert len(ready) >= workers, "initial pool incomplete"
+    # Windows reuses numeric process IDs after exit. Reject allocating one
+    # worker more times than the manager reported it READY, not reused PIDs.
+    allocated_by_pid = Counter(x.split()[-1] for x in allocations)
+    ready_by_pid = Counter(x.split()[-1] for x in ready)
+    assert all(ready_by_pid[pid] >= count
+               for pid, count in allocated_by_pid.items()), (
+                   "worker allocation lacks corresponding READY event",
+                   allocated_by_pid, ready_by_pid)
     return {
         "workers": workers, "round": round_index,
         "direct": summarize(direct), "ipc": summarize(ipc),
