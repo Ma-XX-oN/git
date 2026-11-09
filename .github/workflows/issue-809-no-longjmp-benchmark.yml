@@ -55,7 +55,11 @@ jobs:
           export GIT809_BENCH_LABEL=baseline
           export GIT809_BENCH_SOURCE_SHA=3fad35ddb27449a32255ffacfdfebd697e6409b2
           export GIT809_BENCH_GIT="$(cygpath -w "$PWD/.git809-benchmark-baseline/git.exe")"
-          "$PYTHON_EXE" experiments/issue-809/pool_size_ab_benchmark.py
+          if "$PYTHON_EXE" experiments/issue-809/pool_size_ab_benchmark.py; then
+            echo "GIT809_BASELINE_BENCHMARK_PASS"
+          else
+            echo "GIT809_BASELINE_BENCHMARK_FAILED: preserve failure; continue updated SHA" >&2
+          fi
           export GIT809_BENCH_LABEL=updated
           export GIT809_BENCH_SOURCE_SHA="$GITHUB_SHA"
           export GIT809_BENCH_GIT="$(cygpath -w "$PWD/git.exe")"
