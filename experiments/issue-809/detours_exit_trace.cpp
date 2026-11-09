@@ -23,6 +23,8 @@ static SignalFn real_signal = nullptr;
 static wchar_t log_path[MAX_PATH * 4] = {};
 static wchar_t fallback_path[MAX_PATH * 4] = {};
 static thread_local bool logging = false;
+static volatile LONG exception_samples = 0;
+static volatile LONG access_violation_samples = 0;
 
 static void emit(const char *name, int code)
 {
@@ -57,38 +59,82 @@ static void emit(const char *name, int code)
 
 static VOID WINAPI hook_exit_process(UINT code)
 {
-  emit("ExitProcess", static_cast<int>(code));
+  emit("ExitProcess.enter", static_cast<int>(code));
+  emit("ExitProcess.call-original", static_cast<int>(code));
   real_exit_process(code);
 }
 
 static void __cdecl hook_crt_exit(int code)
 {
-  emit("crt.exit", code);
+  emit("crt.exit.enter", code);
+  emit("crt.exit.call-original", code);
   real_crt_exit(code);
 }
 
 static void __cdecl hook_crt__exit(int code)
 {
-  emit("crt._exit", code);
+  emit("crt._exit.enter", code);
+  emit("crt._exit.call-original", code);
   real_crt__exit(code);
 }
 
 static void __cdecl hook_abort(void)
 {
-  emit("crt.abort", -1);
+  emit("crt.abort.enter", -1);
+  emit("crt.abort.call-original", -1);
   real_abort();
 }
 
 static int __cdecl hook_raise(int signal_number)
 {
-  emit("crt.raise", signal_number);
-  return real_raise(signal_number);
+  emit("crt.raise.enter", signal_number);
+  const int result = real_raise(signal_number);
+  emit("crt.raise.return", result);
+  return result;
 }
 
 static SignalHandler __cdecl hook_signal(int sig, SignalHandler handler)
 {
-  emit("crt.signal-registration", sig);
-  return real_signal(sig, handler);
+  emit("crt.signal.enter", sig);
+  SignalHandler previous = real_signal(sig, handler);
+  emit("crt.signal.return", sig);
+  return previous;
+}
+
+// Preserve the faulting instruction pointer, not the VEH callback stack.
+// On x64, unwind using the OS function tables without a debugger dependency.
+static void trace_fault_stack(const CONTEXT *original)
+{
+#if defined(_M_X64)
+  CONTEXT context = *original;
+  for (unsigned int frame = 0; frame < 12 && context.Rip; ++frame) {
+    DWORD64 image_base = 0;
+    PRUNTIME_FUNCTION function = RtlLookupFunctionEntry(
+      context.Rip, &image_base, nullptr);
+    char event[160];
+    _snprintf_s(event, sizeof(event), _TRUNCATE,
+      "exception.frame=%u.pc=0x%llx.image=0x%llx.offset=0x%llx",
+      frame, static_cast<unsigned long long>(context.Rip),
+      static_cast<unsigned long long>(image_base),
+      static_cast<unsigned long long>(image_base ?
+        context.Rip - image_base : 0));
+    emit(event, 0);
+    if (!function)
+      break; // Do not dereference an untrusted stack pointer.
+    PVOID handler_data = nullptr;
+    DWORD64 establisher_frame = 0;
+    const DWORD64 before = context.Rip;
+    RtlVirtualUnwind(0, image_base, before, function, &context,
+      &handler_data, &establisher_frame, nullptr);
+    if (context.Rip == before)
+      break;
+  }
+#else
+  char event[160];
+  _snprintf_s(event, sizeof(event), _TRUNCATE,
+    "exception.frame=0.pc=%p", original->Eip);
+  emit(event, 0);
+#endif
 }
 
 static LONG CALLBACK trace_exception(PEXCEPTION_POINTERS exception)
@@ -96,6 +142,12 @@ static LONG CALLBACK trace_exception(PEXCEPTION_POINTERS exception)
   if (!exception || !exception->ExceptionRecord)
     return EXCEPTION_CONTINUE_SEARCH;
   const EXCEPTION_RECORD *record = exception->ExceptionRecord;
+  const bool access_violation = record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION;
+  const LONG sample = access_violation ?
+    InterlockedIncrement(&access_violation_samples) :
+    InterlockedIncrement(&exception_samples);
+  if (sample > (access_violation ? 1 : 4))
+    return EXCEPTION_CONTINUE_SEARCH;
   char event[160];
   HMODULE module = nullptr;
   uintptr_t offset = 0;
@@ -109,6 +161,8 @@ static LONG CALLBACK trace_exception(PEXCEPTION_POINTERS exception)
     "exception.address=%p.module=%p.offset=0x%llx",
     record->ExceptionAddress, module, static_cast<unsigned long long>(offset));
   emit(event, static_cast<int>(record->ExceptionCode));
+  if (access_violation && exception->ContextRecord)
+    trace_fault_stack(exception->ContextRecord);
   return EXCEPTION_CONTINUE_SEARCH;
 }
 
