@@ -46,10 +46,9 @@ static void emit(const char *name, int code)
       DWORD written = 0;
       const BOOL ok = WriteFile(file, line, static_cast<DWORD>(count),
                                 &written, nullptr);
-      const DWORD error = ok && written == static_cast<DWORD>(count) ? 0 :
-                          GetLastError();
+      const bool complete = ok && written == static_cast<DWORD>(count);
       CloseHandle(file);
-      if (!error)
+      if (complete)
         break;
     }
   }
@@ -126,11 +125,13 @@ extern "C" BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID)
     return TRUE;
   DisableThreadLibraryCalls(module);
   DetourRestoreAfterWith();
-  GetEnvironmentVariableW(L"GIT809_DETOURS_LOG", log_path,
-                          static_cast<DWORD>(sizeof(log_path) / sizeof(log_path[0])));
-  GetEnvironmentVariableW(L"GIT809_DETOURS_FALLBACK", fallback_path,
-                          static_cast<DWORD>(sizeof(fallback_path) / sizeof(fallback_path[0])));
-  if (!log_path[0] && !fallback_path[0])
+  const DWORD log_length = GetEnvironmentVariableW(L"GIT809_DETOURS_LOG",
+    log_path, static_cast<DWORD>(sizeof(log_path) / sizeof(log_path[0])));
+  const DWORD fallback_length = GetEnvironmentVariableW(L"GIT809_DETOURS_FALLBACK",
+    fallback_path, static_cast<DWORD>(sizeof(fallback_path) / sizeof(fallback_path[0])));
+  if (log_length >= sizeof(log_path) / sizeof(log_path[0]) ||
+      fallback_length >= sizeof(fallback_path) / sizeof(fallback_path[0]) ||
+      (!log_length && !fallback_length))
     return FALSE;
 
   HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
