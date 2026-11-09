@@ -7,8 +7,6 @@ int main(int argc, const char **argv)
 
 #ifndef GIT_WINDOWS_NATIVE
 	if (argc > 1 && !strcmp(argv[1], "--preload")) {
-		extern int git_preload_unix_worker(const char *directory);
-
 		if (argc != 3) {
 			fprintf(stderr, "error: --preload requires a worker directory\n");
 			exit(129);
