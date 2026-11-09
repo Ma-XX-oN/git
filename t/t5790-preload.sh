@@ -10,7 +10,7 @@ test_expect_success 'the experimental startup spelling is rejected' '
 
 test_expect_success 'worker mode rejects unrelated arguments' '
 	test_must_fail git --preload-worker one two 2>err &&
-	test_grep "preload-worker" err
+	test_grep "^error: --preload-worker" err
 '
 
 test_expect_success 'context applies a complete snapshot' '

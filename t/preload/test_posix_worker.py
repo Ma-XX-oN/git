@@ -62,6 +62,8 @@ def main():
     run_case(git, "short-header", b"\0", 125, b"")
     run_case(git, "zero-argc", struct.pack("<I", 0), 126, b"")
     run_case(git, "excess-argc", struct.pack("<I", 33), 126, b"")
+    run_case(git, "high-bit-argc", struct.pack("<I", 0x80000000), 126, b"")
+    run_case(git, "maximum-argc", struct.pack("<I", 0xffffffff), 126, b"")
     run_case(git, "unterminated-argv", struct.pack("<I", 1) + b"git", 128, b"")
     run_case(git, "wrong-program", struct.pack("<I", 1) + b"other\0", 129, b"")
     run_case(git, "malformed-context", frame(["--version"], b"unknown\0"), 129, b"")

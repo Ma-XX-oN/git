@@ -3,6 +3,7 @@
 
 import argparse
 from decimal import Decimal
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -85,6 +86,10 @@ def main():
                                               cwd=root, text=True).strip(),
               "platform": sys.platform, "git": str(args.git.resolve()),
               "context": "complete cwd and environment", "workers": 3,
+              "binary_sha256": hashlib.sha256(args.git.resolve().read_bytes()).hexdigest(),
+              "tracked_worktree_diff": subprocess.check_output(
+                  [str(args.git.resolve()), "diff", "--stat", "HEAD"], cwd=root, text=True),
+              "trace_variables": sorted(key for key in env if key.startswith("GIT_TRACE")),
               "elapsed_seconds": time.monotonic() - started}
     (output / "summary.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print("PRELOAD_ACCEPTANCE_PASS", json.dumps(report), flush=True)

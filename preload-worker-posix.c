@@ -124,7 +124,8 @@ int preload_worker_run(const char *directory)
 	const size_t frame_capacity = 131072;
 	const char *args[33] = { NULL };
 	int fd[5] = { -1, -1, -1, -1, -1 };
-	int i, count, pos, rc = 120;
+	int pos, rc = 120;
+	unsigned int i, count;
 	size_t used = 0;
 	ssize_t n;
 
@@ -167,10 +168,10 @@ int preload_worker_run(const char *directory)
 		rc = 125;
 		goto cleanup;
 	}
-	count = (unsigned char)frame[0] |
-		((unsigned char)frame[1] << 8) |
-		((unsigned char)frame[2] << 16) |
-		((unsigned char)frame[3] << 24);
+	count = (unsigned int)(unsigned char)frame[0] |
+		((unsigned int)(unsigned char)frame[1] << 8) |
+		((unsigned int)(unsigned char)frame[2] << 16) |
+		((unsigned int)(unsigned char)frame[3] << 24);
 	if (count < 1 || count > 32) {
 		rc = 126;
 		goto cleanup;

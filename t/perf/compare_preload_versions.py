@@ -58,6 +58,8 @@ def main():
             "git": str(git), "binary_sha256": hashlib.sha256(git.read_bytes()).hexdigest(),
             "revision": subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip(),
             "flags": (root / "GIT-CFLAGS").read_text(encoding="utf-8")}
+    assert report["variants"]["baseline"]["flags"] == report["variants"]["candidate"]["flags"], (
+        "baseline and candidate compiler flags differ")
     try:
         for index, name in enumerate(report["order"]):
             bench, client, git, environment = variants[name]
