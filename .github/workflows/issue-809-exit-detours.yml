@@ -10,6 +10,7 @@ on:
       - compat/mingw.c
       - .github/workflows/issue-809-exit-detours.yml
       - experiments/issue-809/README.md
+      - experiments/issue-809/check_pe_debug_sections.py
   workflow_dispatch:
 permissions:
   contents: read
@@ -34,8 +35,7 @@ jobs:
           . /etc/profile
           make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease \
             CFLAGS='-g -O0 -fno-omit-frame-pointer -Wall' git.exe
-          objdump -h git.exe | grep -F .debug_info
-          objdump -h git.exe | grep -F .debug_line
+          python experiments/issue-809/check_pe_debug_sections.py git.exe
       - name: Build pinned Microsoft Detours 4.0.1 and instrumentation
         shell: pwsh
         run: |
