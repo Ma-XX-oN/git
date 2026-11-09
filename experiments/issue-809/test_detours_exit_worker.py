@@ -28,7 +28,7 @@ def read_ready(stream, results):
   results.put(stream.readline())
 
 
-def run_case(case, args, legacy_crt=False, direct_exit=False):
+def run_case(case, args, legacy_crt=False):
   log = root / f"{case}.exit-detours.log"
   fallback = root / f"{case}.exit-fallback.log"
   native = root / f"{case}.native-trace.log"
@@ -38,8 +38,6 @@ def run_case(case, args, legacy_crt=False, direct_exit=False):
   env["GIT809_DETOURS_FALLBACK"] = str(fallback)
   if legacy_crt:
     env["GIT809_DETOURS_LEGACY_CRT"] = "1"
-  if direct_exit:
-    env["GIT809_PRELOAD_EXIT_DIRECT"] = "1"
   env["GIT_TRACE_GIT809_PRELOAD"] = str(native)
   process = subprocess.Popen([launcher, dll, git, "--preload"],
                              env=env, stdin=subprocess.DEVNULL,
@@ -84,28 +82,11 @@ def run_case(case, args, legacy_crt=False, direct_exit=False):
           "stdout_bytes", len(stdout), flush=True)
     outcome = (stdout, stderr, exit_status)
     expected_result = expected if args == ["--version"] else b""
-    if not direct_exit:
-      if launcher_status == 0:
-        assert stdout == expected_result, (case, stdout, expected_result)
-        assert not stderr, (case, stderr)
-        assert exit_status == b"EXIT 0\n", (case, exit_status)
-        print("GIT809_DETOURS_LONGJMP_SUCCESS", case, flush=True)
-      else:
-        assert launcher_status == 0xC0000005, (case, launcher_status)
-        assert not exit_status, (case, exit_status)
-        assert log.exists(), (case, "missing primary fault trace")
-        trace = log.read_text(encoding="utf-8", errors="replace")
-        assert "path=exception.address=" in trace, (case, "no fault record")
-        assert "path=exception.frame=0." in trace, (case, "no faulting stack frame")
-        print("GIT809_DETOURS_LONGJMP_CRASH_CAPTURED", case,
-              hex(launcher_status), flush=True)
-    else:
-      assert stdout == expected_result, (case, stdout, expected_result)
-      assert not stderr, (case, stderr)
-      assert exit_status == b"EXIT 0\n", (case, exit_status)
-      assert launcher_status == 0, (case, launcher_status)
-      print("GIT809_DETOURS_WORKER_PASS", case,
-            "direct_exit", direct_exit, flush=True)
+    assert stdout == expected_result, (case, stdout, expected_result)
+    assert not stderr, (case, stderr)
+    assert exit_status == b"EXIT 0\n", (case, exit_status)
+    assert launcher_status == 0, (case, launcher_status)
+    print("GIT809_DETOURS_WORKER_PASS", case, "legacy", legacy_crt, flush=True)
   finally:
     for handle in handles.values():
       K.CloseHandle(handle)
@@ -125,10 +106,9 @@ def run_case(case, args, legacy_crt=False, direct_exit=False):
       assert fallback.exists(), "both Detours diagnostic destinations unavailable"
 
 
-run_case("git-version", ["--version"])
-run_case("git-version-direct", ["--version"], direct_exit=True)
-for attempt in range(12):
-  run_case(f"git-version-legacy-crt-{attempt:02d}",
-           ["--version"], legacy_crt=True)
-  run_case(f"git-version-legacy-direct-{attempt:02d}",
-           ["--version"], legacy_crt=True, direct_exit=True)
+# 240 independent processes on the same native Windows runner.
+# All must publish a complete status and terminate cleanly, with and without
+# the intentionally incorrect legacy CRT Detours configuration.
+for attempt in range(120):
+  run_case(f"git-version-ucrt-{attempt:03d}", ["--version"])
+  run_case(f"git-version-legacy-{attempt:03d}", ["--version"], legacy_crt=True)
