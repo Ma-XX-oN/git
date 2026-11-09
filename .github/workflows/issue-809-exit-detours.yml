@@ -35,7 +35,12 @@ jobs:
           . /etc/profile
           make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease \
             CFLAGS='-g -O0 -fno-omit-frame-pointer -Wall' git.exe
+      - name: Assert Git worker DWARF debug symbols
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
           python experiments/issue-809/check_pe_debug_sections.py git.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Missing Git DWARF debug sections' }
       - name: Build pinned Microsoft Detours 4.0.1 and instrumentation
         shell: pwsh
         run: |
@@ -63,6 +68,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Detours exit tracer compilation failed' }
           cl /nologo /std:c++17 /EHsc /W4 /WX /MT /Zi /Od "/I$include" "$dir\detours_launcher.cpp" /link /DEBUG:FULL "/PDB:$env:RUNNER_TEMP\git809_detours_launcher.pdb" "/OUT:$env:RUNNER_TEMP\git809_detours_launcher.exe" $library
           if ($LASTEXITCODE -ne 0) { throw 'Detours launcher compilation failed' }
+          $detoursPdb = "$env:RUNNER_TEMP\detours\lib.X64\detours.pdb"
+          if (-not (Test-Path $detoursPdb)) { throw "Pinned Detours PDB missing: $detoursPdb" }
+          Copy-Item $detoursPdb exit-detours-results/detours.pdb
           foreach ($file in @("git809_detours_exit.pdb", "git809_detours_launcher.pdb")) {
             $source = Join-Path $env:RUNNER_TEMP $file
             if (-not (Test-Path $source)) { throw "Debug symbols missing: $source" }
