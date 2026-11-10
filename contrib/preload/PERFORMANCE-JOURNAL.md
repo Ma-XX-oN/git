@@ -39,6 +39,18 @@ are in [migration-ba1695-windows-laptop-matched.json](performance/evidence/migra
 The [checkpoint graphs](performance/migration-checkpoints/report.md) show both
 absolute milliseconds and within-comparison baseline-normalized percentages.
 
+The same-job Linux comparison at `ba16959609` measured **1.7755 ms baseline**
+versus **1.0550 ms migrated**: **59.42% of baseline**, **-40.58%**, or
+**-0.7205 ms**. This AMD EPYC 7763 runner used the same unchanged-environment
+workload and explicit per-variant capture policies as the laptop comparison.
+Baseline rounds were 1.7720/1.7795 ms; candidate rounds were 1.0550/1.0555 ms.
+Both full Git suites, Make/Meson builds and the no-pthread build check passed in
+[job 129688162673](https://github.com/Ma-XX-oN/git/actions/runs/42774012137/job/129688162673).
+The overall job failed the separate unset-editor fixture described in the
+validation record; this performance result does not establish native acceptance.
+Raw timing and hardware/runtime metadata are preserved in
+[migration-ba1695-linux-matched.json](performance/evidence/migration-ba1695-linux-matched.json).
+
 ## Historical path-shadow correction checkpoint
 
 The Windows shell caches converted values for the runtime's eight standard

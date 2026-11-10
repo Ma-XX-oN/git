@@ -167,6 +167,24 @@ Windows keeps its 30-second diagnostic timeout. This changes the test deadline,
 not the reader or the accepted Windows limitation; completed POSIX output/status
 checks remain required.
 
+The `ba16959609` Linux job completed both full Git suites, Make/Meson builds,
+matched timing and the no-pthread check. Meson reported 916 tests, zero failures.
+The same-job untraced comparison measured 1.7755 ms baseline versus 1.0550 ms
+candidate (-0.7205 ms, -40.58%) with explicit environment-policy metadata.
+Raw evidence is [migration-ba1695-linux-matched.json](evidence/migration-ba1695-linux-matched.json).
+The job remains an overall failure because of its earlier unset-editor fixture.
+
+At `3b0bdbf56b`, the native acceptance step passed on Windows, Linux and macOS in
+[run 42775783963](https://github.com/Ma-XX-oN/git/actions/runs/42775783963), including
+the startup/re-source fixture, 6,000 commands and each platform's supported output
+cases. The 120-second aggregate POSIX output deadline completed all byte/status
+assertions. Traced stress durations were 30.983 seconds on Windows, 8.588 seconds
+on Linux and 50.570 seconds on macOS; they are not matched performance results.
+The Windows summary reports a large working-tree diff stat; the reason has not
+yet been established, so this metadata must remain visible in the raw artifact.
+The full Make/Meson regression suites remain running. No diagnostic cleanup has
+been applied.
+
 ### Historical shadow checkpoint
 
 A new client-level output/status test reproduces a pre-existing failure with a
