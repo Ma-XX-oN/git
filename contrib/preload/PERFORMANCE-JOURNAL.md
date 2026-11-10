@@ -21,8 +21,39 @@ reply-before-refill scheduling, grouped request writes and shell-pattern pipe
 validation. The adopted 100 ms text reader is the single Windows reader.
 Operational errors and marker diagnostics continue through Git tracing.
 Local cleanup checks passed both native builds and 6,000 serial commands;
-that traced stress result is not a performance comparison. Final matched
-measurements are recorded separately after the cleanup CI run.
+that traced stress result is not a performance comparison. The cleanup CI
+matrix passed on all three platforms in
+[run 42884766360](https://github.com/Ma-XX-oN/git/actions/runs/42884766360).
+
+The cleanup SHA `5300cc41e2` measured **5.0000 ms baseline** versus
+**4.1305 ms migrated** on the same laptop: **82.61% of baseline**, **-17.39%**,
+or **-0.8695 ms**. The untraced ABBA rounds measured 4.9215/5.0675 ms for
+baseline and 4.1340/4.1300 ms for candidate, with 240 samples per variant.
+Raw samples, matching compiler flags, binary identities and machine metadata
+are in [migration-5300cc-windows-laptop-matched.json](performance/evidence/migration-5300cc-windows-laptop-matched.json).
+This compares the final implementation with the original tag; differences
+between this and earlier separately timed checkpoints do not isolate cleanup's
+cost or establish a gain caused by diagnostic removal alone.
+
+The final same-job CI comparisons at `5300cc41e2` were:
+
+| Platform | Baseline ms | Migrated ms | Baseline % | Change % |
+| --- | ---: | ---: | ---: | ---: |
+| Windows | 6.0075 | 4.1750 | 69.50% | -30.50% |
+| Linux | 1.8050 | 1.0500 | 58.17% | -41.83% |
+| macOS | 4.0470 | 2.5290 | 62.49% | -37.51% |
+| Laptop | 5.0000 | 4.1305 | 82.61% | -17.39% |
+
+Windows meets the original 4–5 ms command-latency target. Each percentage uses
+its own matched baseline; absolute values from different hosts or CI runs are
+not pooled. All comparisons use three workers, identical flags within each
+pair and tracing disabled. Raw CI samples are in
+[Windows](performance/evidence/migration-5300cc-windows-matched.json),
+[Linux](performance/evidence/migration-5300cc-linux-matched.json) and
+[macOS](performance/evidence/migration-5300cc-macos-matched.json).
+The [final graphs](performance/final-comparison/report.md) show milliseconds
+and dimensionless baseline percentages. The [19-checkpoint history](performance/migration-checkpoints/report.md)
+preserves earlier gains, regressions, workload policies and machine metadata.
 
 ### Environment policy
 

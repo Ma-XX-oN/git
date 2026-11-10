@@ -32,7 +32,7 @@ is excluded from latency measurements.
 At `453b850220`, the expanded native fast-path step passed on all three
 platforms. Linux took 66 seconds, macOS 111 seconds and Windows 118 seconds, including the selected
 existing regression assertions through real workers and 6,000 serial commands.
-The complete ordinary-Git suites were disabled for development pushes.
+The preload workflow's complete ordinary-Git suites were disabled for development pushes.
 Both local Make and Meson builds passed the adapter's 45 commands, with matching
 worker allocations; Linux and macOS CI also passed the Meson worker checks.
 
@@ -47,8 +47,64 @@ supported Bash output cases, 45 adapted regression calls with matching
 allocations, and 6,000 serial commands in 72.592 seconds. That stress run enabled
 tracing; its median is diagnostic, not a matched performance result.
 The complete pre-cleanup CI matrix passed in run 42882122186. Rebuilt fast-path
-acceptance and paired benchmarks must pass on the cleanup revision before
-final completion.
+acceptance and paired benchmarks passed on the cleanup revision in
+[run 42884766360](https://github.com/Ma-XX-oN/git/actions/runs/42884766360).
+
+The repository's separate default `CI` workflow also starts on pushes. Its
+cleanup-revision run 42884766119 was cancelled when that independent trigger
+was found. Commit `c51a44fb1f` excludes migration-branch pushes from the default
+matrix; pull-request CI and the explicit final compatibility job remain
+available for community-PR preparation. This CI-only commit leaves the worker
+source tested by run 42884766360 unchanged.
+
+The final same-laptop untraced ABBA comparison at `5300cc41e2` passed with
+5.0000 ms baseline and 4.1305 ms candidate (-0.8695 ms, -17.39%). This is
+82.61% of its own matched baseline; the raw comparison retains machine/build
+metadata and all 240 samples per variant. It is not an isolated measurement
+of the instrumentation removal relative to the preceding migration checkpoint.
+
+### Final acceptance and measurements
+
+The cleanup matrix passed on Windows, Linux and macOS: native lifecycle,
+transport, allocation, owner death, manager restart, supported output, selected
+existing regressions through `git-ipc`, 6,000 serial commands, Make and Meson
+worker checks, paired performance, and POSIX builds without pthread support.
+The native fast-test steps took 55 seconds on Linux, 100 seconds on macOS and
+100 seconds on Windows. These are test durations, separate from setup, builds
+and paired benchmark execution. Full ordinary-Git suites remain reserved for
+final community-PR preparation and were not part of this acceptance matrix.
+
+| Platform | Hardware / logical CPUs | Baseline ms | Migrated ms | Baseline % | Change % |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Windows Server 2025 CI | AMD EPYC 9V74 / 4 | 6.0075 | 4.1750 | 69.50% | -30.50% |
+| Linux CI | AMD EPYC 7763 / 4 | 1.8050 | 1.0500 | 58.17% | -41.83% |
+| macOS 26.7.2 CI | Apple M1 (Virtual) / 3 | 4.0470 | 2.5290 | 62.49% | -37.51% |
+| Windows 11 laptop | AMD Ryzen 7 5700U / 16 | 5.0000 | 4.1305 | 82.61% | -17.39% |
+
+Each row is an untraced ABBA comparison with three workers, 240 samples per
+variant and matching compiler flags. The baseline snapshots environment per
+call; the final worker inherits manager startup environment. The workload
+keeps that environment unchanged. Native OS/Bash/Python versions, full flags,
+source revisions, binary digests and raw samples accompany the
+[final graphs](final-comparison/report.md). The
+[checkpoint graphs](migration-checkpoints/report.md) retain all 12 preceding
+rows and add the three fast-gate CI pairs and four final comparisons.
+Separate jobs establish within-pair improvements; changes between checkpoints
+do not isolate the effect of a single cleanup edit.
+
+The adopted performance paths remain implemented: two blocking connectors
+with peer rendezvous, persistent serial allocator channels, reply-before-refill,
+grouped Bash request writes, shell-pattern pipe validation and a single 100 ms
+text drain. Per-request environment optimizations are preserved as historical
+evidence and superseded by the requested startup-inheritance contract. A source
+sweep found no remaining active exit-file logger, timing/ablation controls,
+minidump helper, worker ticket symbols or nonlocal exit jumps. Historical
+evidence and the baseline adapter retain names needed to describe old revisions.
+
+The documented Bash stdin/binary-output limitations and Windows stderr-last /
+large-stderr deadlock limitation remain accepted. No relay or custom Bash
+builtin was added. Only evidence and the default-CI branch guard follow the
+tested cleanup source SHA; worker and client source remains unchanged.
 
 ## Comparison controls
 
