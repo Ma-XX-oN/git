@@ -183,12 +183,13 @@ static void finish_channel(struct preload_transport *connections,
 	} else {
 		result = PRELOAD_TRANSPORT_SYSTEM_ERROR;
 	}
-	if (result != PRELOAD_TRANSPORT_OK)
+	if (result != PRELOAD_TRANSPORT_OK) {
 		InterlockedCompareExchange(&connections->failure, result, 0);
-	trace_printf_key(&preload_worker_trace,
-			 "pid=%lu select done channel=%s result=%d selected=%d marker=%u\n",
-			 GetCurrentProcessId(), connections->config.channels[channel].name,
-			 result, chosen, chosen < 0 ? 0 : (unsigned char)state->marker[chosen]);
+		trace_printf_key(&preload_worker_trace,
+				 "pid=%lu channel selection failed channel=%s result=%d\n",
+				 GetCurrentProcessId(), connections->config.channels[channel].name,
+				 result);
+	}
 }
 
 /**
@@ -319,6 +320,8 @@ static void join_connector_threads(struct preload_transport *connections)
 						GetTickCount());
 
 			if (remaining <= 0) {
+				trace_printf_key(&preload_worker_trace,
+						 "pid=%lu connection timeout\n", GetCurrentProcessId());
 				InterlockedCompareExchange(&connections->failure,
 							   PRELOAD_TRANSPORT_TIMEOUT, 0);
 				continue;

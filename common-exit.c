@@ -20,7 +20,6 @@ int common_exit(const char *file, int line, int code)
 	 */
 	code &= 0xff;
 
-	preload_worker_exit_diagnostic("common_exit", code);
 	check_bug_if_BUG();
 	trace2_cmd_exit_fl(file, line, code);
 	preload_worker_on_exit(code);

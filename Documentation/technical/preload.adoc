@@ -134,8 +134,6 @@ or connector threads.
 
 `GIT_TRACE_PRELOAD` enables worker tracing. Startup, connection, malformed
 request, marker, owner-death and cleanup failures are operational diagnostics.
-Detailed investigative diagnostics are retained until migration acceptance
-has passed and are removed in a separate validated cleanup.
 
 The Bash client supports text output and commands that do not consume caller
 stdin. Relaying arbitrary streams needs an executable with the available Bash

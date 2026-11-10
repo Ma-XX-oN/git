@@ -115,7 +115,6 @@ static void close_redirected_stdio(unsigned int mask)
 	for (fd = STDOUT_FILENO; fd <= STDERR_FILENO; fd++) {
 		if (!(mask & (1U << fd)))
 			continue;
-		trace_printf_key(&preload_worker_trace, "flush output begin fd=%d\n", fd);
 		if (fflush(fd == STDOUT_FILENO ? stdout : stderr) ||
 		    preload_worker_flush_output(fd))
 			trace_printf_key(&preload_worker_trace,
@@ -126,7 +125,6 @@ static void close_redirected_stdio(unsigned int mask)
 	}
 	if (mask & 1U)
 		close(STDIN_FILENO);
-	trace_printf_key(&preload_worker_trace, "flush done\n");
 }
 
 /**
@@ -144,7 +142,6 @@ static int send_status(struct preload_transport *transport,
 	size_t offset = 0;
 	int result = -1;
 
-	trace_printf_key(&preload_worker_trace, "status-write begin rc=%d\n", status);
 	while (offset < length) {
 		ssize_t count = preload_transport_write(transport, channel,
 						       record + offset, length - offset);
@@ -157,16 +154,11 @@ static int send_status(struct preload_transport *transport,
 		}
 		offset += count;
 	}
-	trace_printf_key(&preload_worker_trace, "status-flush begin\n");
 	result = preload_transport_flush(transport, channel);
 done:
-	if (result) {
+	if (result)
 		trace_printf_key(&preload_worker_trace,
 				 "status delivery failed rc=%d errno=%d\n", status, errno);
-		preload_worker_exit_diagnostic("exit status delivery FAILED", status);
-	} else {
-		preload_worker_exit_diagnostic("exit status delivered", status);
-	}
 	preload_transport_close_channel(transport, channel);
 	return result;
 }
@@ -235,8 +227,6 @@ static int read_worker_request(struct preload_worker *worker)
 		if (!n)
 			return 124;
 		worker->used += n;
-		trace_printf_key(&preload_worker_trace, "request-read bytes=%lu used=%lu\n",
-				 (unsigned long)n, (unsigned long)worker->used);
 		complete = request_complete(worker->frame, worker->used);
 		if (complete < 0)
 			return 124;
@@ -309,7 +299,6 @@ static int finish_worker(struct preload_worker *worker, int status)
 {
 	size_t i;
 
-	trace_printf_key(&preload_worker_trace, "cleanup status=%d\n", status);
 	close_redirected_stdio(worker->redirected);
 	if (worker->transport) {
 		for (i = 0; i < WORKER_CHANNEL_COUNT; i++)
@@ -336,7 +325,6 @@ static void finish_worker_on_exit(int status)
 	struct preload_worker *worker = active_worker;
 
 	active_worker = NULL;
-	preload_worker_exit_diagnostic("preload exit callback", status);
 	if (finish_worker(worker, status) == 138 && status != 138)
 		_exit(138);
 }
@@ -368,11 +356,12 @@ static int run_worker(const char *directory)
 		goto done;
 	}
 	active_worker = &worker;
-	trace_printf_key(&preload_worker_trace, "command begin argc=%d\n", count);
 	init_git(worker.args);
 	/* Git and CRT exit handlers may still reference argv's request storage. */
 	exit(cmd_main(count, worker.args));
 done:
+	trace_printf_key(&preload_worker_trace, "worker request/startup failed status=%d errno=%d\n",
+			 status, errno);
 	status = finish_worker(&worker, status);
 	free(worker.frame);
 	return status;
@@ -405,10 +394,3 @@ int preload_worker_main(int argc, const char **argv)
 	free(directory);
 	return result;
 }
-
-#ifndef GIT_WINDOWS_NATIVE
-/** @brief POSIX workers do not use the retained Windows exit-file diagnostic. */
-void preload_worker_exit_diagnostic(const char *event UNUSED, int status UNUSED)
-{
-}
-#endif

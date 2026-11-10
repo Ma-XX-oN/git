@@ -44,11 +44,5 @@ int preload_worker_platform_stdio(void);
  * @param directory Borrowed private worker directory.
  */
 void preload_worker_platform_cleanup(const char *directory);
-/**
- * @brief Retained exit investigation diagnostic until migration acceptance.
- * @param event Borrowed event label, valid for this call.
- * @param status Exit value, or a negative value to record only the label.
- */
-void preload_worker_exit_diagnostic(const char *event, int status);
 
 #endif

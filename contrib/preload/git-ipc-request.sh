@@ -28,12 +28,9 @@ _git_preload_stop_manager() {
 _git_preload_write_context() {
   local platform=$1
   if [[ $platform == windows ]]; then
-    # Retain the cwd investigative switch until migration acceptance.
-    if [[ ${GIT_PRELOAD_ABLATION_CWD:-1} == 1 ]]; then
-      printf 'cwd\0' || return 1
-      pwd -W || return 1
-      printf '\0' || return 1
-    fi
+    printf 'cwd\0' || return 1
+    pwd -W || return 1
+    printf '\0' || return 1
     return 0
   fi
   [[ $platform == unix ]] || return 2

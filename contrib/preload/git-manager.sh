@@ -190,12 +190,9 @@ git-ipc() {
     printf 'git-ipc requires a connected allocator and at most 31 arguments\n' >&2
     printf 'GIT-IPC ERROR: invalid invocation\n' >&2; return 255
   fi
-  [[ ${GIT_PRELOAD_TRACE:-} == 1 ]] && printf 'TRACE start bashpid=%s\n' "$BASHPID" >>"$_GIT_PRELOAD_MANAGER_LOG"
   _GIT_PRELOAD_REQUEST_SEQ=$(( ${_GIT_PRELOAD_REQUEST_SEQ:-0} + 1 ))
   local marker=$(( _GIT_PRELOAD_REQUEST_SEQ % 10 ))
-  local pid i count header status line
-  local _git_preload_t_start _git_preload_t_alloc _git_preload_t_connect _git_preload_t_send _git_preload_t_drained
-  if [[ -n ${GIT_PRELOAD_TIMING_LOG:-} ]]; then _git_preload_t_start=$EPOCHREALTIME; fi
+  local pid count header status
   if ! printf 'GET\n' >&8; then
     close_fhs
     printf 'GIT-IPC ERROR: allocator GET write failed\n' >&2; return 255
@@ -204,7 +201,6 @@ git-ipc() {
     close_fhs
     printf 'GIT-IPC ERROR: allocator ID read failed\n' >&2; return 255
   }
-  [[ ${GIT_PRELOAD_TRACE:-} == 1 ]] && printf 'TRACE allocated pid=%s bashpid=%s\n' "$pid" "$BASHPID" >>"$_GIT_PRELOAD_MANAGER_LOG"
   if [[ $pid == WAIT ]]; then
     printf 'Git worker pool temporarily depleted\n' >&2
     printf 'GIT-IPC ERROR: no worker ready\n' >&2; return 255
@@ -215,7 +211,6 @@ git-ipc() {
   fi
 
   local stem; printf -v stem '%s%s' '\\.\pipe\git-preload-' "$pid"
-  if [[ -n ${GIT_PRELOAD_TIMING_LOG:-} ]]; then _git_preload_t_alloc=$EPOCHREALTIME; fi
   local pstdin="${stem}-stdin"
   local pout="${stem}-stdout"
   local perr="${stem}-stderr"
@@ -223,16 +218,11 @@ git-ipc() {
   local pcontrol="${stem}-param-env-cwd"
 
   # Open in the same order that the native worker accepts connections.
-  [[ ${GIT_PRELOAD_TRACE:-} == 1 ]] && printf 'TRACE open stdout pid=%s\n' "$pid" >>"$_GIT_PRELOAD_MANAGER_LOG"
   _git_preload_open_pipe "$fd_worker_stdout" "$pout" "$marker" 40 || { close_fhs; printf 'GIT-IPC ERROR: stdout pipe open failed\n' >&2; return 255; }
-  [[ ${GIT_PRELOAD_TRACE:-} == 1 ]] && printf 'TRACE open stderr pid=%s\n' "$pid" >>"$_GIT_PRELOAD_MANAGER_LOG"
   _git_preload_open_pipe "$fd_worker_stderr" "$perr" "$marker" 40 || { close_fhs; printf 'GIT-IPC ERROR: stderr pipe open failed\n' >&2; return 255; }
-  [[ ${GIT_PRELOAD_TRACE:-} == 1 ]] && printf 'TRACE open exit pid=%s\n' "$pid" >>"$_GIT_PRELOAD_MANAGER_LOG"
   _git_preload_open_pipe "$fd_worker_exit" "$pexit" "$marker" 40 || { close_fhs; printf 'GIT-IPC ERROR: exit-status pipe open failed\n' >&2; return 255; }
-  [[ ${GIT_PRELOAD_TRACE:-} == 1 ]] && printf 'TRACE open stdin pid=%s\n' "$pid" >>"$_GIT_PRELOAD_MANAGER_LOG"
   _git_preload_open_pipe "$fd_worker_stdin" "$pstdin" "$marker" 40 || { close_fhs; printf 'GIT-IPC ERROR: stdin pipe open failed\n' >&2; return 255; }
   _git_preload_open_pipe "$fd_worker_control" "$pcontrol" "$marker" 40 || { close_fhs; printf 'GIT-IPC ERROR: control pipe open failed\n' >&2; return 255; }
-  if [[ -n ${GIT_PRELOAD_TIMING_LOG:-} ]]; then _git_preload_t_connect=$EPOCHREALTIME; fi
   # No relay process: stdin is unavailable pending process-free handle
   # transfer. Close the worker channel after Windows has consumed the digit.
   # The worker supplies EOF from NUL. Keep this handle through output EOF
@@ -263,66 +253,18 @@ git-ipc() {
   }
   # Keep both writers open until output EOF: neither connection marker
   # nor request bytes may be discarded by a close before server consumption.
-  [[ ${GIT_PRELOAD_TRACE:-} == 1 ]] && printf 'TRACE sent stdin pid=%s\n' "$pid" >>"$_GIT_PRELOAD_MANAGER_LOG"
 
-  if [[ -n ${GIT_PRELOAD_TIMING_LOG:-} ]]; then _git_preload_t_send=$EPOCHREALTIME; fi
-  # Experimental second timing mode: stdout accumulates all available
-  # text up to a 100 ms deadline without requiring a newline or byte count.
-  # Bash read -d '' uses NUL as terminator; the currently supported
-  # text-output contract excludes NUL bytes.
-  # Both channels are timed-read directly so EOF is observable even when empty.
-  if [[ ${GIT_PRELOAD_DRAIN_MODE:-} == chunk100 ]]; then
-    local out_open=1 err_open=1 chunk read_rc stderr_chunk
-    while (( out_open || err_open )); do
-      if (( out_open )); then
-        chunk=
-        IFS= read -r -d '' -t 0.100 -u "$fd_worker_stdout" chunk
-        read_rc=$?
-        [[ -z $chunk ]] || printf '%s' "$chunk"
-        if (( read_rc == 1 )); then
-          out_open=0
-          close_fhs "$fd_worker_stdout"
-        elif (( read_rc != 0 && read_rc <= 128 )); then
-          close_fhs
-          printf 'GIT-IPC ERROR: output pipe read failed\n' >&2; return 255
-        fi
-      fi
-      if (( err_open )); then
-        stderr_chunk=
-        IFS= read -r -d '' -t 0.100 -u "$fd_worker_stderr" stderr_chunk
-        read_rc=$?
-        [[ -z $stderr_chunk ]] || printf '%s' "$stderr_chunk" >&2
-        if (( read_rc == 1 )); then
-          err_open=0
-          close_fhs "$fd_worker_stderr"
-        elif (( read_rc != 0 && read_rc <= 128 )); then
-          close_fhs
-          printf 'GIT-IPC ERROR: output pipe read failed\n' >&2; return 255
-        fi
-      fi
-    done
-    [[ ${GIT_PRELOAD_TRACE:-} == 1 ]] && printf 'TRACE drained data pid=%s\n' "$pid" >>"$_GIT_PRELOAD_MANAGER_LOG"
-    if [[ -n ${GIT_PRELOAD_TIMING_LOG:-} ]]; then _git_preload_t_drained=$EPOCHREALTIME; fi
-    close_fhs "$fd_worker_stdin" "$fd_worker_control"
-    IFS= read -r status <&"$fd_worker_exit" || { close_fhs; printf 'GIT-IPC ERROR: exit-status read failed\n' >&2; return 255; }
-    close_fhs
-    if [[ -n ${GIT_PRELOAD_TIMING_LOG:-} ]]; then
-      printf '%s,%s,%s,%s,%s,%s\n' "$_git_preload_t_start" "$_git_preload_t_alloc" "$_git_preload_t_connect" "$_git_preload_t_send" "$_git_preload_t_drained" "$EPOCHREALTIME" >>"$GIT_PRELOAD_TIMING_LOG"
-    fi
-    if [[ $status =~ ^EXIT[[:space:]]([0-9]+)$ ]]; then
-      return "${BASH_REMATCH[1]}"
-    fi
-    printf 'Invalid Git exit-code response: %s\n' "$status" >&2
-    printf 'GIT-IPC ERROR: malformed exit status\n' >&2; return 255
-  fi
-  # Alternating timed reads (1 ms each), without readiness probes or subshells.
+  # Collect text with alternating 100 ms reads, without waiting for a newline.
+  # Git Bash misclassifies these pipes, so its reads wait for EOF instead;
+  # stderr is delivered last and large unread stderr can block the command.
+  # See Documentation/technical/preload.adoc for the client limits.
   # -d '' avoids waiting for newline; EOF marks the channel complete.
   # Timeouts >128 can still provide partial data, and do not close channels.
   local out_open=1 err_open=1 chunk read_rc
   while (( out_open || err_open )); do
     if (( out_open )); then
       chunk=
-      IFS= read -r -d '' -t 0.001 -u "$fd_worker_stdout" chunk
+      IFS= read -r -d '' -t 0.100 -u "$fd_worker_stdout" chunk
       read_rc=$?
       [[ -z $chunk ]] || printf '%s' "$chunk"
       if (( read_rc == 1 )); then
@@ -335,7 +277,7 @@ git-ipc() {
     fi
     if (( err_open )); then
       chunk=
-      IFS= read -r -d '' -t 0.001 -u "$fd_worker_stderr" chunk
+      IFS= read -r -d '' -t 0.100 -u "$fd_worker_stderr" chunk
       read_rc=$?
       [[ -z $chunk ]] || printf '%s' "$chunk" >&2
       if (( read_rc == 1 )); then

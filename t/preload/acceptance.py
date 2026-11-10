@@ -76,7 +76,6 @@ def main():
     env = os.environ.copy()
     env["GIT_PRELOAD_WORKER_GIT"] = str(args.git.resolve())
     env["GIT_PRELOAD_MANAGER_PYTHON"] = sys.executable
-    env["GIT_PRELOAD_DRAIN_MODE"] = "chunk100"
     if args.trace:
         env["GIT_TRACE_PRELOAD"] = str(output / "worker-trace.log")
     command = [shutil.which("bash"), "--noprofile", "--norc", "-c", SHELL,

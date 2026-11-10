@@ -27,7 +27,30 @@ there is no direct-Git fallback. Initial local coverage passed with 45 adapted
 calls and 45 allocations. Its Bash subshell protects test-lib's descriptors and
 is excluded from latency measurements.
 
-## Controls
+## Fast-only gate and diagnostic cleanup
+
+At `453b850220`, the expanded native fast-path step passed on all three
+platforms. Linux took 66 seconds, macOS 111 seconds and Windows 118 seconds, including the selected
+existing regression assertions through real workers and 6,000 serial commands.
+The complete ordinary-Git suites were disabled for development pushes.
+Both local Make and Meson builds passed the adapter's 45 commands, with matching
+worker allocations; Linux and macOS CI also passed the Meson worker checks.
+
+The separate cleanup removes the Windows exit-file logger, per-phase success
+breadcrumbs, Bash timers/ablation switches, the obsolete 1 ms reader and the
+timeout minidump utility. The 100 ms text drain becomes the single Windows
+client reader. Git tracing retains readiness, startup/request failures,
+connection/marker errors, timeouts, owner death and output/status/cleanup errors.
+Local cleanup validation passed both builds' 32 Windows lifecycle cases,
+the 10 integrated Meson preload subtests, transport, manager re-source and
+supported Bash output cases, 45 adapted regression calls with matching
+allocations, and 6,000 serial commands in 72.592 seconds. That stress run enabled
+tracing; its median is diagnostic, not a matched performance result.
+The complete pre-cleanup CI matrix passed in run 42882122186. Rebuilt fast-path
+acceptance and paired benchmarks must pass on the cleanup revision before
+final completion.
+
+## Comparison controls
 
 The baseline is `working-version-two` (`a3843f0c5e0dd2fda2449328680f03b742bd883f`).
 Each revision uses its own matching client and manager, three workers, full cwd

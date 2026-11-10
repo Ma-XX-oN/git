@@ -5,61 +5,6 @@
 /* Owned process-lifetime path; owner monitoring remains active through CRT exit. */
 static char *preload_worker_directory;
 
-/*
- * Snapshot the trace path before Git can modify its environment. CRT shutdown
- * can run after Git's trace descriptors are closed; do not use trace_printf_key
- * or any of its file descriptors from this atexit diagnostic.
- */
-static wchar_t preload_worker_exit_log_path[4096];
-
-/*
- * Use a new Win32 handle for every diagnostic: Git may already have closed
- * Trace2 and trace_printf_key's descriptors during shutdown.
- */
-/**
- * @brief Append retained shutdown evidence without relying on trace descriptors.
- * @param event Borrowed event label, valid for this call.
- * @param status Exit value to append, or a negative value to record only the label.
- */
-void preload_worker_exit_diagnostic(const char *event, int status)
-{
-	char message[160], error_message[200];
-	HANDLE file;
-	DWORD written = 0, length;
-	int count;
-
-	if (!preload_worker_exit_log_path[0])
-		return;
-	count = status < 0 ? snprintf(message, sizeof(message), "%s\r\n", event) :
-			     snprintf(message, sizeof(message), "%s status=%d\r\n", event, status);
-	if (count < 0 || count >= sizeof(message))
-		return;
-	length = (DWORD)count;
-	file = CreateFileW(preload_worker_exit_log_path, FILE_APPEND_DATA,
-			   FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-			   NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-	if (file == INVALID_HANDLE_VALUE) {
-		snprintf(error_message, sizeof(error_message),
-			 "preload diagnostic open failed error=%lu\n", GetLastError());
-		OutputDebugStringA(error_message);
-		return;
-	}
-	if (!WriteFile(file, message, length, &written, NULL) || written != length) {
-		snprintf(error_message, sizeof(error_message),
-			 "preload diagnostic write failed error=%lu written=%lu expected=%lu\n",
-			 GetLastError(), written, length);
-		OutputDebugStringA(error_message);
-	}
-	if (!CloseHandle(file))
-		OutputDebugStringA("preload diagnostic close failed\n");
-}
-
-/** @brief Record entry to CRT shutdown for migration acceptance diagnostics. */
-static void preload_worker_atexit_log(void)
-{
-	preload_worker_exit_diagnostic("exiting...", -1);
-}
-
 /**
  * Wait for the reader to consume buffered output before closing its pipe.
  * @param fd Borrowed synchronous output descriptor, still open.
@@ -96,7 +41,6 @@ static DWORD WINAPI preload_worker_watch_owner(LPVOID context)
 	HANDLE owner = (HANDLE)context;
 	WaitForSingleObject(owner, INFINITE);
 	trace_printf_key(&preload_worker_trace, "owner died\n");
-	preload_worker_exit_diagnostic("ExitProcess owner-death", 137);
 	rmdir(preload_worker_directory);
 	ExitProcess(137);
 	return 0;
@@ -144,7 +88,7 @@ static int preload_worker_start_owner_watch(void)
 
 
 /**
- * @brief Prepare owner monitoring and retain startup diagnostics.
+ * @brief Prepare owner monitoring and the native endpoint name.
  * @param directory Borrowed existing private worker directory.
  * @param location Receives an owned native pipe-name stem on success.
  * @return Zero on success, or a worker startup status on failure.
@@ -152,21 +96,6 @@ static int preload_worker_start_owner_watch(void)
 int preload_worker_platform_prepare(const char *directory, char **location)
 {
 	preload_worker_directory = xstrdup(directory);
-	{
-		DWORD length = GetEnvironmentVariableW(L"GIT_TRACE_PRELOAD",
-						       preload_worker_exit_log_path,
-						       ARRAY_SIZE(preload_worker_exit_log_path));
-		if (!length || length >= ARRAY_SIZE(preload_worker_exit_log_path) ||
-		    !((preload_worker_exit_log_path[1] == L':' &&
-		       (preload_worker_exit_log_path[2] == L'\\' ||
-			preload_worker_exit_log_path[2] == L'/')) ||
-		      (preload_worker_exit_log_path[0] == L'\\' &&
-		       preload_worker_exit_log_path[1] == L'\\')))
-			preload_worker_exit_log_path[0] = L'\0';
-	}
-	if (atexit(preload_worker_atexit_log)) {
-		return 137;
-	}
 	if (preload_worker_start_owner_watch()) {
 		return 136;
 	}

@@ -14,7 +14,6 @@ _git_test_preload_start() {
   if { : >&9; } 2>/dev/null; then exec {saved_reply}>&9; fi
   export GIT_PRELOAD_WORKER_GIT=$GIT_TEST_PRELOAD_GIT
   export GIT_PRELOAD_MANAGER_PYTHON=$GIT_TEST_PRELOAD_PYTHON
-  export GIT_PRELOAD_DRAIN_MODE=chunk100
   source "$TEST_DIRECTORY/../contrib/preload/git-manager.sh" 3 ||
     error 'preload regression manager failed to start'
   unalias git

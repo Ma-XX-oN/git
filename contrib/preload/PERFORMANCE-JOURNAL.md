@@ -12,6 +12,20 @@ protocol and workload definitions.
 
 ## Startup-environment contract
 
+### Production diagnostic cleanup
+
+The final cleanup removes ad hoc exit-file writes, per-phase success tracing,
+Bash timing/ablation switches and the unused timeout minidump helper. It retains
+the blocking two-connector rendezvous, serial persistent allocation,
+reply-before-refill scheduling, grouped request writes and shell-pattern pipe
+validation. The adopted 100 ms text reader is the single Windows reader.
+Operational errors and marker diagnostics continue through Git tracing.
+Local cleanup checks passed both native builds and 6,000 serial commands;
+that traced stress result is not a performance comparison. Final matched
+measurements are recorded separately after the cleanup CI run.
+
+### Environment policy
+
 The Bash client inherits the environment captured by native manager startup.
 Arguments and cwd remain per command. Re-sourcing replaces the manager and its
 workers after waiting for cleanup, refreshing exported values and removals.

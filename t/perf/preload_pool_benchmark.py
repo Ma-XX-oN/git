@@ -23,7 +23,6 @@ import shutil
 import statistics
 import subprocess
 import sys
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "preload"))
 import time
 
 N = 120
@@ -53,7 +52,6 @@ SHELL = r"""
   trap _pool_ab_diagnostics EXIT
   if [[ $GIT_PRELOAD_PLATFORM == windows ]]; then
     [[ ${_GIT_PRELOAD_MANAGER_WORKERS:-} == "$count" ]] || exit 32
-    export GIT_PRELOAD_DRAIN_MODE=chunk100
     manager_log=$_GIT_PRELOAD_MANAGER_LOG
   else
     manager_log=$_GIT_PRELOAD_UNIX_MANAGER_LOG
@@ -118,12 +116,6 @@ def run_case(bash, script, git_shell, environment, workers, round_index, windows
         out, err = process.communicate(timeout=180 if windows else 240)
     except subprocess.TimeoutExpired as exc:
         if windows:
-            from windows_ipc_timeout_dumps import capture
-            try:
-                capture(process.pid, OUT / "timeout-dumps")
-            except (OSError, RuntimeError, ValueError) as dump_error:
-                print(f"GIT_PRELOAD_DUMP_FAILURE {dump_error}", flush=True)
-            # Dump before killing the entire experimental child process tree.
             subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)],
                            capture_output=True, timeout=15, check=False)
         if process.poll() is None:
@@ -132,21 +124,10 @@ def run_case(bash, script, git_shell, environment, workers, round_index, windows
         stdout = (exc.stdout or b"").decode("utf-8", "replace")
         stderr = (exc.stderr or b"").decode("utf-8", "replace")
         complete = [row for row in stdout.splitlines() if row.startswith("PAIR ")]
-        manager_trace = ""
-        if windows:
-            tmp = subprocess.run(["cygpath", "-w", "/tmp"], capture_output=True,
-                                 text=True, encoding="utf-8", check=True).stdout.strip()
-            files = sorted(Path(tmp).glob("tmp.*/manager.log"),
-                           key=lambda file: file.stat().st_mtime, reverse=True)
-            if files:
-                manager_trace = files[0].read_text(encoding="utf-8", errors="replace")
-                trace_path = OUT / "latest-timeout-manager.log"
-                trace_path.write_text(manager_trace, encoding="utf-8")
-                print(f"GIT_PRELOAD_TIMEOUT_MANAGER_LOG={trace_path}", flush=True)
         raise AssertionError(
             f"pool={workers} round={round_index} timeout; "
             f"pairs={len(complete)} last={complete[-1] if complete else None}; "
-            f"stderr={stderr[-1200:]}; manager_tail={manager_trace[-3200:]}") from exc
+            f"stderr={stderr[-1200:]}") from exc
     elapsed = time.perf_counter() - started
     output = out.decode("utf-8", "strict")
     errors = err.decode("utf-8", "strict")
@@ -213,10 +194,6 @@ def main():
     env["GIT_PRELOAD_PLATFORM"] = "windows" if windows else "unix"
     env["GIT_PRELOAD_WORKER_GIT"] = native
     env["GIT_PRELOAD_MANAGER_PYTHON"] = env.get("GIT_PRELOAD_MANAGER_PYTHON") or sys.executable
-    if windows and env.get("GIT_PRELOAD_NATIVE_TRACE_DIR"):
-        trace_dir = Path(env["GIT_PRELOAD_NATIVE_TRACE_DIR"]).resolve()
-        trace_dir.mkdir(parents=True, exist_ok=True)
-        env["GIT_PRELOAD_NATIVE_TRACE_DIR"] = str(trace_dir)
     report = {
         "sha": env.get("GITHUB_SHA"),
         "os": env.get("RUNNER_OS", sys.platform),

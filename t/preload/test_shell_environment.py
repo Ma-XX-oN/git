@@ -104,7 +104,6 @@ def main():
     env = os.environ.copy()
     env["GIT_PRELOAD_WORKER_GIT"] = str(args.git.resolve())
     env["GIT_PRELOAD_MANAGER_PYTHON"] = sys.executable
-    env["GIT_PRELOAD_DRAIN_MODE"] = "chunk100"
     command = [shutil.which("bash"), "--noprofile", "--norc", "-c", SHELL,
                "environment-restart", shell_path(root / "contrib/preload/git-manager.sh"),
                shell_path(output)]
