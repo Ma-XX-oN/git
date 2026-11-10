@@ -1,0 +1,31 @@
+name: RWF 809 MSYS2 FIFO zero-byte readiness prerequisite
+on:
+  push:
+    branches: [experiment-809-msys2-fifo-wfmo]
+    paths:
+      - experiments/issue-809/msys2_fifo_zero_read_probe.cpp
+      - .github/workflows/issue-809-msys2-fifo-wfmo.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  zero-byte-read-prerequisite:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64
+      - name: Build and execute standalone Windows named-pipe probe
+        shell: pwsh
+        run: |
+          cl.exe /nologo /std:c++17 /EHsc /W4 /WX experiments/issue-809/msys2_fifo_zero_read_probe.cpp /Fe:"$env:RUNNER_TEMP\fifo_probe.exe"
+          if ($LASTEXITCODE -ne 0) { throw "C++ probe compilation failed" }
+          & "$env:RUNNER_TEMP\fifo_probe.exe"
+          if ($LASTEXITCODE -ne 0) { throw "Zero-byte overlapped-read prerequisite failed" }
+      - name: State limitation
+        shell: pwsh
+        run: |
+          Write-Host "This verifies Windows pipe API behavior only."
+          Write-Host "It does not certify MSYS2's NtCreateNamedPipeFile handle or FIFO semantics."
