@@ -83,7 +83,9 @@ def main():
     process = subprocess.Popen(command, env=env, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE, start_new_session=os.name != "nt")
     try:
-        out, err = process.communicate(timeout=30)
+        # POSIX runs all five cases (over 6 MiB through Bash builtins).
+        # Keep Windows opt-in deadlock diagnostics bounded at 30 seconds.
+        out, err = process.communicate(timeout=30 if os.name == "nt" else 120)
     except subprocess.TimeoutExpired:
         try:
             preserve_manager_log(output)

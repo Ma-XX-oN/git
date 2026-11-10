@@ -157,6 +157,16 @@ POSIX CI must verify this fixture correction; production manager code is unchang
 The refreshed local Meson build also passed all 31 Windows worker cases and all
 12 t5790 cases.
 
+At `0d9235d1f3`, Linux and macOS passed the restart fixture and all 6,000 commands
+(9.414 and 40.707 seconds respectively, traced). Their output test completed its
+first four cases, then hit the aggregate 30-second deadline in the fifth case.
+Linux had forwarded all 1 MiB stderr and 739,235 stdout bytes; macOS had forwarded
+all 1 MiB stderr and 368,278 stdout bytes. The five-case POSIX test processes over
+6 MiB through Bash builtins; its aggregate deadline is increased to 120 seconds.
+Windows keeps its 30-second diagnostic timeout. This changes the test deadline,
+not the reader or the accepted Windows limitation; completed POSIX output/status
+checks remain required.
+
 ### Historical shadow checkpoint
 
 A new client-level output/status test reproduces a pre-existing failure with a
