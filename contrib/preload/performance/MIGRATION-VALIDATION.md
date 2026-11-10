@@ -185,6 +185,36 @@ yet been established, so this metadata must remain visible in the raw artifact.
 The full Make/Meson regression suites remain running. No diagnostic cleanup has
 been applied.
 
+## Completed pre-cleanup matrix and Windows shell correction
+
+Run 42775783963 at `3b0bdbf56b` completed successfully on Linux and macOS,
+including both complete Git suites, native acceptance and matched timing.
+Windows passed its Makefile suite and native acceptance; Meson reported 955
+passed, 108 skipped and one failed test, `t5580-unc-paths`.
+The failure occurs before any UNC operation: `winpwd: command not found` at
+line 20. Meson selected `C:/Program Files/Git/bin/sh.exe`; a local alias snippet
+fails with that installed shell and succeeds with the SDK's `sh.exe`.
+The acceptance workflow uses Meson's existing `sane_tool_path` option to select
+the SDK tools, matching its Makefile suite. It also runs t5580 immediately after
+the Meson build to detect this environment failure before the lengthy full suite.
+The UNC test and Git's path-handling implementation are unchanged. The corrected
+full Windows run is still required before investigative diagnostic removal.
+
+After reconfiguring and rebuilding the local Meson tree with
+`-Dsane_tool_path=C:/msys64/usr/bin`, the real Meson launcher passed all eight
+t5580 UNC tests (13.39 seconds, none skipped) and all 12 t5790 preload tests
+(7.97 seconds). The selected shell was `C:/msys64/usr/bin/sh.exe`. This verifies
+the identified alias failure and its tool-selection correction locally; the
+complete suite remains the acceptance gate.
+
+All three same-job comparisons at this revision used matching compiler flags,
+three workers, unchanged environments, explicit environment-policy metadata and
+disabled tracing. They measured baseline/candidate medians of 4.3145/3.2590 ms
+on Windows (-24.46%), 1.4295/0.8555 ms on Linux (-40.15%) and 3.9835/2.4150 ms
+on macOS (-39.37%). Each comparison is independent; do not pool machines or
+subtract another run's baseline. Raw samples and hardware/runtime identities are
+in `evidence/migration-3b0bdb-*-matched.json`.
+
 ### Historical shadow checkpoint
 
 A new client-level output/status test reproduces a pre-existing failure with a

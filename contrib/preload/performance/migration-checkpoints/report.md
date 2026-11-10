@@ -12,6 +12,9 @@ Each row compares revisions on one host/job. Lower latency is better.
 | Laptop / path shadows | 5.5095 | 6.1340 | +0.6245 | 111.33% | +11.33% |
 | Laptop / startup environment | 4.6580 | 4.0860 | -0.5720 | 87.72% | -12.28% |
 | Linux CI / startup environment | 1.7755 | 1.0550 | -0.7205 | 59.42% | -40.58% |
+| Windows CI / pre-cleanup | 4.3145 | 3.2590 | -1.0555 | 75.54% | -24.46% |
+| Linux CI / pre-cleanup | 1.4295 | 0.8555 | -0.5740 | 59.85% | -40.15% |
+| macOS CI / pre-cleanup | 3.9835 | 2.4150 | -1.5685 | 60.63% | -39.37% |
 
 ![Absolute and normalized medians](preload-comparison.png)
 
@@ -22,3 +25,9 @@ remain unspecified. No timings are averaged across machines.
 Laptop / startup environment: git --version; environment unchanged after manager startup. Baseline: complete environment snapshot per command; candidate: environment inherited from manager startup. This row measures the stated contract as well as implementation changes.
 
 Linux CI / startup environment: git --version; environment unchanged after manager startup. Baseline: complete environment snapshot per command; candidate: environment inherited from manager startup. This row measures the stated contract as well as implementation changes.
+
+Windows CI / pre-cleanup: git --version; environment unchanged after manager startup. Baseline: complete environment snapshot per command; candidate: environment inherited from manager startup. This row measures the stated contract as well as implementation changes.
+
+Linux CI / pre-cleanup: git --version; environment unchanged after manager startup. Baseline: complete environment snapshot per command; candidate: environment inherited from manager startup. This row measures the stated contract as well as implementation changes.
+
+macOS CI / pre-cleanup: git --version; environment unchanged after manager startup. Baseline: complete environment snapshot per command; candidate: environment inherited from manager startup. This row measures the stated contract as well as implementation changes.

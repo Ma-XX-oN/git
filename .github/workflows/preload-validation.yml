@@ -99,17 +99,24 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: |
+          meson_options=()
           if [[ $RUNNER_OS == Windows ]]; then
             . /etc/profile || exit 1
             cd "$GITHUB_WORKSPACE"
             py="$(cygpath -u "$pythonLocation")/python.exe"
             export PATH="$(cygpath -u "$pythonLocation")/Scripts:$PATH"
+            # Use the SDK shell and tools consistently with the Makefile suite.
+            # The installed Git shell does not expand t5580's winpwd alias.
+            meson_options+=("-Dsane_tool_path=$(cygpath -am /usr/bin)")
           else
             py="$pythonLocation/bin/python3"
           fi
-          "$py" -m mesonbuild.mesonmain setup build-preload -Drust=disabled -Dcurl=disabled -Dgettext=disabled -Dgit_gui=disabled -Dgitk=disabled -Dzlib_backend=zlib
+          "$py" -m mesonbuild.mesonmain setup build-preload -Drust=disabled -Dcurl=disabled -Dgettext=disabled -Dgit_gui=disabled -Dgitk=disabled -Dzlib_backend=zlib "${meson_options[@]}"
           "$py" -m mesonbuild.mesonmain compile -C build-preload -j4
-          if [[ $RUNNER_OS == Windows ]]; then export PATH="/usr/bin:$PATH"; fi
+          if [[ $RUNNER_OS == Windows ]]; then
+            export PATH="/usr/bin:$PATH"
+            "$py" -m mesonbuild.mesonmain test -C build-preload --print-errorlogs t5580-unc-paths
+          fi
           "$py" -m mesonbuild.mesonmain test -C build-preload --print-errorlogs --num-processes 4
       - name: Check out preserved baseline
         if: ${{ !cancelled() }}

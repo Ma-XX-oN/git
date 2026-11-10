@@ -51,6 +51,35 @@ validation record; this performance result does not establish native acceptance.
 Raw timing and hardware/runtime metadata are preserved in
 [migration-ba1695-linux-matched.json](performance/evidence/migration-ba1695-linux-matched.json).
 
+### Three-platform startup-environment checkpoint
+
+Run [42775783963](https://github.com/Ma-XX-oN/git/actions/runs/42775783963) at
+`3b0bdbf56b` retained independent same-job ABBA comparisons:
+
+| Platform | Baseline ms | Migrated ms | Change ms | Baseline % | Change % |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Windows | 4.3145 | 3.2590 | -1.0555 | 75.54% | -24.46% |
+| Linux | 1.4295 | 0.8555 | -0.5740 | 59.85% | -40.15% |
+| macOS | 3.9835 | 2.4150 | -1.5685 | 60.63% | -39.37% |
+
+Each row uses three workers, 240 IPC samples per variant, matching build flags,
+disabled tracing and an environment unchanged after manager startup. Baseline
+serializes the snapshot per call; the candidate inherits startup values. These
+measure the complete implementation and accepted contract together. They do not
+isolate one optimization or establish a laptop-to-CI conversion ratio.
+The Windows command median is below the original 4–5 ms CI target. Final cleanup
+requires its own measurements and acceptance.
+
+Native acceptance and 6,000 commands passed on all three platforms. Linux and
+macOS also passed both full Git suites. Windows passed the Makefile suite;
+Meson reported 955 passed and one environment failure, `winpwd: command not found`
+in t5580. This is separate from the measured command workload and still requires
+correction before investigative diagnostic removal. Raw samples, revisions and
+hardware/runtime metadata are in
+[Windows](performance/evidence/migration-3b0bdb-windows-matched.json),
+[Linux](performance/evidence/migration-3b0bdb-linux-matched.json) and
+[macOS](performance/evidence/migration-3b0bdb-macos-matched.json).
+
 ## Historical path-shadow correction checkpoint
 
 The Windows shell caches converted values for the runtime's eight standard
