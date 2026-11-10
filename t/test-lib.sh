@@ -2021,3 +2021,8 @@ test_lazy_prereq FSMONITOR_DAEMON '
 	git version --build-options >output &&
 	grep "feature: fsmonitor--daemon" output
 '
+
+if test "${GIT_TEST_PRELOAD:-0}" = 1
+then
+	. "$TEST_DIRECTORY/lib-preload.sh"
+fi

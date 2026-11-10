@@ -7,6 +7,26 @@ The [performance journal](../PERFORMANCE-JOURNAL.md) and `evidence/` preserve
 the historical measurements in this branch. The private baseline and migration
 acceptance requirements are tracked in [ticket #5](https://github.com/Ma-XX-oN/git/issues/5).
 
+## Validation order
+
+The user's final ordering correction supersedes the earlier full-suite gates
+recorded below. Development validates the actual worker fast path, supported
+existing regression cases, lifecycle/stdio/status boundaries, cleanup, 6,000
+serial commands and matched performance with Makefile and Meson builds.
+Investigative diagnostics are removed after that gate and fast-path validation
+is repeated. The complete ordinary-Git regression suites are reserved for final
+community-PR preparation, after the final fast path is working.
+
+Development pushes therefore run the fast matrix only. The workflow's manual
+`community_pr` flag defaults to false; enabling it starts a separate compatibility
+job only after the entire fast matrix succeeds. The two earlier compatibility
+runs were stopped after their passing native artifacts were saved.
+The existing Git regression adapter runs selected Git-file, alias and config
+assertions through `git-ipc`. Call logs are checked against manager allocations;
+there is no direct-Git fallback. Initial local coverage passed with 45 adapted
+calls and 45 allocations. Its Bash subshell protects test-lib's descriptors and
+is excluded from latency measurements.
+
 ## Controls
 
 The baseline is `working-version-two` (`a3843f0c5e0dd2fda2449328680f03b742bd883f`).

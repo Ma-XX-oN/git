@@ -180,8 +180,19 @@ with `--case stderr-large`, `--case out-first` or `--case err-first`; they may
 time out under the documented limitation. POSIX acceptance runs all cases.
 `t/perf/p5790-preload.sh` records paired direct and preloaded command timings.
 Timing scripts require Bash 5.0 or newer for `EPOCHREALTIME`.
-Windows, Linux and macOS acceptance includes the Git regression suite, both
-Makefile and Meson builds, ownership/cleanup and 6,000 serial commands.
+Development validation on Windows, Linux and macOS builds with Makefile and
+Meson and exercises real workers, ownership/cleanup and 6,000 serial commands.
+`t/preload/test_existing_regressions.py` runs selected existing Git-file, alias
+and configuration assertions through `git-ipc`, preserving their expected results
+and verifying actual worker allocations. Its case selections cover the serial
+text-output contract. Excluded cases are not reported as fast-path coverage.
+The test adapter isolates the client's reserved descriptors in a Bash subshell;
+use the separate paired benchmark for latency measurements.
+
+The complete ordinary-Git suites run only for final community-PR preparation,
+after the final fast-path matrix succeeds. The acceptance workflow's manual
+`community_pr` input enables that separate compatibility job; development pushes
+leave it disabled. Investigative cleanup is followed by another fast-path run.
 
 Record performance with matching client and manager versions, compiler
 options, worker counts, workload and environment policy. Disable tracing

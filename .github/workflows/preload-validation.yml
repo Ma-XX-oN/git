@@ -3,6 +3,12 @@ on:
   push:
     branches: [production/preload]
   workflow_dispatch:
+    inputs:
+      community_pr:
+        description: Run full ordinary-Git suites for final community PR preparation
+        type: boolean
+        required: false
+        default: false
 permissions:
   contents: read
 jobs:
@@ -53,7 +59,6 @@ jobs:
           fi
           make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease all
       - name: Native preload and 6000-command stress
-        if: ${{ !cancelled() }}
         shell: bash
         run: |
           if [[ $RUNNER_OS == Windows ]]; then
@@ -74,29 +79,16 @@ jobs:
           "$py" t/preload/test_manager_lifecycle.py
           "$py" t/preload/test_owner_death.py --git "$gitbin"
           "$py" t/preload/test_shell_environment.py --git "$gitbin" --output preload-results/environment
+          "$py" t/preload/test_existing_regressions.py --git "$gitbin" --output preload-results/commands
           "$py" t/preload/acceptance.py --git "$gitbin" --count 6000 --trace --output preload-results
           "$py" t/preload/test_shell_output.py --git "$gitbin" --output preload-results/output
-      - name: Preserve native evidence before the full suites
+      - name: Preserve native fast-path evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: preload-native-${{ runner.os }}-${{ github.sha }}
           path: preload-results/
-      - name: Git regression suite
-        if: ${{ !cancelled() }}
-        shell: bash
-        run: |
-          if [[ $RUNNER_OS == Windows ]]; then
-            . /etc/profile || exit 1
-            cd "$GITHUB_WORKSPACE"
-            export GIT_BUILD_DIR="$(cygpath -au "$PWD")"
-            # Git resolves script interpreters by basename. Select MSYS Perl
-            # so the send-email tests can execute their shell sendmail fixture.
-            export PATH="/usr/bin:$PATH"
-          fi
-          make -C t -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease DEFAULT_TEST_TARGET=test GIT_TEST_OPTS=--verbose-log
-      - name: Build and test Meson
-        if: ${{ !cancelled() }}
+      - name: Build Meson and verify the worker
         shell: bash
         run: |
           meson_options=()
@@ -115,18 +107,21 @@ jobs:
           "$py" -m mesonbuild.mesonmain compile -C build-preload -j4
           if [[ $RUNNER_OS == Windows ]]; then
             export PATH="/usr/bin:$PATH"
-            "$py" -m mesonbuild.mesonmain test -C build-preload --print-errorlogs t5580-unc-paths
+            gitbin="$(cygpath -w "$PWD/build-preload/git.exe")"
+            "$py" t/preload/test_windows_worker_lifecycle.py "$gitbin"
+          else
+            gitbin="$PWD/build-preload/git"
+            "$py" t/preload/test_posix_worker.py "$gitbin"
           fi
-          "$py" -m mesonbuild.mesonmain test -C build-preload --print-errorlogs --num-processes 4
+          "$py" t/preload/test_existing_regressions.py --git "$gitbin" --output preload-results/meson-commands
+          "$py" -m mesonbuild.mesonmain test -C build-preload --print-errorlogs t5790-preload
       - name: Check out preserved baseline
-        if: ${{ !cancelled() }}
         uses: actions/checkout@v4
         with:
           ref: working-version-two
           path: baseline
           persist-credentials: false
       - name: Compare baseline in the same job
-        if: ${{ !cancelled() }}
         shell: bash
         run: |
           if [[ $RUNNER_OS == Windows ]]; then
@@ -139,7 +134,7 @@ jobs:
           make -C baseline -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git$([[ $RUNNER_OS == Windows ]] && printf .exe)
           "$py" t/perf/compare_preload_versions.py --baseline baseline --output preload-comparison
       - name: Verify POSIX builds without pthread support
-        if: ${{ !cancelled() && runner.os != 'Windows' }}
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           make -j4 NO_PTHREADS=YesPlease NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease all
@@ -163,3 +158,95 @@ jobs:
             t/test-results/
             build-preload/meson-logs/
             preload-no-threads.*
+
+  regression:
+    name: Final compatibility (${{ matrix.os }})
+    needs: native
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.community_pr }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+        if: runner.os == 'Windows'
+        with:
+          # Meson's feature probes need headers and import libraries omitted
+          # from the SDK's Makefile-focused minimal subset.
+          flavor: full
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install Meson
+        shell: bash
+        run: |
+          if [[ $RUNNER_OS == Windows ]]; then
+            py="$(cygpath -u "$pythonLocation")/python.exe"
+          else
+            py="$pythonLocation/bin/python3"
+          fi
+          "$py" -m pip install meson ninja
+      - name: Ensure Bash with EPOCHREALTIME on macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          brew list bash >/dev/null 2>&1 || brew install bash
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+      - name: Build Makefile targets
+        shell: bash
+        run: |
+          # SDK profile.d scripts use nonzero tests during normal startup;
+          # source in a conditional context, then keep errexit for the build.
+          if [[ $RUNNER_OS == Windows ]]; then
+            . /etc/profile || exit 1
+            cd "$GITHUB_WORKSPACE"
+          fi
+          make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease all
+      - name: Git regression suite
+        shell: bash
+        run: |
+          if [[ $RUNNER_OS == Windows ]]; then
+            . /etc/profile || exit 1
+            cd "$GITHUB_WORKSPACE"
+            export GIT_BUILD_DIR="$(cygpath -au "$PWD")"
+            # Git resolves script interpreters by basename. Select MSYS Perl
+            # so the send-email tests can execute their shell sendmail fixture.
+            export PATH="/usr/bin:$PATH"
+          fi
+          make -C t -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease DEFAULT_TEST_TARGET=test GIT_TEST_OPTS=--verbose-log
+      - name: Build and test Meson
+        shell: bash
+        run: |
+          meson_options=()
+          if [[ $RUNNER_OS == Windows ]]; then
+            . /etc/profile || exit 1
+            cd "$GITHUB_WORKSPACE"
+            py="$(cygpath -u "$pythonLocation")/python.exe"
+            export PATH="$(cygpath -u "$pythonLocation")/Scripts:$PATH"
+            # Use the SDK shell and tools consistently with the Makefile suite.
+            # The installed Git shell does not expand t5580's winpwd alias.
+            meson_options+=("-Dsane_tool_path=$(cygpath -am /usr/bin)")
+          else
+            py="$pythonLocation/bin/python3"
+          fi
+          "$py" -m mesonbuild.mesonmain setup build-preload -Drust=disabled -Dcurl=disabled -Dgettext=disabled -Dgit_gui=disabled -Dgitk=disabled -Dzlib_backend=zlib "${meson_options[@]}"
+          "$py" -m mesonbuild.mesonmain compile -C build-preload -j4
+          if [[ $RUNNER_OS == Windows ]]; then
+            export PATH="/usr/bin:$PATH"
+            "$py" -m mesonbuild.mesonmain test -C build-preload --print-errorlogs t5580-unc-paths
+          fi
+          "$py" -m mesonbuild.mesonmain test -C build-preload --print-errorlogs --num-processes 4
+      - name: Preserve final compatibility evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: preload-regression-${{ runner.os }}-${{ github.sha }}
+          path: |
+            t/test-results/
+            build-preload/meson-logs/
