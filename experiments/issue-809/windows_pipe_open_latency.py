@@ -71,6 +71,7 @@ def source(pipe, q):
 
 def make_server(name, direction):
   handles, threads, records = [], [], []
+  states = [{"index": i, "stage": "created"} for i in range(2)]
   for idx in range(2):
     handle = K.CreateNamedPipeW(name, 2 if direction == "read" else 1,
                                 0, 2, 4096, 4096, 5000, None)
@@ -80,35 +81,42 @@ def make_server(name, direction):
   def serve(idx, h):
     rec = {"index":idx, "connected":False, "data":b""}
     try:
+      states[idx]["stage"] = "connecting"
       ok = K.ConnectNamedPipe(h, None)
       err = c.get_last_error() if not ok else 0
       if not ok and err != 535:
         rec["error"] = f"ConnectNamedPipe:{err}"
         return
       rec["connected"] = True
+      states[idx]["stage"] = "connected"
       n = w.DWORD()
       if direction == "read":
+        states[idx]["stage"] = "writing"
         buf = c.create_string_buffer(PAYLOAD)
         if K.WriteFile(h, buf, len(PAYLOAD), c.byref(n), None):
           rec["data"] = PAYLOAD[:n.value]
+          states[idx]["stage"] = "flushing"
           if not K.FlushFileBuffers(h):
             rec["flush_error"] = c.get_last_error()
         else:
           rec["error"] = f"WriteFile:{c.get_last_error()}"
       else:
+        states[idx]["stage"] = "reading"
         buf = c.create_string_buffer(64)
         if K.ReadFile(h, buf, len(buf), c.byref(n), None):
           rec["data"] = buf.raw[:n.value]
         else:
           rec["error"] = f"ReadFile:{c.get_last_error()}"
+      states[idx]["stage"] = "disconnecting"
       K.DisconnectNamedPipe(h)
     finally:
+      states[idx]["stage"] = "finished"
       records.append(rec)
   for idx, handle in enumerate(handles):
     t = threading.Thread(target=serve, args=(idx,handle), daemon=True)
     t.start()
     threads.append(t)
-  return handles, threads, records
+  return handles, threads, records, states
 
 def benchmark(bash, direction, iterations):
   p = subprocess.Popen([bash,"--noprofile","--norc","-c",SCRIPTS[direction]],
@@ -125,17 +133,22 @@ def benchmark(bash, direction, iterations):
       raise RuntimeError("Bash startup handshake incorrect")
     for index in range(iterations):
       name = r"\\.\pipe\git809-open-red-" + uuid.uuid4().hex
-      handles, threads, records = make_server(name, direction)
+      handles, threads, records, states = make_server(name, direction)
       try:
         began = time.perf_counter_ns()
         p.stdin.write(name + "\n")
         p.stdin.flush()
         got = replies.get(timeout=8).strip()
         ms = (time.perf_counter_ns() - began) / 1000000
+        if index == 0:
+          print("FIRST_TRIAL " + json.dumps({"direction": direction, "reply": got,
+                "request_ms": ms, "states_before_join": states}, sort_keys=True), flush=True)
         for t in threads:
-          t.join(timeout=3)
+          t.join(timeout=1)
         if any(t.is_alive() for t in threads):
-          raise RuntimeError(f"{index}: blocked native server, cannot close live handles")
+          safe = [{**r, "data": r["data"].hex()} for r in records]
+          raise RuntimeError(f"{index}: blocked native server after reply={got!r}, "
+                             f"request_ms={ms:.3f}, states={states}, records={safe}")
         connects = sum(r["connected"] for r in records)
         payloads = sum(r["data"] == PAYLOAD for r in records)
         expected = "OK:RWF809_OK" if direction == "read" else "OK"
@@ -165,10 +178,13 @@ def benchmark(bash, direction, iterations):
     except (BrokenPipeError,OSError):
       pass
     try:
-      p.communicate(timeout=2)
-    except (subprocess.TimeoutExpired,ValueError):
+      p.wait(timeout=2)
+    except subprocess.TimeoutExpired:
       p.kill()
-      p.communicate(timeout=2)
+      p.wait(timeout=2)
+    p.stdin.close()
+    p.stdout.close()
+    p.stderr.close()
     if p.returncode != 0:
       print("BASH_STDERR="+repr(list(errors.queue)[:10]),flush=True)
 
