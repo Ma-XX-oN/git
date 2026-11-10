@@ -53,13 +53,8 @@ Windows uses `git-preload-allocate-req-<owner-pid>` and
 `preload-worker.c` owns dispatch, request framing, command execution and ordered
 completion. `preload-worker-win32.c` and `preload-worker-posix.c` own native
 endpoint setup, standard-handle adaptation and owner monitoring.
-`preload-context.c` validates and
-applies the command's complete working-directory and environment snapshot.
-The export decoder accepts restricted Bash quoting; it never evaluates shell
-commands or substitutions.
-The export-text encoding covers exported scalar variables. A producer using
-`export -p` omits exported Bash functions; native environment-block callers can
-supply those encoded function entries directly.
+`preload-context.c` validates and applies the command's optional working
+directory. Workers inherit their environment when the manager spawns them.
 
 `preload-transport.h` exposes an opaque transport. Start prepares endpoints
 before READY, wait completes connection selection, and release cancels and
@@ -77,35 +72,19 @@ Each worker exposes stdin, stdout, stderr, exit-code and param-env-cwd
 channels. The client opens stdout, stderr, status, stdin and context in that
 order. The context request begins with a little-endian 32-bit argument count
 including `git`, followed by that many NUL-terminated UTF-8 arguments.
-Optional fields follow: `cwd` and its newline-terminated native path plus NUL,
-`env` and a little-endian byte length
-plus a double-NUL-terminated environment block, or `env-export` and a
-NUL-terminated restricted Bash export stream. Requests end with `end`
+The optional `cwd` field follows with its newline-terminated native path plus
+NUL. Requests end with `end`
 and NUL on both platforms; completion does not require closing the context
 writer. The cwd newline lets the Bash client write `pwd` output directly
 using a builtin. Remove exactly that last newline when decoding the path.
 Argument count
 and frame size are bounded by the worker.
 
-Both environment encodings have identical replacement semantics on both
-platforms. Application callers can emit the `env` block directly from their
-environment map, or use `env-export` with the declarations emitted by Bash's
-`export -p` builtin. The bundled Bash client sends cwd without either environment
-field, retaining the manager's startup environment. The double NUL belongs to the environment-block encoding,
-including an empty block; it is independent of the host operating system.
-Shell variable attributes such as readonly and integer preserve their emitted
-scalar value. Array declarations have no child-environment value and are ignored.
-Environment values supplied through the API must use the target platform's
-native path conventions. The worker does not interpret shadow-variable prefixes
-or translate MSYS paths. On Windows, launching the native manager from the
-owning Bash runtime supplies its converted startup environment directly.
-Omitting both environment fields retains the worker's environment inherited
-when the manager spawned it. That snapshot can differ from the caller's
-environment at command submission.
-
-Environment snapshots replace inherited variables, including removals. The
-Windows environment is case insensitive: duplicate names retain the first
-spelling and last value. Context is applied before ordinary Git initialization.
+All callers supply environment values when launching the manager. Replacement
+workers inherit that same startup environment; updating it requires restarting
+the manager. On Windows, launching the native manager from the owning Bash
+runtime supplies the runtime's converted native environment directly.
+The optional working directory is applied before ordinary Git initialization.
 
 Completion flushes and closes stdout and stderr before writing `EXIT n` plus
 newline on the status channel. Windows flushes the status pipe before closing
@@ -164,6 +143,7 @@ builtins; its process startup would undermine the speedup. A stream-copy builtin
 is a proposed follow-up to enable forwarding without that startup cost.
 Workers receive EOF on stdin. Bash variables cannot preserve embedded NUL
 output, so arbitrary binary streams need a client that transfers bytes directly.
+Exported Bash functions remain outside the supported client contract.
 
 The Windows Bash client can hang when stderr fills its pipe buffer while the
 client is waiting for stdout EOF. This includes large stderr-only responses and

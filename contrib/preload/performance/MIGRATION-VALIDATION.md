@@ -329,6 +329,26 @@ cleanup, confirming that stderr-only output is affected as documented.
 
 ## Final cleanup gate
 
+The user subsequently required removal of the unused per-request environment
+API as well as the Bash sender. This supersedes earlier entries retaining native
+`env`/`env-export` support. Both platforms accept cwd context only and inherit the
+manager's startup environment. The decoder, environment application routines,
+worker-only Windows snapshot mode and updater, environment comparison fixture
+and its CI invocation are removed. Ordinary Git child-process environment
+merging remains in use. Rebuilt acceptance and matched measurements must cover
+this reduced implementation before diagnostic removal.
+
+The local Makefile rebuild passed after the removal. All 32 native worker cases,
+10 cwd/inheritance regression cases, manager re-source/unset/resize/subshell
+checks and supported output cases passed. Unsupported environment tags fail
+framing validation. A 6,000-command traced run passed in 75.107 seconds with an
+8.471 ms median; this diagnostic timing has no matched baseline and is not a
+performance claim. Raw local evidence is in `Temp/preload-no-env-6000`.
+The Makefile run-command regression passed all 24 cases (including its platform
+skips). After the Meson rebuild, its real SDK-shell launcher passed t5790 (10
+subtests), t5580 (eight UNC subtests) and t0061 (20 passed subtests, four skipped).
+No compiler errors or warnings were reported by either rebuild.
+
 Investigative diagnostics remain in the source. After all native acceptance
 passes, remove the ad hoc exit-file logger, per-phase breadcrumbs/timers,
 ablation switches and obsolete dumps in a separate change. Preserve useful

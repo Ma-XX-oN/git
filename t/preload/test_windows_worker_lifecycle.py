@@ -223,11 +223,11 @@ if __name__ == "__main__":
     run_case(git, "malformed-request-closes-output", [], 124, b"", malformed=True)
     run_case(git, "missing-end-tag-closes-output", ["--version"], 124, b"",
              missing_end=True)
-    environment = b"GIT_EDITOR=native-api-value\0\0"
-    run_case(git, "binary-environment", ["var", "GIT_EDITOR"], 0,
-             b"native-api-value\n", context=b"env\0" +
-             struct.pack("<I", len(environment)) + environment)
-    run_case(git, "omitted-environment-inherits-spawn-snapshot", ["var", "GIT_EDITOR"],
+    run_case(git, "unsupported-environment-field", ["--version"], 124, b"",
+             context=b"env\0")
+    run_case(git, "unsupported-export-field", ["--version"], 124, b"",
+             context=b"env-export\0")
+    run_case(git, "environment-inherited-from-spawn", ["var", "GIT_EDITOR"],
              0, b"preload-worker-inherited-editor\n")
     for bad in (b"\xff", b"\xc0\x80", b"\xed\xa0\x80"):
         run_case(git, "invalid-utf8-argv-" + bad.hex(), [bad], 128, b"")

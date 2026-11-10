@@ -87,14 +87,11 @@ def main():
     run_case(git, "unterminated-argv", struct.pack("<I", 1) + b"git", 124, b"")
     run_case(git, "wrong-program", struct.pack("<I", 1) + b"other\0end\0", 128, b"")
     run_case(git, "malformed-context", frame(["--version"], b"unknown\0"), 124, b"")
-    run_case(git, "export-value", frame(["var", "GIT_EDITOR"],
-             b'env-export\0declare -x GIT_EDITOR="literal $(do not execute)"\n\0'),
-             0, b"literal $(do not execute)\n")
-    environment = b"GIT_EDITOR=native-api-value\0\0"
-    run_case(git, "binary-environment", frame(["var", "GIT_EDITOR"],
-             b"env\0" + struct.pack("<I", len(environment)) + environment),
-             0, b"native-api-value\n")
-    run_case(git, "omitted-environment-inherits-spawn-snapshot",
+    run_case(git, "unsupported-environment-field", frame(["--version"], b"env\0"),
+             124, b"")
+    run_case(git, "unsupported-export-field", frame(["--version"], b"env-export\0"),
+             124, b"")
+    run_case(git, "environment-inherited-from-spawn",
              frame(["var", "GIT_EDITOR"]), 0, b"preload-worker-inherited-editor\n")
     for bad in (b"\xff", b"\xc0\x80", b"\xed\xa0\x80"):
         run_case(git, "invalid-utf8-argv-" + bad.hex(),

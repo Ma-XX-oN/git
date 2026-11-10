@@ -13,60 +13,46 @@ test_expect_success 'worker mode rejects unrelated arguments' '
 	test_grep "^error: --preload-worker" err
 '
 
-test_expect_success 'context applies a complete snapshot' '
-	printf "env-export\0declare -x PRELOAD_TEST_VALUE=\"hello world\"\n\0" >frame &&
+test_expect_success 'empty context retains inherited environment' '
+	>frame &&
+	PRELOAD_TEST_VALUE=inherited test-tool preload context frame >actual &&
+	test_grep "^value=inherited$" actual
+'
+
+test_expect_success 'context applies the working directory' '
+	mkdir destination &&
+	printf "cwd\\0%s\\n\\0" "$(pwd)/destination" >frame &&
 	test-tool preload context frame >actual &&
-	test_grep "^value=hello world$" actual
+	test_grep "^cwd=.*/destination$" actual
 '
 
-test_expect_success 'context removal does not retain inherited variables' '
-	printf "env\0\002\000\000\000\000\000" >frame &&
-	PRELOAD_TEST_VALUE=old test-tool preload context frame >actual &&
-	test_grep "^value=<unset>$" actual
-'
-
-test_expect_success 'empty export snapshot removes inherited variables' '
-	printf "env-export\0\0" >frame &&
-	PRELOAD_TEST_VALUE=old test-tool preload context frame >actual &&
-	test_grep "^value=<unset>$" actual
-'
-
-test_expect_success 'small export snapshot accepts an empty value' '
-	printf "env-export\0declare -x A=\"\"\n\0" >frame &&
-	test-tool preload context frame >actual
-'
-
-test_expect_success 'export attributes retain scalar values and exclude arrays' '
-	printf "env-export\0declare -rx PRELOAD_TEST_VALUE=\"readonly\"\ndeclare -ix COUNT=\"42\"\ndeclare -ax ARRAY=([0]=\"ignored\")\n\0" >frame &&
-	test-tool preload context frame >actual &&
-	test_grep "^value=readonly$" actual
-'
-
-test_expect_success 'export names with shadow-like prefixes are ordinary variables' '
-	printf "env-export\0declare -x __git_env_PRELOAD_TEST_VALUE=\"native\"\ndeclare -x PRELOAD_TEST_VALUE=\"original\"\n\0" >frame &&
-	test-tool preload context frame >actual &&
-	test_grep "^value=original$" actual
-'
-
-test_expect_success 'binary environments do not interpret shadow-like prefixes' '
-	printf "env\0\074\000\000\000PRELOAD_TEST_VALUE=raw\0__git_env_PRELOAD_TEST_VALUE=native\0\0" >frame &&
-	test-tool preload context frame >actual &&
-	test_grep "^value=raw$" actual
-'
-
-test_expect_success 'shadows do not introduce missing original variables' '
-	printf "env-export\0declare -x __git_env_PRELOAD_TEST_VALUE=\"native\"\n\0" >frame &&
-	test-tool preload context frame >actual &&
-	test_grep "^value=<unset>$" actual
-'
-
-test_expect_success 'context rejects unterminated fields' '
-	printf "env-export\0declare -x PRELOAD_TEST_VALUE=\"x\"" >frame &&
+test_expect_success 'context rejects duplicate working directories' '
+	printf "cwd\\0%s\\n\\0cwd\\0%s\\n\\0" "$(pwd)" "$(pwd)" >frame &&
 	test_must_fail test-tool preload context frame
 '
 
-test_expect_success 'context rejects shell execution syntax' '
-	printf "env-export\0echo injected\n\0" >frame &&
+test_expect_success 'context rejects missing path newline' '
+	printf "cwd\\0%s\\0" "$(pwd)" >frame &&
+	test_must_fail test-tool preload context frame
+'
+
+test_expect_success 'context rejects unterminated fields' '
+	printf "cwd\\0%s\\n" "$(pwd)" >frame &&
+	test_must_fail test-tool preload context frame
+'
+
+test_expect_success 'context rejects empty working directory' '
+	printf "cwd\\0\\n\\0" >frame &&
+	test_must_fail test-tool preload context frame
+'
+
+test_expect_success 'context rejects invalid UTF-8' '
+	printf "cwd\\0\\377\\n\\0" >frame &&
+	test_must_fail test-tool preload context frame
+'
+
+test_expect_success 'context rejects unknown fields' '
+	printf "unknown\\0value\\0" >frame &&
 	test_must_fail test-tool preload context frame
 '
 

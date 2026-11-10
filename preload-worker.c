@@ -44,7 +44,7 @@ static uint32_t request_u32(const char *bytes)
 }
 
 /**
- * Skip a length-delimited environment block or a NUL-terminated context value.
+ * Skip the NUL-terminated working-directory value.
  * @param frame Borrowed request bytes, bounded by used.
  * @param used Number of available bytes.
  * @param tag Borrowed, already terminated context field name.
@@ -55,19 +55,8 @@ static int skip_context_value(const char *frame, size_t used,
 			      const char *tag, size_t *pos)
 {
 	const char *end;
-	size_t size;
 
-	if (!strcmp(tag, "env")) {
-		if (used - *pos < 4)
-			return 0;
-		size = request_u32(frame + *pos);
-		*pos += 4;
-		if (size > used - *pos)
-			return 0;
-		*pos += size;
-		return 1;
-	}
-	if (strcmp(tag, "cwd") && strcmp(tag, "env-export"))
+	if (strcmp(tag, "cwd"))
 		return -1;
 	end = memchr(frame + *pos, '\0', used - *pos);
 	if (!end)

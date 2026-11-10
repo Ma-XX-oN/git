@@ -6,6 +6,9 @@ with the journal so they survive temporary-directory and benchmark-folder cleanu
 The objective is **4–5 ms median on the native Windows GitHub runner**, with three
 workers and complete cwd/environment transfer. Application stdin and binary output
 retain the limitations in [the transport contract](TRANSPORT-CONTRACT.md).
+The per-call environment-transfer requirement was superseded by startup
+inheritance, as described below; earlier measurements retain their original
+protocol and workload definitions.
 
 ## Startup-environment contract
 
@@ -13,8 +16,9 @@ The Bash client inherits the environment captured by native manager startup.
 Arguments and cwd remain per command. Re-sourcing replaces the manager and its
 workers after waiting for cleanup, refreshing exported values and removals.
 This removes per-command export serialization, path-cache checks and shadow
-selection. Native API callers retain both explicit environment encodings and
-the changed-only updater. The historical checkpoints below retain their own
+selection. All callers use the manager's startup environment. Per-request
+environment encodings, their decoders and the worker-only changed-entry updater
+are removed. The historical checkpoints below retain their own
 environment policies; they are not measurements of this revised contract.
 
 Local Windows validation passed 6,000 serial client commands, manager restart,
@@ -368,9 +372,9 @@ measured revisions. The maintained protocol is documented in
 | Publish allocation reply before starting replacement | Retained on Windows; POSIX refill moved after successful reply write during review. |
 | Group request writes under one Bash redirection | Retained on Windows; applied to POSIX during protocol unification. |
 | Shell-pattern validation of pipe names | Retained in the Windows Bash connection helper. |
-| Changed-only Windows environment updates | Retained through `mingw_replace_environment`; keep first spelling and last value. |
+| Changed-only Windows environment updates | Superseded by startup environment inheritance; the worker-only replacement code is removed. Historical gains remain recorded. |
 | Output closure before flushed status, ordinary process exit | Shared completion/status helpers extracted; POSIX nonlocal jumps removed during review. |
-| Process-free Bash command context | Both clients inherit manager-startup environment and send cwd per command; native application callers retain both explicit environment encodings. |
+| Process-free Bash command context | All callers inherit manager-startup environment and send cwd per command. |
 
 Rejected bulk environment replacement, helper-inlining and incomplete-context
 ablations remain historical experiments; they are not production optimizations.

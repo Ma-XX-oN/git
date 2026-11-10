@@ -138,10 +138,6 @@ jobs:
           fi
           make -C baseline -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git$([[ $RUNNER_OS == Windows ]] && printf .exe)
           "$py" t/perf/compare_preload_versions.py --baseline baseline --output preload-comparison
-          if [[ $RUNNER_OS == Windows ]]; then
-            make -C baseline -f experiments/issue-809/performance/support/native-context-probe.mk -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease experiments/issue-809/performance/support/native-context-probe.exe
-            "$py" t/preload/compare_context.py --before baseline/experiments/issue-809/performance/support/native-context-probe.exe --after t/helper/test-tool.exe --output preload-context-results
-          fi
       - name: Verify POSIX builds without pthread support
         if: ${{ !cancelled() && runner.os != 'Windows' }}
         shell: bash
@@ -163,7 +159,6 @@ jobs:
           name: preload-${{ runner.os }}-${{ github.sha }}
           path: |
             preload-results/
-            preload-context-results/
             preload-comparison/
             t/test-results/
             build-preload/meson-logs/
