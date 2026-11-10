@@ -326,6 +326,32 @@ Raw samples, flags and the metadata available in that run are preserved in
 Compare its baseline and candidate within that job; do not compare its absolute
 times with a different Linux runner or the laptop.
 
+The completed Windows comparison at that same revision measured 3.9595 ms
+baseline versus 3.9540 ms migrated: 99.86% of baseline (-0.14%, -0.0055 ms).
+This difference does not establish a meaningful speedup. Windows native stress
+passed, while full-suite acceptance remains open because of the send-email
+test environment and missing minimal-SDK Meson dependencies.
+The macOS job passed both complete suites and measured 4.4125 ms versus
+4.0810 ms: 92.49% of its matched baseline (-7.51%, -0.3315 ms).
+Raw Windows and macOS samples are preserved alongside the Linux evidence in
+`performance/evidence/migration-87-*-matched.json`.
+The [checkpoint graphs and table](performance/migration-checkpoints/report.md)
+show these same-job comparisons plus the initial laptop extraction. They are
+intermediate migration evidence; final post-cleanup results remain required.
+
+### Reviewed-worker checkpoint on the Windows laptop
+
+The same-laptop ABBA comparison for `209625fd56` measured 4.8295 ms baseline
+versus 4.8730 ms migrated: 100.90% of baseline (+0.90%, +0.0435 ms).
+This is a small regression, not a gain. Both revisions used their matching
+clients, three workers, full context, disabled tracing and identical compiler
+flags. The combined review changes include explicit manager ownership during
+startup and reply publication, parser function splits and export attributes;
+this comparison does not isolate their individual costs. The POSIX request-FD
+change has no Windows timed-path effect.
+Raw samples and the laptop CPU/runtime identities are in
+[migration-209625-windows-laptop-matched.json](performance/evidence/migration-209625-windows-laptop-matched.json).
+
 An additional temporary-client test replaced the PID regex with
 `[[ $pid == [1-9]*([0-9]) ]]` and the status regex/capture with
 `[[ $status == EXIT[[:space:]]+([0-9]) ]]` followed by `${status:5}`.

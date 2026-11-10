@@ -29,6 +29,9 @@ time. Startup uses `--preload-worker`; active launchers use feature names.
 | Laptop, native Windows Makefile build | 5.0670 ms | 5.1705 ms | +0.1035 ms | 102.04% | +2.04% |
 | Linux CI, candidate `2b45a20a71` | 1.7930 ms | 1.7595 ms | -0.0335 ms | 98.13% | -1.87% |
 | Linux CI, candidate `87a4adb99b` | 1.3620 ms | 1.2270 ms | -0.1350 ms | 90.09% | -9.91% |
+| Windows CI, candidate `87a4adb99b` | 3.9595 ms | 3.9540 ms | -0.0055 ms | 99.86% | -0.14% |
+| macOS CI, candidate `87a4adb99b` | 4.4125 ms | 4.0810 ms | -0.3315 ms | 92.49% | -7.51% |
+| Laptop, candidate `209625fd56` | 4.8295 ms | 4.8730 ms | +0.0435 ms | 100.90% | +0.90% |
 
 The laptop difference is about 2%; it is not recorded as a gain. The raw laptop
 comparison is in [windows-before-cleanup.json](../../../t/perf/preload-evidence/windows-before-cleanup.json).
@@ -77,6 +80,14 @@ send-email failure selected native MinGW Perl; the test's shell sendmail
 fixture requires MSYS Perl. The workflow selects it for the test suites and
 captures verbose logs. Windows acceptance remains open until the corrected
 workflow passes.
+
+The local send-email suite passes all 217 cases (including its expected
+breakage) with MSYS Perl first on PATH. The full SDK's profile was also
+reproduced exiting during normal profile.d tests under Bash errexit; sourcing
+it in a conditional context completes initialization, preserving errexit for
+subsequent build/test commands. Run 42733857727 validated the persistent POSIX
+client through native stress on Linux and macOS; its Windows job stopped in
+profile initialization before compilation and provides no worker acceptance.
 
 Local review validation expanded to 31 Windows worker cases and 28 exact
 environment comparisons, including native API environment frames, omitted

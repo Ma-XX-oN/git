@@ -70,8 +70,9 @@ def plot_comparisons(reports, labels, output):
     handles, names = axes[0].get_legend_handles_labels()
     figure.legend(handles, names, loc="outside lower center", ncol=2, frameon=False)
     figure.suptitle("Preload migration: each pair measured on the same host/job")
-    for extension in ("png", "svg"):
-        figure.savefig(output / ("preload-comparison." + extension), dpi=180)
+    figure.savefig(output / "preload-comparison.png", dpi=180)
+    with (output / "preload-comparison.svg").open("w", encoding="utf-8", newline="\n") as svg:
+        figure.savefig(svg, format="svg")
     plt.close(figure)
 
 
@@ -103,8 +104,9 @@ def write_report(reports, labels, output):
               "Full machine metadata, compiler flags, source digests and raw samples are in",
               "[graph-evidence.json](graph-evidence.json). Missing historical hardware fields",
               "remain unspecified. No timings are averaged across machines.", ""]
-    (output / "report.md").write_text("\n".join(lines), encoding="utf-8")
-    (output / "graph-evidence.json").write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
+    (output / "report.md").write_text("\n".join(lines), encoding="utf-8", newline="\n")
+    (output / "graph-evidence.json").write_text(
+        json.dumps(evidence, indent=2) + "\n", encoding="utf-8", newline="\n")
 
 
 def main():

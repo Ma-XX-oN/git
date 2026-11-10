@@ -45,14 +45,16 @@ jobs:
       - name: Build Makefile targets
         shell: bash
         run: |
-          if [[ $RUNNER_OS == Windows ]]; then . /etc/profile; fi
+          # SDK profile.d scripts use nonzero tests during normal startup;
+          # source in a conditional context, then keep errexit for the build.
+          if [[ $RUNNER_OS == Windows ]]; then . /etc/profile || exit 1; fi
           make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease all
       - name: Native preload and 6000-command stress
         if: ${{ !cancelled() }}
         shell: bash
         run: |
           if [[ $RUNNER_OS == Windows ]]; then
-            . /etc/profile
+            . /etc/profile || exit 1
             py="$(cygpath -u "$pythonLocation")/python.exe"
             gitbin="$(cygpath -w "$PWD/git.exe")"
             helper="$(cygpath -w "$PWD/t/helper/test-tool.exe")"
@@ -80,7 +82,7 @@ jobs:
         shell: bash
         run: |
           if [[ $RUNNER_OS == Windows ]]; then
-            . /etc/profile
+            . /etc/profile || exit 1
             export GIT_BUILD_DIR="$(cygpath -au "$PWD")"
             # Git resolves script interpreters by basename. Select MSYS Perl
             # so the send-email tests can execute their shell sendmail fixture.
@@ -92,7 +94,7 @@ jobs:
         shell: bash
         run: |
           if [[ $RUNNER_OS == Windows ]]; then
-            . /etc/profile
+            . /etc/profile || exit 1
             py="$(cygpath -u "$pythonLocation")/python.exe"
             export PATH="$(cygpath -u "$pythonLocation")/Scripts:$PATH"
           else
@@ -114,7 +116,7 @@ jobs:
         shell: bash
         run: |
           if [[ $RUNNER_OS == Windows ]]; then
-            . /etc/profile
+            . /etc/profile || exit 1
             py="$(cygpath -u "$pythonLocation")/python.exe"
           else
             py="$pythonLocation/bin/python3"
