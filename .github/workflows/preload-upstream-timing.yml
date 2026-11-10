@@ -41,11 +41,12 @@ jobs:
       - name: Build migrated and upstream Git in this job
         shell: bash
         run: |
+          target=git
           if [[ $RUNNER_OS == Windows ]]; then
             . /etc/profile || exit 1
             cd "$GITHUB_WORKSPACE"
+            target=git.exe
           fi
-          target=git$([[ $RUNNER_OS == Windows ]] && printf .exe)
           make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease "$target"
           make -C upstream -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease "$target"
           ./"$target" --version
