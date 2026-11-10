@@ -147,6 +147,16 @@ the early artifacts contain first and second READY records with empty stdout
 and stderr. Full job logs are not yet available. These are acceptance failures
 under investigation, not a passed gate; investigative diagnostics stay enabled.
 
+The diagnostic rerun at `fdcc645f15` identified `phase=unset-reference status=21`
+on both POSIX runners: the direct Git reference failed before manager restart.
+Git can return no editor after GIT_EDITOR is unset in a noninteractive environment.
+A controlled local invocation with TERM=dumb and no editor configuration also
+returned 1 with no output. The fixture now supplies an explicit fallback EDITOR;
+its native Windows restart/unset/resize/subshell checks pass with TERM=dumb.
+POSIX CI must verify this fixture correction; production manager code is unchanged.
+The refreshed local Meson build also passed all 31 Windows worker cases and all
+12 t5790 cases.
+
 ### Historical shadow checkpoint
 
 A new client-level output/status test reproduces a pre-existing failure with a

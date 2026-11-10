@@ -36,6 +36,8 @@ check_retired_session() {
     [[ ! -d $entry ]] || return 1
   done
 }
+# A noninteractive runner may have no default editor after GIT_EDITOR is unset.
+export EDITOR='fallback editor'
 export GIT_EDITOR='initial editor'
 source "$1" 2 || exit 10
 session_paths
