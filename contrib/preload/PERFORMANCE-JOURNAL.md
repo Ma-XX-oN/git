@@ -7,7 +7,25 @@ The objective is **4–5 ms median on the native Windows GitHub runner**, with t
 workers and complete cwd/environment transfer. Application stdin and binary output
 retain the limitations in [the transport contract](TRANSPORT-CONTRACT.md).
 
-## Unmeasured path-shadow correction
+## Startup-environment contract
+
+The Bash client inherits the environment captured by native manager startup.
+Arguments and cwd remain per command. Re-sourcing replaces the manager and its
+workers after waiting for cleanup, refreshing exported values and removals.
+This removes per-command export serialization, path-cache checks and shadow
+selection. Native API callers retain both explicit environment encodings and
+the changed-only updater. The historical checkpoints below retain their own
+environment policies; they are not measurements of this revised contract.
+
+Local Windows validation passed 6,000 serial client commands, manager restart,
+environment refresh/removal, resizing, subshell isolation, native transport,
+owner death and startup/shutdown ownership checks. The traced stress median was
+7.028 ms; tracing and the absence of a matched baseline prevent a performance
+claim from that number. A new untraced ABBA comparison is required, with an
+unchanged environment and the two revisions' different capture policies stated
+explicitly in its metadata.
+
+## Historical path-shadow correction checkpoint
 
 The Windows shell caches converted values for the runtime's eight standard
 path variables through its own `/usr/bin/cygpath`. Exported `__git_env_NAME`
@@ -18,11 +36,35 @@ with Bash builtins. A changed value invokes one conversion process.
 
 The cache test verifies eight initial conversions, zero on an unchanged refresh
 and one after a single value changes. The command path gains eight comparisons,
-the shadow declarations and worker-side selection. No latency improvement is
-claimed: these costs need a new matched baseline comparison. The correction
+the shadow declarations and worker-side selection. The correction
 allows a small shell alias to complete with status 7 where the raw POSIX PATH
 previously prevented native shell lookup. The larger dual-stream alias remains
 an unresolved acceptance failure, recorded in the migration validation notes.
+
+The same-laptop ABBA comparison at `20a957982a` measured 5.5095 ms for
+`working-version-two` and 6.1340 ms for the candidate: +0.6245 ms, +11.33%, or
+111.33% of baseline latency. Each variant used 240 serial IPC samples, three
+workers, matching build flags, full context and tracing disabled. The host was
+DESKTOP-P0W3R, an AMD Ryzen 7 5700U. This is a regression for the complete
+migration checkpoint; it does not isolate shadow handling from earlier changes.
+Baseline round medians also varied from 5.7415 to 5.1300 ms, so retain that drift
+when interpreting the aggregate. Raw timings and runtime metadata are in
+[migration-20a957-windows-laptop-matched.json](performance/evidence/migration-20a957-windows-laptop-matched.json).
+
+Two diagnostic ABBA comparisons then held the binary and exported shadows
+constant. Suppressing only unchanged refresh checks after startup measured
+6.1865 ms versus 5.7700 ms, isolating 0.4165 ms of refresh overhead in that run.
+Replacing the individual checks with one quoted snapshot comparison measured
+6.0035 ms versus 5.6820 ms: a reduction of 0.3215 ms (5.36%) in that separate run.
+The combined key includes each variable's set/unset flag and quoted value, so
+empty, missing and delimiter-containing values remain distinguishable. Changed
+snapshots still refresh the individual entries; unchanged calls return early.
+The conversion-count and readonly/empty/unset cache tests continue to pass.
+These isolation results are not comparisons with `working-version-two` and
+must not be pooled with its measurements. Raw samples and exact benchmark shell
+overrides are retained in
+[refresh isolation](performance/evidence/migration-20a957-refresh-isolation.json)
+and [combined-check isolation](performance/evidence/migration-20a957-combined-refresh-isolation.json).
 
 ## Comparison rules
 
@@ -273,7 +315,7 @@ measured revisions. The maintained protocol is documented in
 | Shell-pattern validation of pipe names | Retained in the Windows Bash connection helper. |
 | Changed-only Windows environment updates | Retained through `mingw_replace_environment`; keep first spelling and last value. |
 | Output closure before flushed status, ordinary process exit | Shared completion/status helpers extracted; POSIX nonlocal jumps removed during review. |
-| Process-free Bash environment capture | Both clients retain builtin `export -p`; native application callers can use the environment-block representation. |
+| Process-free Bash command context | Both clients inherit manager-startup environment and send cwd per command; native application callers retain both explicit environment encodings. |
 
 Rejected bulk environment replacement, helper-inlining and incomplete-context
 ablations remain historical experiments; they are not production optimizations.

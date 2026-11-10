@@ -79,7 +79,11 @@ def main():
     windows = os.name == "nt"
     report = {"baseline": "working-version-two", "workers": 3,
               "host": os.environ.get("COMPUTERNAME", os.uname().nodename if not windows else ""),
-              "platform": sys.platform, "tracing": False, "full_context": True,
+              "platform": sys.platform, "tracing": False,
+              "workload": "git --version; environment unchanged after manager startup",
+              "environment_policy": {
+                  "baseline": "complete environment snapshot per command",
+                  "candidate": "environment inherited from manager startup"},
               "machine": machine_metadata(),
               "order": ["baseline", "candidate", "candidate", "baseline"], "rounds": [],
               "variants": {}}

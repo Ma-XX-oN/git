@@ -233,6 +233,9 @@ def run(args):
             while b"\n" in incoming:
                 line, _, remainder = incoming.partition(b"\n")
                 incoming = bytearray(remainder)
+                if line == b"STOP":
+                    print("MANAGER_STOP_REQUEST", flush=True)
+                    return
                 answer = pool.allocate() if line == b"GET" else "INVALID"
                 payload = (answer + "\n").encode("utf-8")
                 written = os.write(response_fd, payload)

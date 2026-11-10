@@ -42,26 +42,16 @@ test_expect_success 'export attributes retain scalar values and exclude arrays' 
 	test_grep "^value=readonly$" actual
 '
 
-test_expect_success 'workers select platform values from export shadows' '
+test_expect_success 'export names with shadow-like prefixes are ordinary variables' '
 	printf "env-export\0declare -x __git_env_PRELOAD_TEST_VALUE=\"native\"\ndeclare -x PRELOAD_TEST_VALUE=\"original\"\n\0" >frame &&
 	test-tool preload context frame >actual &&
-	if test_have_prereq MINGW
-	then
-		test_grep "^value=native$" actual
-	else
-		test_grep "^value=original$" actual
-	fi
+	test_grep "^value=original$" actual
 '
 
-test_expect_success 'binary environments support the same shadow selection' '
+test_expect_success 'binary environments do not interpret shadow-like prefixes' '
 	printf "env\0\074\000\000\000PRELOAD_TEST_VALUE=raw\0__git_env_PRELOAD_TEST_VALUE=native\0\0" >frame &&
 	test-tool preload context frame >actual &&
-	if test_have_prereq MINGW
-	then
-		test_grep "^value=native$" actual
-	else
-		test_grep "^value=raw$" actual
-	fi
+	test_grep "^value=raw$" actual
 '
 
 test_expect_success 'shadows do not introduce missing original variables' '

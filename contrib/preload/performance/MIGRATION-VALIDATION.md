@@ -113,6 +113,32 @@ samples, compiler flags, source revisions and source-report digests.
 
 ## Windows Bash environment conversion
 
+### Startup-environment contract
+
+The Bash client captures its environment through ordinary native manager startup.
+It sends arguments and cwd per command, without an environment snapshot, path
+shadows or per-command conversion checks. Re-sourcing `git-manager.sh` sends
+`STOP` on the existing allocation channel, waits for pool cleanup and starts a
+replacement with the current exported environment. Exported changes and removals
+become visible after that restart. Native API callers retain the optional `env`
+and `env-export` encodings and supply target-native path values themselves.
+The native Make rebuild and real Windows re-source test passed, including
+changed/unset values, worker-count replacement, retired endpoint cleanup and
+subshell isolation. The allocator's 6,000-request, shortage, held-probe and
+shutdown tests also passed after adding STOP. Broader migration gates remain
+separate from these results.
+
+The rebuilt startup-environment version subsequently passed 31 native Windows
+worker tests, 28 baseline context comparisons, all 12 t5790 tests, native
+transport, owner death and both locally importable manager ownership/lifecycle
+backends. A 6,000-command client run with worker tracing passed in 64.966 seconds
+with a 7.028 ms median. This is diagnostic stress timing, not a matched gain.
+Its local raw CSV, manager log, worker trace and binary identity are in
+`Temp/preload-startup-environment-6000`; exact-revision CI evidence remains
+required before diagnostic removal.
+
+### Historical shadow checkpoint
+
 A new client-level output/status test reproduces a pre-existing failure with a
 small shell alias: `export -p` sends a colon-separated MSYS PATH, native shell
 lookup returns NULL, and `git_shell_path()` faults before status delivery.
@@ -132,6 +158,39 @@ stderr; adding a readiness probe did not resolve it. These temporary diagnostic
 probes did not alter the production reader. Native worker backpressure tests
 still pass. This failure is not evidence that full Bash output acceptance has
 passed, and investigative diagnostics remain in place.
+
+The descriptor probe tests the actual output descriptors with Bash's
+`[[ -p /dev/fd/N ]]` and `[[ -f /dev/fd/N ]]` predicates. Both report regular
+files, and the bounded variant reads 4,096 stdout bytes before blocking on the
+stderr read. Thus empty forwarded-output files do not establish that the client
+received no bytes: the client prints a chunk only after its read returns.
+The [Bash manual](https://www.gnu.org/s/bash/manual/html_node/Bash-Builtins.html)
+specifies that `read -t` does not time out regular files. The exact MSYS runtime
+classification path has not been established; do not describe an upstream
+runtime defect as proven. The kernel handles remain blocking named pipes:
+insufficient buffer space blocks the writer rather than discarding bytes.
+
+The test writes 1 MiB of zeros to stdout followed by 1 MiB to stderr, then exits
+7, and repeats with the stream order reversed. With the unbounded chunk reader,
+waiting for stdout EOF while stderr fills explains the observed deadlock. The
+two output streams have independent ordering; a reader must drain both without
+waiting indefinitely for the other stream's EOF. The standalone output test has
+a 30-second deadline and terminates only its owned process tree on timeout.
+
+Local builtin capability checks used
+`enable -f /nonexistent/preload.so preload` in both
+`C:/Program Files/Git/usr/bin/bash.exe` (5.2.37(1)-release, x86_64-pc-msys) and
+`C:/msys64/usr/bin/bash.exe`. Both returned `dynamic loading not available`.
+This establishes that these installed binaries cannot load an addon through
+`enable -f`; it does not establish a restriction on every possible Bash build.
+No installed Bash binary was modified.
+
+An earlier requirement to observe exported changes on each call led to the
+shadow checkpoint above. It is superseded by the startup-environment contract:
+changes require re-sourcing. Removing harmless shadow metadata was not required.
+A drive-prefix-only translation is insufficient for runtime mount mappings and
+path lists. The client uses each platform's installed Bash; builtin work is
+explicitly deferred.
 
 The shell client should invoke its own `cygpath`, as requested, so conversion
 uses the caller's installation and mount table. A single path uses `-w`; a path
@@ -167,6 +226,28 @@ steady-state command timings and preserve new matched evidence after a fix.
 References: [Git Bash standard environment table](https://github.com/git-for-windows/msys2-runtime/blob/main/winsup/cygwin/environ.cc),
 [environment wrapper](https://github.com/git-for-windows/msys2-runtime/blob/main/winsup/cygwin/external.cc),
 and [MSYS path conversion rules](https://www.msys2.org/docs/filesystem-paths/).
+
+## Documented Windows output limitation
+
+The Windows Bash large-stderr deadlock is an accepted client limitation for this
+migration. It is not a 64 KiB cap on total output: the pipe requests that buffer
+size, and large stdout-only output can complete. Large stderr-only output can
+also deadlock while the client waits for stdout EOF. The limit depends on stream
+order and unread stderr; it is not data loss or a portable safe byte threshold.
+Use ordinary Git for commands with potentially substantial stderr.
+
+Normal Windows output acceptance checks 4 KiB per stream and 1 MiB stdout-only,
+including nonzero exit status and exact bytes. POSIX output acceptance retains
+all large-stream cases. The diagnostic cases remain available with
+`test_shell_output.py --case stderr-large`, `--case out-first` or
+`--case err-first`; they have a 30-second deadline and owned-tree cleanup.
+The default Windows test reports their skip explicitly. This does not claim
+that the unsupported cases pass.
+
+Local validation of this boundary passed the supported small-mixed and
+stdout-large cases with exact bytes and status 7. The separately selected
+stderr-large diagnostic timed out at 30 seconds and completed its owned-tree
+cleanup, confirming that stderr-only output is affected as documented.
 
 ## Final cleanup gate
 

@@ -50,7 +50,7 @@ PIPE_TYPE_BYTE=0
 PIPE_WAIT=0
 ERROR_PIPE_CONNECTED=535
 ERROR_NO_DATA=232
-POLL_SECONDS=10
+POLL_SECONDS=0.25
 FILE_FLAG_OVERLAPPED=0x40000000
 ERROR_IO_PENDING=997
 ERROR_OPERATION_ABORTED=995
@@ -558,7 +558,7 @@ def wait_operation(port, pipe, closing):
 
 
 def read_allocation_request(port, inbound, closing):
-  """Read exactly one bounded serial GET line.
+  """Read one bounded serial GET or STOP line without changing GET's fast path.
 
   Parameters
   ----------
@@ -567,25 +567,32 @@ def read_allocation_request(port, inbound, closing):
   inbound : Pipe
       Borrowed selected request channel; no prior read may remain pending.
   closing : threading.Event
-      Manager shutdown flag.
+      Manager shutdown flag, set after a complete STOP request.
 
   Returns
   -------
   bool
-      True for a complete GET line, False on shutdown; malformed input raises.
+      True for a complete GET line, False for STOP or shutdown; malformed input raises.
   """
   frame=bytearray()
-  while len(frame)<4:
-    inbound.issue("read",size=4-len(frame))
+  commands=(b"GET\n",b"STOP\n")
+  while len(frame)<5:
+    inbound.issue("read",size=4-len(frame) if len(frame)<4 else 1)
     count=wait_operation(port,inbound,closing)
     if count is None:
       return False
     if count<=0:
       raise ConnectionError("persistent GET channel closed")
     frame.extend(inbound.buffer.raw[:count])
-    if not b"GET\n".startswith(frame):
-      raise ValueError("invalid persistent GET line")
-  return True
+    if not any(command.startswith(frame) for command in commands):
+      raise ValueError("invalid persistent allocation line")
+    if frame==b"GET\n":
+      return True
+    if frame==b"STOP\n":
+      print("MANAGER_STOP_REQUEST",flush=True)
+      closing.set()
+      return False
+  raise ValueError("invalid persistent allocation line")
 
 
 def wait_ready_worker(port, pool):
@@ -743,12 +750,12 @@ def main():
     tmp.write_text(json.dumps(record)+"\n",encoding="utf-8")
     tmp.replace(ready_file)
     print("READY "+json.dumps(record),flush=True)
-    while K.WaitForSingleObject(owner,POLL_SECONDS*1000)==WAIT_TIMEOUT:
-      if not allocator.is_alive():
+    while not pool.closing.is_set() and K.WaitForSingleObject(owner,int(POLL_SECONDS*1000))==WAIT_TIMEOUT:
+      if not allocator.is_alive() and not pool.closing.is_set():
         raise RuntimeError("allocation server unexpectedly stopped")
       if pool.errors:
         raise RuntimeError("worker initialization failed: "+repr(pool.errors))
-    print("OWNER_EXIT "+str(args.owner_pid),flush=True)
+    print("MANAGER_STOP" if pool.closing.is_set() else "OWNER_EXIT "+str(args.owner_pid),flush=True)
   finally:
     ready_file.unlink(missing_ok=True)
     pool.close()

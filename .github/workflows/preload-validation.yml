@@ -64,7 +64,6 @@ jobs:
             helper="$(cygpath -w "$PWD/t/helper/test-tool.exe")"
             "$py" t/preload/test_windows_worker_lifecycle.py "$gitbin"
             "$py" t/preload/test_windows_allocator.py
-            "$py" t/preload/test_shell_environment.py
           else
             py="$pythonLocation/bin/python3"
             gitbin="$PWD/git"
@@ -74,7 +73,9 @@ jobs:
           "$py" t/preload/test_transport.py "$helper"
           "$py" t/preload/test_manager_lifecycle.py
           "$py" t/preload/test_owner_death.py --git "$gitbin"
+          "$py" t/preload/test_shell_environment.py --git "$gitbin" --output preload-results/environment
           "$py" t/preload/acceptance.py --git "$gitbin" --count 6000 --trace --output preload-results
+          "$py" t/preload/test_shell_output.py --git "$gitbin" --output preload-results/output
       - name: Preserve native evidence before the full suites
         if: always()
         uses: actions/upload-artifact@v4

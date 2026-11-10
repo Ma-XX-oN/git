@@ -2,48 +2,10 @@
 #include "preload-context.h"
 #include "utf8.h"
 #include "strvec.h"
-#include "strbuf.h"
 
 #ifdef GIT_WINDOWS_NATIVE
 # include <windows.h>
 
-/**
- * @brief Select native shadow values and discard sender-only cache metadata.
- * @param environment Owned validated NAME=VALUE entries, updated in place.
- *
- * A __git_env_NAME entry overrides an existing ASCII NAME, case insensitively.
- * Shadows cannot introduce a variable absent from the original snapshot. The
- * original key spelling is preserved; later shadows win. All shadow entries
- * are removed before applying the process environment.
- */
-static void select_native_environment(struct strvec *environment)
-{
-	size_t i, j;
-
-	for (i = 0; i < environment->nr; i++) {
-		const char *shadow, *equal;
-		size_t length;
-
-		if (!skip_prefix(environment->v[i], "__git_env_", &shadow))
-			continue;
-		equal = strchr(shadow, '=');
-		length = equal - shadow;
-		for (j = 0; j < environment->nr; j++) {
-			const char *entry = environment->v[j];
-			char *replacement;
-
-			if (starts_with(entry, "__git_env_") ||
-			    strncasecmp(entry, shadow, length) || entry[length] != '=')
-				continue;
-			replacement = xstrfmt("%.*s%s", (int)length, entry, equal);
-			strvec_replace(environment, j, replacement);
-			free(replacement);
-		}
-	}
-	for (i = environment->nr; i; i--)
-		if (starts_with(environment->v[i - 1], "__git_env_"))
-			strvec_remove(environment, i - 1);
-}
 #endif
 
 /**
@@ -124,7 +86,6 @@ static int apply_environment_block(const char *buf, size_t len)
 		strvec_push(&environment, buf + offset);
 		offset += strlen(buf + offset) + 1;
 	}
-	select_native_environment(&environment);
 	result = mingw_replace_environment(environment.v);
 	strvec_clear(&environment);
 	return result;
@@ -136,10 +97,6 @@ static int apply_environment_block(const char *buf, size_t len)
 		const char *equal = strchr(entry, '=');
 		char *key;
 		size_t name_len = (size_t)(equal - entry);
-		if (starts_with(entry, "__git_env_")) {
-			offset += strlen(entry) + 1;
-			continue;
-		}
 		key = malloc(name_len + 1);
 		if (!key)
 			return -1;
@@ -462,7 +419,6 @@ static int apply_export_pairs(const struct export_pair *pairs, size_t nr)
 
 	for (i = 0; i < nr; i++)
 		strvec_pushf(&environment, "%s=%s", pairs[i].name, pairs[i].value);
-	select_native_environment(&environment);
 	result = mingw_replace_environment(environment.v);
 	strvec_clear(&environment);
 	return result;
@@ -470,8 +426,7 @@ static int apply_export_pairs(const struct export_pair *pairs, size_t nr)
 	if (clear_worker_environment())
 		return -1;
 	for (i = 0; i < nr; i++)
-		if (!starts_with(pairs[i].name, "__git_env_") &&
-		    setenv(pairs[i].name, pairs[i].value, 1))
+		if (setenv(pairs[i].name, pairs[i].value, 1))
 			return -1;
 	return 0;
 #endif

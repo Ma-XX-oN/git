@@ -44,32 +44,30 @@ _git_preload_source_manager() {
     printf 'worker count must be an integer from 1 to 32\n' >&2
     return 2
   fi
-  if [[ -n ${_GIT_PRELOAD_MANAGER_BASH_PID:-} ]] &&
-     kill -0 "$_GIT_PRELOAD_MANAGER_BASH_PID" 2>/dev/null &&
-     [[ -f ${_GIT_PRELOAD_MANAGER_READY:-} ]]; then
-    # No resize control protocol in this iteration. Sourcing is idempotent.
-    if [[ $requested != "${_GIT_PRELOAD_MANAGER_WORKERS:-}" ]]; then
-      printf 'manager already running with %s workers; resize is not implemented\n' \
-        "$_GIT_PRELOAD_MANAGER_WORKERS" >&2
-    fi
-    return 0
-  fi
-  if [[ -n ${_GIT_PRELOAD_MANAGER_BASH_PID:-} ]] &&
-     kill -0 "$_GIT_PRELOAD_MANAGER_BASH_PID" 2>/dev/null; then
-    printf 'existing manager is alive but not READY; refusing duplicate\n' >&2
-    return 1
-  fi
   if [[ -z ${GIT_PRELOAD_WORKER_GIT:-} || -z ${GIT_PRELOAD_MANAGER_PYTHON:-} ]]; then
     printf 'set GIT_PRELOAD_WORKER_GIT and GIT_PRELOAD_MANAGER_PYTHON before sourcing\n' >&2
     return 2
   fi
-  _git_preload_refresh_paths || return 1
   local owner_pid
   IFS= read -r owner_pid < "/proc/$BASHPID/winpid" || return 1
   if [[ ! $owner_pid =~ ^[1-9][0-9]*$ ]]; then
     printf 'cannot resolve owning shell native Windows PID\n' >&2
     return 1
   fi
+  if [[ -n ${_GIT_PRELOAD_MANAGER_BASH_PID:-} ]]; then
+    local previous=0
+    if [[ ${_GIT_PRELOAD_OWNER_PID:-} == "$owner_pid" ]]; then
+      previous=$_GIT_PRELOAD_MANAGER_BASH_PID
+    fi
+    if [[ ${_GIT_PRELOAD_ALLOC_CONNECTED:-} == 1 ]]; then
+      _git_preload_stop_manager "$previous" 8 9 || return 1
+    elif (( previous )) && kill -0 "$previous" 2>/dev/null; then
+      printf 'GIT-IPC ERROR: live manager has no shutdown channel\n' >&2
+      return 1
+    fi
+  fi
+  unset _GIT_PRELOAD_ALLOC_CONNECTED _GIT_PRELOAD_MANAGER_BASH_PID
+  unset _GIT_PRELOAD_MANAGER_READY _GIT_PRELOAD_MANAGER_LOG _GIT_PRELOAD_REQUEST_SEQ
   local script_path script_dir temp native_directory
   script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) || return 1
   script_path=$(/usr/bin/cygpath -w "$script_dir/windows_git_ipc_pool.py") || return 1
@@ -192,10 +190,6 @@ git-ipc() {
     printf 'git-ipc requires a connected allocator and at most 31 arguments\n' >&2
     printf 'GIT-IPC ERROR: invalid invocation\n' >&2; return 255
   fi
-  _git_preload_refresh_paths || {
-    printf 'GIT-IPC ERROR: native environment path conversion failed\n' >&2
-    return 255
-  }
   [[ ${GIT_PRELOAD_TRACE:-} == 1 ]] && printf 'TRACE start bashpid=%s\n' "$BASHPID" >>"$_GIT_PRELOAD_MANAGER_LOG"
   _GIT_PRELOAD_REQUEST_SEQ=$(( ${_GIT_PRELOAD_REQUEST_SEQ:-0} + 1 ))
   local marker=$(( _GIT_PRELOAD_REQUEST_SEQ % 10 ))

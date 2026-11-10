@@ -21,6 +21,12 @@ count from 1 through 32. Call `git-ipc` with ordinary Git arguments. Calls from
 one owner are serial; the persistent allocator connection permits one
 outstanding request. The default pool contains three workers.
 
+The Bash client uses the environment inherited when the manager starts. Changes
+to exported variables, including PATH, HOME and temporary-directory variables,
+take effect after sourcing `git-manager.sh` again. Re-sourcing stops the old
+manager, waits for its pool cleanup and starts a replacement with the current
+environment and requested worker count. Arguments and cwd are supplied per call.
+
 The manager returns only workers that have reported READY. It publishes
 the selected worker's reply before scheduling a replacement and retains
 ownership until the full reply write completes. A failed reply therefore leaves
@@ -36,6 +42,8 @@ Applications can launch `contrib/preload/windows_git_ipc_pool.py` or
 for its atomic `ready.json` publication, connect the allocation endpoints,
 and send serial `GET` lines (`GET` plus newline). Allocation replies contain the selected worker PID
 followed by a newline. Keep the allocation channels open for the session.
+Send `STOP` plus newline to shut down the manager and its unallocated workers;
+wait for manager termination before reusing its allocation endpoint names.
 POSIX uses `allocate-req` and `allocate-reply` FIFOs in that directory;
 Windows uses `git-preload-allocate-req-<owner-pid>` and
 `git-preload-allocate-reply-<owner-pid>` under `\\.\pipe\`.
@@ -49,9 +57,9 @@ endpoint setup, standard-handle adaptation and owner monitoring.
 applies the command's complete working-directory and environment snapshot.
 The export decoder accepts restricted Bash quoting; it never evaluates shell
 commands or substitutions.
-The Bash snapshot covers exported scalar variables and omits exported Bash
-functions. Native environment-block callers can supply those encoded function
-entries directly.
+The export-text encoding covers exported scalar variables. A producer using
+`export -p` omits exported Bash functions; native environment-block callers can
+supply those encoded function entries directly.
 
 `preload-transport.h` exposes an opaque transport. Start prepares endpoints
 before READY, wait completes connection selection, and release cancels and
@@ -81,22 +89,16 @@ and frame size are bounded by the worker.
 
 Both environment encodings have identical replacement semantics on both
 platforms. Application callers can emit the `env` block directly from their
-environment map. Bash clients use `env-export` because `export -p` captures
-exported variables using a builtin, avoiding process startup and per-variable
-shell serialization. The double NUL belongs to the environment-block encoding,
+environment map, or use `env-export` with the declarations emitted by Bash's
+`export -p` builtin. The bundled Bash client sends cwd without either environment
+field, retaining the manager's startup environment. The double NUL belongs to the environment-block encoding,
 including an empty block; it is independent of the host operating system.
 Shell variable attributes such as readonly and integer preserve their emitted
 scalar value. Array declarations have no child-environment value and are ignored.
-The Windows Bash client caches native forms of the runtime's standard path
-variables in exported `__git_env_NAME` shadows. It uses its own
-`/usr/bin/cygpath -w` for individual paths and `-wp` for path lists, creating
-the cache during startup and refreshing entries whose original values change.
-The builtin `export -p` snapshot includes originals and shadows. The Windows
-worker selects the shadow value under the original name; POSIX workers retain
-the original value. Both workers discard the reserved `__git_env_` metadata.
-A shadow cannot introduce a variable absent from the original snapshot. This
-selection applies to both environment encodings. Raw source cache values stay
-unexported, and ordinary Git environment lookups use the original variable names.
+Environment values supplied through the API must use the target platform's
+native path conventions. The worker does not interpret shadow-variable prefixes
+or translate MSYS paths. On Windows, launching the native manager from the
+owning Bash runtime supplies its converted startup environment directly.
 Omitting both environment fields retains the worker's environment inherited
 when the manager spawned it. That snapshot can differ from the caller's
 environment at command submission.
@@ -158,21 +160,50 @@ has passed and are removed in a separate validated cleanup.
 
 The Bash client supports text output and commands that do not consume caller
 stdin. Relaying arbitrary streams needs an executable with the available Bash
-builtins; its process startup would undermine the speedup. A Bash builtin
-`cat` is a proposed follow-up to enable forwarding without that startup cost.
+builtins; its process startup would undermine the speedup. A stream-copy builtin
+is a proposed follow-up to enable forwarding without that startup cost.
 Workers receive EOF on stdin. Bash variables cannot preserve embedded NUL
 output, so arbitrary binary streams need a client that transfers bytes directly.
+
+The Windows Bash client can hang when stderr fills its pipe buffer while the
+client is waiting for stdout EOF. This includes large stderr-only responses and
+commands that write to both streams. In the tested Git Bash runtime, the opened
+Windows pipe descriptors are reported as regular files, so the client's 100 ms
+`read` timeout does not interrupt the stdout read. Why this open path is not
+reported as a special file has not been established. This pipe misclassification
+causes the client to output stderr last, after stdout closes, even when stderr
+bytes arrived earlier.
+Newlines and writer-side flushes do not make that read switch to stderr.
+
+The pipes request 64 KiB buffers, but this is not a fixed total-output limit or
+a guaranteed safe stderr size. Large stdout-only responses can complete. The
+failure depends on which stream the client is reading, when stdout closes and
+how much unread stderr accumulates. Small stderr can fit in the buffer, letting
+the command finish and close stdout so the client can switch to stderr. Larger
+stderr can fill the buffer and block the command before it can close stdout,
+while the client waits for that closure instead of draining stderr.
+A full blocking pipe stalls its writer;
+the observed failure is a deadlock, not discarded output. Use the ordinary Git
+executable for commands that may generate substantial stderr. Native API
+clients can drain both channels concurrently.
+
+The client uses the platform's installed Bash. A builtin reader remains a
+deferred follow-up.
 
 == Validation and performance
 
 Run `t/t5790-preload.sh` for normal regression integration and the scripts in
 `t/preload/` for native lifecycle, allocator and serial stress coverage.
+`t/preload/test_shell_output.py` checks small mixed output and large stdout-only
+output on Windows. Its large stderr cases are opt-in diagnostics there, selected
+with `--case stderr-large`, `--case out-first` or `--case err-first`; they may
+time out under the documented limitation. POSIX acceptance runs all cases.
 `t/perf/p5790-preload.sh` records paired direct and preloaded command timings.
 Timing scripts require Bash 5.0 or newer for `EPOCHREALTIME`.
 Windows, Linux and macOS acceptance includes the Git regression suite, both
 Makefile and Meson builds, ownership/cleanup and 6,000 serial commands.
 
 Record performance with matching client and manager versions, compiler
-options, worker counts, workload and full context transfer. Disable tracing
+options, worker counts, workload and environment policy. Disable tracing
 and investigative timing for measurements. Preserve raw samples, revisions
 and machine details; compare revisions on the same machine.

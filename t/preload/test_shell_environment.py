@@ -1,71 +1,105 @@
-"""Check native path-shadow caching without starting a manager or Git worker."""
+"""Check startup environment inheritance and clean manager replacement on re-source."""
+import argparse
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
-import tempfile
+
+from acceptance import shell_path
+from test_shell_output import stop_owned_tree
 
 SHELL = r'''
-set -eu
-source "$1"
-export PATH=/usr/bin:/c/Windows/System32 HOME='/home/preload shadow'
-export LD_LIBRARY_PATH=/usr/lib ORIGINAL_PATH=/usr/bin SHELL=/usr/bin/bash
-export TMPDIR=/tmp TMP=/tmp TEMP=/tmp
-exec 10>"$2/first.trace"
-BASH_XTRACEFD=10
-set -x
-_git_preload_refresh_paths
-set +x
-[[ $__git_env_HOME == "$(/usr/bin/cygpath -w "$HOME")" ]]
-[[ $__git_env_PATH == "$(/usr/bin/cygpath -wp "$PATH")" ]]
-exec 11>"$2/unchanged.trace"
-BASH_XTRACEFD=11
-set -x
-_git_preload_refresh_paths
-set +x
-export HOME='/home/changed shadow'
-exec 12>"$2/changed.trace"
-BASH_XTRACEFD=12
-set -x
-_git_preload_refresh_paths
-set +x
-[[ $__git_env_HOME == "$(/usr/bin/cygpath -w "$HOME")" ]]
-readonly HOME
-_git_preload_refresh_paths
-[[ $HOME == '/home/changed shadow' ]]
-export TMPDIR=
-_git_preload_refresh_paths
-[[ ${__git_env_TMPDIR+x} && -z $__git_env_TMPDIR ]]
-unset TMPDIR
-_git_preload_refresh_paths
-[[ ! ${__git_env_TMPDIR+x} && ! ${__git_env_source_TMPDIR+x} ]]
-"$3" -c 'import os; assert "__git_env_PATH" in os.environ; assert not any(k.startswith("__git_env_source_") for k in os.environ)'
+set -u
+# Capture the sourcing owner's discovery paths after each replacement.
+# No arguments; session and ready receive borrowed shell path values.
+session_paths() {
+  case $OSTYPE in
+    msys*|cygwin*) ready=$_GIT_PRELOAD_MANAGER_READY; session=${ready%/*} ;;
+    *) session=$_GIT_PRELOAD_UNIX_DIRECTORY; ready=$session/ready.json ;;
+  esac
+}
+# Argument 1: retired session directory. Fail if readiness or worker paths remain.
+check_retired_session() {
+  local entry
+  [[ ! -f $1/ready.json ]] || return 1
+  for entry in "$1"/worker-*; do
+    [[ ! -d $entry ]] || return 1
+  done
+}
+export GIT_EDITOR='initial editor'
+source "$1" 2 || exit 10
+session_paths
+cp "$ready" "$2/first.json" || exit 11
+first_session=$session
+actual=$(git-ipc var GIT_EDITOR) || exit 12
+[[ $actual == 'initial editor' ]] || exit 13
+export GIT_EDITOR='refreshed editor'
+actual=$(git-ipc var GIT_EDITOR) || exit 14
+[[ $actual == 'initial editor' ]] || exit 15
+source "$1" 4 || exit 16
+check_retired_session "$first_session" || exit 17
+session_paths
+cp "$ready" "$2/second.json" || exit 18
+second_session=$session
+actual=$(git-ipc var GIT_EDITOR) || exit 19
+[[ $actual == 'refreshed editor' ]] || exit 20
+unset GIT_EDITOR
+expected=$("$GIT_PRELOAD_WORKER_GIT" var GIT_EDITOR) || exit 21
+source "$1" 3 || exit 22
+check_retired_session "$second_session" || exit 23
+actual=$(git-ipc var GIT_EDITOR) || exit 24
+[[ $actual == "$expected" ]] || exit 25
+(
+  export GIT_EDITOR='subshell editor'
+  source "$1" 1 || exit 26
+  actual=$(git-ipc var GIT_EDITOR) || exit 27
+  [[ $actual == 'subshell editor' ]] || exit 28
+) || exit 29
+actual=$(git-ipc var GIT_EDITOR) || exit 30
+[[ $actual == "$expected" ]] || exit 31
+if source "$1" 0 >/dev/null 2>&1; then exit 32; fi
+actual=$(git-ipc var GIT_EDITOR) || exit 33
+[[ $actual == "$expected" ]] || exit 34
+printf 'ENVIRONMENT_RESTART_PASS\n'
 '''
 
 
 def main():
-    """Assert cache correctness and exact converter counts in isolated Bash.
+    """Validate frozen session values, refresh, cleanup, resize and owner isolation.
 
     Returns
     -------
     None
-        Prints success after startup, unchanged, changed, readonly, empty and
-        unset cases pass; any shell failure or unexpected process count raises.
+        Prints success after real native workers pass; failure preserves logs
+        in the supplied output directory and timeout terminates the owned tree.
     """
     root = Path(__file__).resolve().parents[2]
-    with tempfile.TemporaryDirectory(prefix="preload-shadow-") as temporary:
-        paths = [str(root / "contrib/preload/git-ipc-request.sh"), temporary, sys.executable]
-        if os.name == "nt":
-            paths = [subprocess.check_output([shutil.which("cygpath"), "-u", path],
-                                             text=True).strip() for path in paths]
-        subprocess.run([shutil.which("bash"), "--noprofile", "--norc", "-c", SHELL,
-                        "shadow-cache"] + paths, check=True, timeout=30)
-        for stage, expected in (("first", 8), ("unchanged", 0), ("changed", 1)):
-            lines = (Path(temporary) / f"{stage}.trace").read_text(encoding="utf-8").splitlines()
-            count = sum(line.lstrip("+").lstrip().startswith("/usr/bin/cygpath ") for line in lines)
-            assert count == expected, (stage, count, expected)
-    print("PRELOAD_SHELL_ENVIRONMENT_PASS startup=8 unchanged=0 changed=1", flush=True)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--git", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    output = args.output.resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    env["GIT_PRELOAD_WORKER_GIT"] = str(args.git.resolve())
+    env["GIT_PRELOAD_MANAGER_PYTHON"] = sys.executable
+    env["GIT_PRELOAD_DRAIN_MODE"] = "chunk100"
+    command = [shutil.which("bash"), "--noprofile", "--norc", "-c", SHELL,
+               "environment-restart", shell_path(root / "contrib/preload/git-manager.sh"),
+               shell_path(output)]
+    process = subprocess.Popen(command, env=env, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, start_new_session=os.name != "nt")
+    try:
+        out, err = process.communicate(timeout=40)
+    except subprocess.TimeoutExpired:
+        stop_owned_tree(process)
+        raise
+    (output / "stdout.log").write_bytes(out)
+    (output / "stderr.log").write_bytes(err)
+    assert process.returncode == 0, (process.returncode, out, err)
+    assert out == b"ENVIRONMENT_RESTART_PASS\n", out
+    print("PRELOAD_SHELL_ENVIRONMENT_PASS startup restart unset resize subshell cleanup", flush=True)
 
 
 if __name__ == "__main__":

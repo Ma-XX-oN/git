@@ -10,11 +10,6 @@ _git_preload_unix_source() {
     printf 'GIT-IPC ERROR: invalid pool size\n' >&2
     return 255
   fi
-  if [[ -n ${_GIT_PRELOAD_UNIX_MANAGER_PID:-} ]] &&
-     kill -0 "$_GIT_PRELOAD_UNIX_MANAGER_PID" 2>/dev/null &&
-     [[ -f ${_GIT_PRELOAD_UNIX_DIRECTORY:-}/ready.json ]]; then
-    return 0
-  fi
   [[ -n ${GIT_PRELOAD_WORKER_GIT:-} ]] || {
     printf 'GIT-IPC ERROR: GIT_PRELOAD_WORKER_GIT not set\n' >&2
     return 255
@@ -22,6 +17,18 @@ _git_preload_unix_source() {
   # BASHPID changes in the subshell created for the background launch.
   # Capture the actual sourcing shell's PID before starting the manager.
   local owner_pid=$BASHPID
+  if [[ -n ${_GIT_PRELOAD_UNIX_MANAGER_PID:-} &&
+        -n ${_GIT_PRELOAD_UNIX_REQUEST_FD:-} &&
+        -n ${_GIT_PRELOAD_UNIX_REPLY_FD:-} ]]; then
+    local previous=0
+    if [[ ${_GIT_PRELOAD_UNIX_OWNER_PID:-} == "$owner_pid" ]]; then
+      previous=$_GIT_PRELOAD_UNIX_MANAGER_PID
+    fi
+    _git_preload_stop_manager "$previous" "$_GIT_PRELOAD_UNIX_REQUEST_FD" \
+      "$_GIT_PRELOAD_UNIX_REPLY_FD" || return 255
+  fi
+  unset _GIT_PRELOAD_UNIX_DIRECTORY _GIT_PRELOAD_UNIX_MANAGER_PID
+  unset _GIT_PRELOAD_UNIX_REQUEST_FD _GIT_PRELOAD_UNIX_REPLY_FD
   local script_dir directory py
   script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) || return 255
   directory=$(mktemp -d "${TMPDIR:-${TEMP:-${TMP:-/tmp}}}/git-preload-$owner_pid-XXXXXXXX") || return 255
@@ -46,6 +53,7 @@ _git_preload_unix_source() {
       }
       _GIT_PRELOAD_UNIX_DIRECTORY=$directory
       _GIT_PRELOAD_UNIX_MANAGER_PID=$launched
+      _GIT_PRELOAD_UNIX_OWNER_PID=$owner_pid
       _GIT_PRELOAD_UNIX_MANAGER_LOG=$directory/manager.log
       return 0
     fi

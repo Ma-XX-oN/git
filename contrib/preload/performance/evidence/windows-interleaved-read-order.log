@@ -1,0 +1,4 @@
+BEGIN fd=4 time=1794291728.010011
+END fd=4 status=1 stdout_chunk=AC stderr_chunk='' time=1794291729.152297
+BEGIN fd=5 time=1794291729.152867
+END fd=5 status=1 stdout_chunk=AC stderr_chunk=B time=1794291729.153116

@@ -1,5 +1,10 @@
 # RWF 809 — Git IPC transport contract
 
+Historical experimental design. The maintained production contract is
+[Preloaded Git workers](../../Documentation/technical/preload.adoc), including
+the startup environment, re-sourcing behavior and Windows stderr limitation.
+This file preserves the experimental protocol evidence.
+
 Status: approved design; implementation and native acceptance must be verified separately.
 
 ## Terminology and ownership
