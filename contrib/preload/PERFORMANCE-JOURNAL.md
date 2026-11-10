@@ -277,6 +277,51 @@ must remain unknown rather than be inferred from another machine.
 
 ## Recording the next change
 
+The migration's ongoing acceptance record is
+[MIGRATION-VALIDATION.md](performance/MIGRATION-VALIDATION.md). Review changes
+share framing, command execution and ordered exit handling across platforms;
+they also restore grouped POSIX writes and reply-before-refill scheduling.
+The Windows environment decoder and changed-entry updater are split by parsing
+and application responsibility, preserving the adopted update strategy.
+
+A reproduced manager shutdown race requires waiting for in-flight worker starts
+before releasing pool resources. The synchronization runs around process startup
+and shutdown, without holding the pool lock across process creation. Serial
+Windows allocator cleanup is expressed as connection identification, GET reading,
+readiness waiting and reply publication, using the same event queue. These
+changes may affect command latency; no gain is claimed without the next matched
+measurement. Keep their raw comparison even if the result is slower.
+
+The ownership audit also reproduced abandonment of a selected worker when its
+PID reply had not yet been published. Both pools retain the pending allocation
+until full reply completion, so failure cleanup still owns it. This adds a small
+ownership update to the serial path; measure its effect with the rest of the
+review changes instead of assuming it is free.
+
+Correctness coverage also exposed rejection of readonly and integer declarations
+from builtin `export -p`. The shared decoder accepts their already emitted
+scalar values and excludes array declarations, matching native Bash child
+environments. The ordinary `declare -x` prefix keeps its direct fast path.
+Native block encoding remains available for application callers. These changes
+are correctness fixes; their combined timing effect belongs in the next matched
+comparison rather than an unmeasured gain claim.
+Exported Bash functions remain outside the Bash client's snapshot scope; this
+existing limitation is documented rather than expanded during this migration.
+
+### Shared-worker checkpoint on Linux CI
+
+The same-job ABBA comparison for `87a4adb99b` measured **1.362 ms baseline**
+against **1.227 ms migrated** median: **90.09% of baseline**, **-9.91%**,
+or **-0.135 ms**. This is the combined shared-worker change set, including
+grouped POSIX writes, reply-before-refill and ordinary-exit completion; it does
+not isolate the contribution of one line or component. Both full Git suites,
+both build systems and 6,000-command native stress passed in
+[Linux job 129432259436](https://github.com/Ma-XX-oN/git/actions/runs/42697246570/job/129432259436).
+Raw samples, flags and the metadata available in that run are preserved in
+[migration-87-linux-matched.json](performance/evidence/migration-87-linux-matched.json).
+Compare its baseline and candidate within that job; do not compare its absolute
+times with a different Linux runner or the laptop.
+
 An additional temporary-client test replaced the PID regex with
 `[[ $pid == [1-9]*([0-9]) ]]` and the status regex/capture with
 `[[ $status == EXIT[[:space:]]+([0-9]) ]]` followed by `${status:5}`.

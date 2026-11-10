@@ -35,6 +35,39 @@ def load_benchmark(path, name):
     return module
 
 
+def machine_metadata():
+    """Capture hardware and runtime identity outside the measured command loop.
+
+    Returns
+    -------
+    dict
+        OS, architecture, processor identity, logical CPU count, runtimes and CI
+        identifiers. A failed processor-name probe is recorded explicitly.
+    """
+    record = {"os": platform.platform(), "architecture": platform.machine(),
+              "processor": platform.processor(), "logical_cpus": os.cpu_count(),
+              "python": sys.version, "bash": subprocess.check_output(
+                  [shutil.which("bash"), "--version"], text=True).splitlines()[0],
+              "ci_run": os.environ.get("GITHUB_RUN_ID"),
+              "ci_job": os.environ.get("GITHUB_JOB")}
+    try:
+        if os.name == "nt":
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                r"HARDWARE\DESCRIPTION\System\CentralProcessor\0") as key:
+                record["processor_name"] = winreg.QueryValueEx(key, "ProcessorNameString")[0].strip()
+        elif sys.platform == "darwin":
+            record["processor_name"] = subprocess.check_output(
+                ["/usr/sbin/sysctl", "-n", "machdep.cpu.brand_string"], text=True).strip()
+        else:
+            names = [line.partition(":")[2].strip() for line in
+                     Path("/proc/cpuinfo").read_text().splitlines() if line.startswith("model name")]
+            record["processor_name"] = names[0] if names else record["processor"]
+    except (OSError, subprocess.CalledProcessError) as error:
+        record["processor_probe_error"] = str(error)
+    return record
+
+
 def main():
     """Retain ABBA raw timings, binary identities and matching build flags."""
     parser = argparse.ArgumentParser()
@@ -47,12 +80,7 @@ def main():
     report = {"baseline": "working-version-two", "workers": 3,
               "host": os.environ.get("COMPUTERNAME", os.uname().nodename if not windows else ""),
               "platform": sys.platform, "tracing": False, "full_context": True,
-              "machine": {"os": platform.platform(), "architecture": platform.machine(),
-                          "processor": platform.processor(), "logical_cpus": os.cpu_count(),
-                          "python": sys.version, "bash": subprocess.check_output(
-                              [shutil.which("bash"), "--version"], text=True).splitlines()[0],
-                          "ci_run": os.environ.get("GITHUB_RUN_ID"),
-                          "ci_job": os.environ.get("GITHUB_JOB")},
+              "machine": machine_metadata(),
               "order": ["baseline", "candidate", "candidate", "baseline"], "rounds": [],
               "variants": {}}
     variants = {}

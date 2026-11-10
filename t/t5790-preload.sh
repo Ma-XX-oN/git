@@ -36,6 +36,12 @@ test_expect_success 'small export snapshot accepts an empty value' '
 	test-tool preload context frame >actual
 '
 
+test_expect_success 'export attributes retain scalar values and exclude arrays' '
+	printf "env-export\0declare -rx PRELOAD_TEST_VALUE=\"readonly\"\ndeclare -ix COUNT=\"42\"\ndeclare -ax ARRAY=([0]=\"ignored\")\n\0" >frame &&
+	test-tool preload context frame >actual &&
+	test_grep "^value=readonly$" actual
+'
+
 test_expect_success 'context rejects unterminated fields' '
 	printf "env-export\0declare -x PRELOAD_TEST_VALUE=\"x\"" >frame &&
 	test_must_fail test-tool preload context frame

@@ -1,6 +1,9 @@
 source "$(dirname -- "${BASH_SOURCE[0]}")/git-ipc-request.sh" || return 1
 # Source in Bash on Linux/macOS after setting GIT_PRELOAD_WORKER_GIT.
 # Single-use native Git --preload-worker worker; Bash client remains text-output only.
+# Argument 1: initial worker count (default 3, range 1 through 32).
+# Retain the manager session and reply descriptor in the sourcing owner shell.
+# Return zero after READY, or 255 on configuration/startup failure.
 _git_preload_unix_source() {
   local requested=${1:-3}
   if [[ ! $requested =~ ^[1-9][0-9]*$ ]] || (( requested > 32 )); then
@@ -58,6 +61,10 @@ if (( _git_preload_unix_source_rc != 0 )); then
   return "$_git_preload_unix_source_rc"
 fi
 
+# Run one serial Git command using the persistent allocator.
+# Arguments: ordinary Git arguments, at most 31; each is encoded without evaluation.
+# Write text stdout/stderr to the caller; stdin is an EOF-producing channel.
+# Return the command status, or 255 for a transport/protocol failure.
 git-ipc() {
   if [[ -z ${_GIT_PRELOAD_UNIX_DIRECTORY:-} || $# -gt 31 ]]; then
     printf 'GIT-IPC ERROR: manager unavailable or too many arguments\n' >&2

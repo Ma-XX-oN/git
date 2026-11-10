@@ -1776,7 +1776,12 @@ static const wchar_t *wcschrnul(const wchar_t *s, wchar_t c)
 	return s;
 }
 
-/** @brief Compare only keys */
+/**
+ * @brief Compare case-insensitive environment keys, including drive pseudo-variables.
+ * @param a Borrowed pointer to a wide NAME=VALUE entry pointer.
+ * @param b Borrowed pointer to a wide NAME=VALUE entry pointer.
+ * @return Negative, zero or positive according to key ordering; values are ignored.
+ */
 static int wenvcmp(const void *a, const void *b)
 {
 	wchar_t *p = *(wchar_t **)a, *q = *(wchar_t **)b;
@@ -1809,6 +1814,9 @@ static int wenvcmp(const void *a, const void *b)
  *
  * We return a contiguous block of UNICODE strings with a final trailing
  * zero word.
+ * @param deltaenv Borrowed NULL-terminated UTF-8 settings or removals.
+ * @param inherit Nonzero merges inherited ordinary entries; zero applies a complete snapshot.
+ * @return Owned sorted Unicode block; caller frees it after use.
  */
 static wchar_t *make_environment_block(const char *const *deltaenv, int inherit)
 {
@@ -1900,7 +1908,12 @@ static wchar_t *make_environment_block(const char *const *deltaenv, int inherit)
 	return result;
 }
 
-/** @brief Change or remove one ordinary variable without modifying its entry. */
+/**
+ * @brief Change or remove one ordinary variable without modifying its entry.
+ * @param entry Borrowed validated wide NAME=VALUE entry, excluding drive pseudo-variables.
+ * @param remove Nonzero deletes the key; zero sets its value.
+ * @return Zero on success, -1 with errno set on Windows API failure.
+ */
 static int update_environment_entry(const wchar_t *entry, int remove)
 {
 	const wchar_t *equal = wcschr(entry, L'=');
@@ -1922,57 +1935,103 @@ static int update_environment_entry(const wchar_t *entry, int remove)
 	return 0;
 }
 
-/** @brief Replace a UTF-8 snapshot, updating only variables that differ. */
+/**
+ * @brief Collect and sort ordinary entries from an owned Windows snapshot.
+ * @param block Borrowed Windows environment block; entries remain valid until freed.
+ * @param nr Receives the number of ordinary entries, excluding drive pseudo-variables.
+ * @return Owned array of borrowed entry pointers; caller frees the array.
+ */
+static wchar_t **sorted_environment_entries(wchar_t *block, size_t *nr)
+{
+	wchar_t **entries = NULL, *entry;
+	size_t alloc = 0;
+
+	*nr = 0;
+	for (entry = block; *entry; entry += wcslen(entry) + 1) {
+		if (*entry == L'=')
+			continue;
+		ALLOC_GROW(entries, *nr + 1, alloc);
+		entries[(*nr)++] = entry;
+	}
+	git_stable_qsort(entries, *nr, sizeof(*entries), wenvcmp);
+	return entries;
+}
+
+/**
+ * @brief Update a value, recreating its entry when its spelling changes.
+ * @param current Borrowed ordinary entry for the same case-insensitive key, or NULL.
+ * @param wanted Borrowed validated NAME=VALUE entry with the desired spelling/value.
+ * @return Zero on success or if identical, -1 with errno set on application failure.
+ */
+static int replace_changed_environment_entry(const wchar_t *current,
+					     const wchar_t *wanted)
+{
+	if (current && !wcscmp(current, wanted))
+		return 0;
+	/* Delete/recreate a changed spelling to preserve name case. */
+	if (current && wcsncmp(current, wanted, wcschr(wanted, L'=') - wanted) &&
+	    update_environment_entry(current, 1))
+		return -1;
+	return update_environment_entry(wanted, 0);
+}
+
+/**
+ * @brief Merge a sorted replacement snapshot with the existing ordinary entries.
+ * @param current Borrowed sorted array of ordinary inherited entries.
+ * @param nr Number of entries in current.
+ * @param wanted Borrowed sorted desired block; drive pseudo-variables are preserved.
+ * @return Zero on success, -1 with errno set if a removal or replacement fails.
+ */
+static int apply_environment_difference(wchar_t **current, size_t nr, wchar_t *wanted)
+{
+	size_t i = 0;
+
+	while (i < nr || *wanted) {
+		int comparison;
+
+		while (*wanted == L'=')
+			wanted += wcslen(wanted) + 1;
+		if (i == nr && !*wanted)
+			break;
+		comparison = !*wanted ? -1 : i == nr ? 1 :
+			wenvcmp(current + i, &wanted);
+		if (comparison < 0) {
+			if (update_environment_entry(current[i++], 1))
+				return -1;
+		} else {
+			if (replace_changed_environment_entry(
+				    comparison ? NULL : current[i], wanted))
+				return -1;
+			if (!comparison)
+				i++;
+			wanted += wcslen(wanted) + 1;
+		}
+	}
+	return 0;
+}
+
+/**
+ * @brief Replace a UTF-8 snapshot, updating only variables that differ.
+ * @param environment Borrowed NULL-terminated NAME=VALUE array; validated UTF-8.
+ * @return Zero on success, -1 with errno set on Windows environment failure.
+ */
 int mingw_replace_environment(const char *const *environment)
 {
 	wchar_t *block = make_environment_block(environment, 0);
-	wchar_t *original = GetEnvironmentStringsW(), *p = block, *entry;
-	wchar_t **current = NULL;
-	size_t nr = 0, alloc = 0, i = 0;
-	int result = -1;
-	DWORD error = GetLastError();
+	wchar_t *original = GetEnvironmentStringsW();
+	wchar_t **current;
+	size_t nr;
+	int result;
 
 	if (!original) {
+		DWORD error = GetLastError();
+
 		free(block);
 		errno = err_win_to_posix(error);
 		return -1;
 	}
-	for (entry = original; *entry; entry += wcslen(entry) + 1) {
-		if (*entry == L'=')
-			continue;
-		ALLOC_GROW(current, nr + 1, alloc);
-		current[nr++] = entry;
-	}
-	git_stable_qsort(current, nr, sizeof(*current), wenvcmp);
-	while (i < nr || *p) {
-		int comparison;
-
-		while (*p == L'=')
-			p += wcslen(p) + 1;
-		if (i == nr && !*p)
-			break;
-		comparison = !*p ? -1 : i == nr ? 1 :
-			wenvcmp(current + i, &p);
-		if (comparison < 0) {
-			if (update_environment_entry(current[i++], 1))
-				goto done;
-		} else {
-			if (comparison || wcscmp(current[i], p)) {
-				/* Delete/recreate a changed spelling to preserve name case. */
-				if (!comparison && wcsncmp(current[i], p,
-						wcschr(p, L'=') - p) &&
-				    update_environment_entry(current[i], 1))
-					goto done;
-				if (update_environment_entry(p, 0))
-					goto done;
-			}
-			if (!comparison)
-				i++;
-			p += wcslen(p) + 1;
-		}
-	}
-	result = 0;
-done:
+	current = sorted_environment_entries(original, &nr);
+	result = apply_environment_difference(current, nr, block);
 	free(current);
 	FreeEnvironmentStringsW(original);
 	free(block);

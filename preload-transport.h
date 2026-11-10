@@ -36,7 +36,7 @@ struct preload_transport_config {
 	const struct preload_channel_spec *channels; /**< Borrowed array of nr specs. */
 	const size_t *order; /**< Borrowed permutation of channel indices, length nr. */
 	size_t nr; /**< Number of channels, from one through 32. */
-	unsigned int timeout_ms; /**< Windows per-channel connection deadline, milliseconds. */
+	unsigned int timeout_ms; /**< Windows per-channel deadline, 1 through INT_MAX milliseconds. */
 	int expected_marker; /**< ASCII digit, or zero to learn the worker's digit. */
 };
 

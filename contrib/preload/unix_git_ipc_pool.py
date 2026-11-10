@@ -15,19 +15,47 @@ import time
 
 class Pool:
     def __init__(self, git, directory, target, owner_pid):
-        """Initialize owned resources and lifecycle state."""
+        """Initialize owned resources and lifecycle state.
+
+        Parameters
+        ----------
+        git : Path
+            Native worker executable used for initial and replacement workers.
+        directory : Path
+            Existing private session directory, retained for worker startup.
+        target : int
+            Requested pool size, from one through 32.
+        owner_pid : int
+            Native application PID; workers keep this owner after allocation.
+        """
         self.git = git
         self.directory = directory
         self.target = target
         self.owner_pid = owner_pid
         self.ready = queue.Queue()
         self.children = []
+        self.pending = None
         self.lock = threading.Lock()
+        self.spawn_done = threading.Condition(self.lock)
+        self.spawning = 0
         self.stopping = threading.Event()
         self.errors = []
 
     def spawn(self):
         """Start a single-use worker and publish it only after READY."""
+        with self.spawn_done:
+            if self.stopping.is_set():
+                return
+            self.spawning += 1
+        try:
+            self._spawn_worker()
+        finally:
+            with self.spawn_done:
+                self.spawning -= 1
+                self.spawn_done.notify_all()
+
+    def _spawn_worker(self):
+        """Register each created child, including one started across shutdown."""
         if self.stopping.is_set():
             return
         worker_env = os.environ.copy()
@@ -40,33 +68,56 @@ class Pool:
         channel_dir = self.directory / ("worker-" + str(p.pid))
         with self.lock:
             self.children.append((p, channel_dir))
+            stopping = self.stopping.is_set()
+        if stopping:
+            p.kill()
+            p.wait(timeout=3)
+            p.stdout.close()
+            return
         line = p.stdout.readline()
         p.stdout.close()
+        if self.stopping.is_set():
+            if p.poll() is None:
+                p.kill()
+            return
         if line != ("READY " + str(p.pid) + "\n").encode("ascii"):
             self.errors.append("worker readiness failed " + repr(line))
             if p.poll() is None:
                 p.kill()
             return
-        if self.stopping.is_set():
-            p.kill()
-            return
         self.ready.put((p, channel_dir))
         print("WORKER_READY " + str(p.pid), flush=True)
 
     def allocate(self):
-        """Transfer one READY worker to the requesting serial client."""
+        """Reserve one READY worker for the requesting serial client.
+
+        Returns
+        -------
+        str
+            Worker PID, or WAIT after a five-second shortage. Ownership remains
+            with the pool until commit_allocation() follows full reply publication.
+        """
         try:
             p, channel_dir = self.ready.get(timeout=5)
         except queue.Empty:
             return "WAIT"
-        with self.lock:
-            self.children.remove((p, channel_dir))
         if p.poll() is not None:
+            with self.lock:
+                self.children.remove((p, channel_dir))
             threading.Thread(target=self.spawn, daemon=True).start()
             return "WAIT"
-        # Client owns this worker; the worker owns cleaning its FIFO directory.
+        with self.lock:
+            assert self.pending is None, "allocation calls must be serial"
+            self.pending = (p, channel_dir)
         print("ALLOCATED " + str(p.pid), flush=True)
         return str(p.pid)
+
+    def commit_allocation(self):
+        """Relinquish the reserved worker after its full PID reply is published."""
+        with self.lock:
+            assert self.pending is not None, "no allocation reply to commit"
+            self.children.remove(self.pending)
+            self.pending = None
 
     def close(self):
         """Stop pending work and release resources owned by this instance."""
@@ -76,6 +127,9 @@ class Pool:
         for p, _ in children:
             if p.poll() is None:
                 p.kill()
+        with self.spawn_done:
+            self.spawn_done.wait_for(lambda: self.spawning == 0)
+            children = list(self.children)
         for p, directory in children:
             try:
                 p.wait(timeout=3)
@@ -90,7 +144,18 @@ class Pool:
 
 
 def owner_alive(pid):
-    """Check whether the original owning process still exists."""
+    """Check whether the original owning process still exists.
+
+    Parameters
+    ----------
+    pid : int
+        Captured native application PID.
+
+    Returns
+    -------
+    bool
+        False only if the process no longer exists; permission denial means alive.
+    """
     try:
         os.kill(pid, 0)
         return True
@@ -99,7 +164,14 @@ def owner_alive(pid):
 
 
 def run(args):
-    """Serve serial allocation requests until shutdown or owner death."""
+    """Serve serial allocation requests until shutdown or owner death.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Validated git path, existing directory, worker count and native owner_pid.
+        This call owns its pool, readiness file and allocation FIFO descriptors.
+    """
     root = Path(args.directory).resolve(strict=True)
     git = Path(args.git).resolve(strict=True)
     pool = Pool(git, root, args.workers, args.owner_pid)
@@ -167,6 +239,7 @@ def run(args):
                 if written != len(payload):
                     raise RuntimeError("short FIFO allocation reply write")
                 if answer not in ("WAIT", "INVALID"):
+                    pool.commit_allocation()
                     # Publish the selected worker before replacement startup
                     # competes with the client's command on the critical path.
                     threading.Thread(target=pool.spawn, daemon=True).start()

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Verify real FIFO worker framing, context and ordered completion on POSIX."""
 import os
+import signal
 from pathlib import Path
 import struct
 import subprocess
@@ -14,15 +15,31 @@ def frame(arguments, context=b""):
         argument.encode("utf-8") + b"\0" for argument in arguments) + context + b"end\0"
 
 
+def request_timeout(signum, frame):
+    """Interrupt a stalled FIFO operation so fixture cleanup can kill its worker.
+
+    Parameters
+    ----------
+    signum : int
+        SIGALRM delivered after the ten-second case deadline.
+    frame : frame
+        Interrupted Python stack frame, supplied by the signal module.
+    """
+    raise TimeoutError("preload worker FIFO case exceeded ten seconds")
+
+
 def run_case(git, name, payload, status, output, hold_request=False):
     """Send one FIFO request and require output EOF before status consumption."""
     with tempfile.TemporaryDirectory(prefix="preload-worker-") as directory:
         environment = os.environ.copy()
         environment["GIT_PRELOAD_OWNER_PID"] = str(os.getpid())
+        environment["GIT_EDITOR"] = "preload-worker-inherited-editor"
         worker = subprocess.Popen([git, "--preload-worker", directory], env=environment,
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         streams = []
         worker_directory = Path(directory) / f"worker-{worker.pid}"
+        previous = signal.signal(signal.SIGALRM, request_timeout)
+        signal.alarm(10)
         try:
             assert worker.stdout.readline() == f"READY {worker.pid}\n".encode()
             for channel, mode in (("stdout", "rb"), ("stderr", "rb"), ("exit-code", "rb"),
@@ -41,6 +58,8 @@ def run_case(git, name, payload, status, output, hold_request=False):
             assert not worker_directory.exists(), "worker retained FIFO endpoints"
             print("PRELOAD_POSIX_WORKER_PASS", name, flush=True)
         finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, previous)
             for stream in streams:
                 stream.close()
             if worker.poll() is None:
@@ -71,6 +90,15 @@ def main():
     run_case(git, "export-value", frame(["var", "GIT_EDITOR"],
              b'env-export\0declare -x GIT_EDITOR="literal $(do not execute)"\n\0'),
              0, b"literal $(do not execute)\n")
+    environment = b"GIT_EDITOR=native-api-value\0\0"
+    run_case(git, "binary-environment", frame(["var", "GIT_EDITOR"],
+             b"env\0" + struct.pack("<I", len(environment)) + environment),
+             0, b"native-api-value\n")
+    run_case(git, "omitted-environment-inherits-spawn-snapshot",
+             frame(["var", "GIT_EDITOR"]), 0, b"preload-worker-inherited-editor\n")
+    for bad in (b"\xff", b"\xc0\x80", b"\xed\xa0\x80"):
+        run_case(git, "invalid-utf8-argv-" + bad.hex(),
+                 struct.pack("<I", 2) + b"git\0" + bad + b"\0end\0", 128, b"")
 
 
 if __name__ == "__main__":

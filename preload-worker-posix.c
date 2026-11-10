@@ -1,22 +1,24 @@
 #include "git-compat-util.h"
-#include "common-init.h"
-#include "preload-context.h"
 #include "preload-worker.h"
-#include "preload-transport.h"
 #include "trace.h"
 #include <fcntl.h>
 #include <limits.h>
-#include <stdint.h>
+#ifndef NO_PTHREADS
 #include <pthread.h>
+#endif
 #include <signal.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 /*
  * A --preload-worker worker executes one command and exits. Its private channel
- * directory is created by the owning manager, not by the Git worker.
+ * directory is created by shared worker startup before FIFO preparation.
  */
-/** @param fd Borrowed output descriptor; FIFO writes already reach the kernel. */
+/**
+ * @brief Validate the output descriptor after its C stream has been flushed.
+ * @param fd Borrowed open output descriptor; FIFO writes already reach the kernel.
+ * @return Zero for a valid descriptor, -1 with errno set otherwise.
+ */
 int preload_worker_flush_output(int fd)
 {
 	return fcntl(fd, F_GETFD) < 0 ? -1 : 0;
@@ -24,28 +26,38 @@ int preload_worker_flush_output(int fd)
 
 /*
  * The allocation manager relinquishes command ownership to git-ipc. Check
- * the originating Bash PID independently every 10 seconds. Do not use
+ * the originating application's PID independently every 10 seconds. Do not use
  * getppid(): the worker's immediate parent is the allocation manager.
  */
-/** @brief Remove this single-use worker's private FIFO endpoints. */
+/**
+ * @brief Remove this single-use worker's private FIFO endpoints.
+ * @param directory Borrowed worker-owned directory; absent endpoints are safe.
+ */
 static void preload_worker_remove_fifos(const char *directory)
 {
 	static const char *const names[5] = {
 		"stdout", "stderr", "exit-code", "stdin", "param-env-cwd"
 	};
-	char path[1024];
 	int i;
 
-	for (i = 0; i < 5; i++)
-		if (snprintf(path, sizeof(path), "%s/%s", directory, names[i]) <
-		    sizeof(path))
-			unlink(path);
-	rmdir(directory);
+	for (i = 0; i < ARRAY_SIZE(names); i++) {
+		char *path = xstrfmt("%s/%s", directory, names[i]);
+
+		if (unlink(path) && errno != ENOENT)
+			trace_printf_key(&preload_worker_trace,
+					 "FIFO cleanup failed: %s errno=%d\n", path, errno);
+		free(path);
+	}
+	if (rmdir(directory) && errno != ENOENT)
+		trace_printf_key(&preload_worker_trace,
+				 "worker directory cleanup failed: %s errno=%d\n", directory, errno);
 }
 
+#ifndef NO_PTHREADS
+/** Owned immutable state retained by the owner-monitor thread until process exit. */
 struct preload_owner_watch {
-	pid_t pid;
-	char directory[1];
+	pid_t pid; /**< Captured native owner PID, independent of later environment changes. */
+	char directory[FLEX_ARRAY]; /**< Owned copy of the worker endpoint directory. */
 };
 
 /**
@@ -71,7 +83,11 @@ static int preload_worker_create_fifos(const char *directory)
 	return 0;
 }
 
-/** @brief Terminate and remove endpoints when the original shell owner dies. */
+/**
+ * @brief Terminate and remove endpoints when the original application owner dies.
+ * @param context Owned preload_owner_watch, retained until process termination.
+ * @return Never returns; owner death terminates the worker process with status 137.
+ */
 static void *preload_worker_watch_owner(void *context)
 {
 	struct preload_owner_watch *watch = context;
@@ -83,20 +99,26 @@ static void *preload_worker_watch_owner(void *context)
 		while (left)
 			left = sleep(left);
 		if (kill(owner_pid, 0) < 0 && errno == ESRCH) {
+			trace_printf_key(&preload_worker_trace,
+					 "owner died pid=%ld\n", (long)owner_pid);
 			preload_worker_remove_fifos(watch->directory);
 			_exit(137);
 		}
 	}
 }
 
-/** @brief Capture the owner PID and keep its watcher alive until process exit. */
+/**
+ * @brief Capture the owner PID and keep its watcher alive until process exit.
+ * @param directory Borrowed private worker directory; copied into monitor-owned state.
+ * @return Zero on success, -1 for invalid/dead owner or thread startup failure.
+ */
 static int preload_worker_start_owner_watch(const char *directory)
 {
 	const char *raw = getenv("GIT_PRELOAD_OWNER_PID");
 	unsigned long value = 0;
 	pthread_t watcher;
 	struct preload_owner_watch *watch;
-	size_t i, n;
+	size_t i;
 
 	if (!raw || !*raw)
 		return -1;
@@ -111,12 +133,8 @@ static int preload_worker_start_owner_watch(const char *directory)
 	if (!value || value > INT_MAX ||
 	    (kill((pid_t)value, 0) < 0 && errno == ESRCH))
 		return -1;
-	n = strlen(directory);
-	watch = malloc(sizeof(*watch) + n);
-	if (!watch)
-		return -1;
+	FLEX_ALLOC_STR(watch, directory, directory);
 	watch->pid = (pid_t)value;
-	memcpy(watch->directory, directory, n + 1);
 	if (pthread_create(&watcher, NULL, preload_worker_watch_owner, watch)) {
 		free(watch);
 		return -1;
@@ -124,27 +142,30 @@ static int preload_worker_start_owner_watch(const char *directory)
 	pthread_detach(watcher);
 	return 0;
 }
+#endif
 
 /**
  * @brief Prepare FIFO endpoints and owner monitoring before READY.
  * @param directory Borrowed existing private worker directory.
+ * @param location Receives an owned FIFO-directory string on success.
  * @return Zero on success, or a worker startup status on failure.
  */
-int preload_worker_platform_prepare(const char *directory)
+int preload_worker_platform_prepare(const char *directory, char **location)
 {
-	if (strlen(directory) > 960 || preload_worker_create_fifos(directory))
+#ifdef NO_PTHREADS
+	*location = NULL;
+	error("--preload-worker requires POSIX thread support");
+	trace_printf_key(&preload_worker_trace,
+			 "worker startup requires POSIX thread support directory=%s\n", directory);
+	return 136;
+#else
+	if (preload_worker_create_fifos(directory))
 		return 121;
-	return preload_worker_start_owner_watch(directory) ? 136 : 0;
-}
-
-/**
- * @brief Use the private worker directory as the FIFO location.
- * @param directory Borrowed directory created by shared worker startup.
- * @return Newly owned location string, freed by the shared worker.
- */
-char *preload_worker_platform_location(const char *directory)
-{
-	return xstrdup(directory);
+	if (preload_worker_start_owner_watch(directory))
+		return 136;
+	*location = xstrdup(directory);
+	return 0;
+#endif
 }
 
 /** @return Owned EOF-producing input descriptor, or -1 with errno set. */

@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Shell-owned Windows worker allocator; no Git command-data relay.
 
-Two allocation-only logical channels are used: GET flows from Git Bash to
-git-manager; the worker PID flows back on a per-client reply channel. The
-Windows duplex pipe facility is used only for the T connection-identification
-handshake. A replacement is initiated immediately on allocation, independent
-of command execution, pipe consumption and worker termination.
+Two permanent allocation channels carry serial GET lines and worker PID
+replies. A marker selects the application connection on each duplex pipe.
+Replacement startup follows reply publication and proceeds independently of
+command execution, pipe consumption and worker termination.
 """
 from __future__ import annotations
 import argparse
@@ -92,7 +91,18 @@ class CompletionPort:
       raise C.WinError(C.get_last_error())
 
   def wait(self, milliseconds):
-    """Dispatch one completion, returning False when the wait expires."""
+    """Dispatch one completion or expire the supplied wait.
+
+    Parameters
+    ----------
+    milliseconds : int
+        Wait duration in milliseconds; zero polls and 0xffffffff waits indefinitely.
+
+    Returns
+    -------
+    bool
+        True for a dispatched completion or wakeup, False for timeout.
+    """
     count = W.DWORD()
     key = C.c_size_t()
     overlap = C.POINTER(OVERLAPPED)()
@@ -128,7 +138,19 @@ class Pipe:
   """Own one pipe handle, OVERLAPPED, buffer, and pending operation."""
 
   def __init__(self, port, address, instances=255, first=False):
-    """Publish an instance and associate it with the allocator queue."""
+    """Publish an instance and associate it with the allocator queue.
+
+    Parameters
+    ----------
+    port : CompletionPort
+        Borrowed live queue; must outlive this pipe and cancellation completion.
+    address : str
+        Full native named-pipe address to create.
+    instances : int
+        Maximum server instances permitted for the name, from 1 through 255.
+    first : bool
+        Require exclusive first ownership of this name when True.
+    """
     self.port = port
     self.handle = K.CreateNamedPipeW(
       address, PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED |
@@ -155,7 +177,17 @@ class Pipe:
       raise
 
   def issue(self, operation, data=None, size=1):
-    """Submit one operation; retain its storage until completion is dequeued."""
+    """Submit one operation and retain its storage through completion dequeue.
+
+    Parameters
+    ----------
+    operation : {'connect', 'read', 'write'}
+        Operation to start; the preceding operation must have completed.
+    data : bytes, optional
+        Write payload, copied into pipe-owned storage before submission.
+    size : int
+        Read buffer capacity in bytes; used only for a read operation.
+    """
     assert not self.pending
     self.overlap = OVERLAPPED()
     self.result = None
@@ -185,7 +217,14 @@ class Pipe:
       raise C.WinError(error)
 
   def take(self):
-    """Consume an operation result, raising an unexpected Win32 error."""
+    """Consume an operation result, raising an unexpected Win32 error.
+
+    Returns
+    -------
+    int or None
+        Completed byte count, -1 for disconnection, or None before completion.
+        The stored result is cleared; read bytes remain in the owned buffer.
+    """
     if self.error is not None:
       raise C.WinError(self.error)
     result, self.result = self.result, None
@@ -222,7 +261,17 @@ class TransportPair:
   """Select one marked transport; share this selector with production tests."""
 
   def __init__(self, port, address, marker):
-    """Publish both candidates for one private logical channel."""
+    """Publish both candidates for one private logical channel.
+
+    Parameters
+    ----------
+    port : CompletionPort
+        Borrowed live queue, retained until both candidate pipes are released.
+    address : str
+        Full native address shared by the two candidate instances.
+    marker : int
+        Expected decimal digit from zero through nine; consumed before application bytes.
+    """
     if marker not in range(10):
       raise ValueError("invalid decimal reply marker")
     self.port = port
@@ -239,7 +288,14 @@ class TransportPair:
       raise
 
   def advance(self):
-    """Inspect both marker results before selecting either candidate."""
+    """Inspect both marker results before selecting either candidate.
+
+    Returns
+    -------
+    Pipe or None
+        Borrowed selected pipe, or None while identification is pending.
+        This pair keeps ownership until close; duplicate or invalid markers raise.
+    """
     while True:
       for pipe in self.pipes:
         if pipe.result is None:
@@ -288,13 +344,26 @@ class TransportPair:
 
 class Pool:
   def __init__(self, git:Path, target:int, directory:Path):
-    """Track READY workers until allocation transfers ownership to a client."""
+    """Track READY workers until allocation transfers ownership to a client.
+
+    Parameters
+    ----------
+    git : Path
+        Native worker executable; retained for replacement startup.
+    target : int
+        Requested pool size, from one through 32.
+    directory : Path
+        Existing private session directory used by every worker.
+    """
     self.git=git
     self.directory=directory
     self.target=target
     self.ready=queue.Queue()
     self.children=[]
+    self.pending=None
     self.lock=threading.Lock()
+    self.spawn_done=threading.Condition(self.lock)
+    self.spawning=0
     self.closing=threading.Event()
     self.errors=[]
     self.allocations=0
@@ -303,6 +372,19 @@ class Pool:
 
   def spawn(self):
     """Prepare one replacement and notify the allocator when it is READY."""
+    with self.spawn_done:
+      if self.closing.is_set():
+        return
+      self.spawning+=1
+    try:
+      self._spawn_worker()
+    finally:
+      with self.spawn_done:
+        self.spawning-=1
+        self.spawn_done.notify_all()
+
+  def _spawn_worker(self):
+    """Register each created child, including one started across shutdown."""
     if self.closing.is_set():
       return
     try:
@@ -320,19 +402,25 @@ class Pool:
       return
     with self.lock:
       self.children.append(p)
+      stopping=self.closing.is_set()
+    if stopping:
+      p.kill()
+      p.wait(timeout=3)
+      p.stdout.close()
+      return
     try:
       line=p.stdout.readline()
     finally:
       # READY is the only startup-pipe message. The five native named pipes
       # carry the command; retaining each startup pipe leaks a manager handle.
       p.stdout.close()
-    if line != ("READY "+str(p.pid)+"\n").encode("ascii"):
-      with self.lock:
-        self.errors.append("worker readiness failed: pid="+str(p.pid)+" response="+repr(line))
+    if self.closing.is_set():
       if p.poll() is None:
         p.kill()
       return
-    if self.closing.is_set():
+    if line != ("READY "+str(p.pid)+"\n").encode("ascii"):
+      with self.lock:
+        self.errors.append("worker readiness failed: pid="+str(p.pid)+" response="+repr(line))
       if p.poll() is None:
         p.kill()
       return
@@ -344,20 +432,29 @@ class Pool:
     print("WORKER_READY "+str(p.pid),flush=True)
 
   def alloc(self):
-    """Transfer a live worker immediately, or return None without waiting."""
+    """Reserve a live worker without waiting.
+
+    Returns
+    -------
+    str or None
+        Worker PID line, or None for shortage. The pool retains ownership until
+        commit_allocation() follows full reply publication.
+    """
     while True:
       try:
         p=self.ready.get_nowait()
       except queue.Empty:
         return None
-      # The client owns this worker after allocation. Retain only workers the
-      # manager is still offering; the native worker watches the shell itself.
       with self.lock:
         if p not in self.children:
           raise RuntimeError("allocated worker missing from ready tracking")
-        self.children.remove(p)
       if p.poll() is None:
+        with self.lock:
+          assert self.pending is None,"allocation calls must be serial"
+          self.pending=p
         break
+      with self.lock:
+        self.children.remove(p)
       self.replenish()
     self.allocations+=1
     if self.allocations % 100 == 0:
@@ -370,6 +467,13 @@ class Pool:
               flush=True)
     print("ALLOCATED "+str(p.pid),flush=True)
     return str(p.pid)+"\n"
+
+  def commit_allocation(self):
+    """Relinquish the reserved worker after its full PID reply is published."""
+    with self.lock:
+      assert self.pending is not None,"no allocation reply to commit"
+      self.children.remove(self.pending)
+      self.pending=None
 
   def replenish(self):
     """Start one replacement without waiting for its READY message."""
@@ -385,11 +489,15 @@ class Pool:
     for p in children:
       if p.poll() is None:
         p.kill()
+    with self.spawn_done:
+      self.spawn_done.wait_for(lambda:self.spawning==0)
+      children=list(self.children)
     for p in children:
       try:
         p.wait(timeout=3)
       except subprocess.TimeoutExpired:
         p.kill()
+        p.wait(timeout=3)
     for p in children:
       if p.stdout:
         p.stdout.close()
@@ -398,25 +506,158 @@ class Pool:
       except FileNotFoundError:
         pass
 
-def parse_get_request(frame):
-  """Validate GET and return client PID, sequence and actual marker."""
-  if (len(frame)<7 or frame[0] not in b"0123456789" or
-      not frame[1:].startswith(b"GET ") or not frame.endswith(b"\n")):
-    raise ValueError("bad GET frame or missing digit marker")
-  parts=frame[5:-1].split(b"-")
-  if len(parts)!=2 or any(not p.isdigit() or len(p)>10 for p in parts):
-    raise ValueError("invalid reply identity")
-  client_pid,sequence=(int(p) for p in parts)
-  if not 1<=client_pid<=0xffffffff or not 1<=sequence<=0xffffffff:
-    raise ValueError("reply identity out of range")
-  marker=sequence%10
-  if frame[0]-ord("0")!=marker:
-    raise ValueError("GET marker does not match request sequence")
-  return client_pid,sequence,marker
+def connect_allocation_pairs(port, request, reply, closing):
+  """Identify both persistent application connections.
+
+  Parameters
+  ----------
+  port : CompletionPort
+      Borrowed event queue for both pairs.
+  request, reply : TransportPair
+      Borrowed pairs, already created before either connection is accepted.
+  closing : threading.Event
+      Manager shutdown flag.
+
+  Returns
+  -------
+  bool
+      True once both application handles are selected, False on shutdown.
+  """
+  while not closing.is_set() and (
+      request.selected is None or reply.selected is None):
+    port.drain()
+    request.advance()
+    reply.advance()
+    if request.selected is None or reply.selected is None:
+      deadline=min(pair.deadline for pair in (request,reply)
+                   if pair.selected is None)
+      port.wait(max(1,int((deadline-time.monotonic())*1000)))
+  return not closing.is_set()
+
+
+def wait_operation(port, pipe, closing):
+  """Wait for an operation while dispatching readiness and shutdown notifications.
+
+  Parameters
+  ----------
+  port : CompletionPort
+      Borrowed live event queue.
+  pipe : Pipe
+      Borrowed pipe with a submitted operation.
+  closing : threading.Event
+      Manager shutdown flag; pending operations remain owned for cleanup.
+
+  Returns
+  -------
+  int or None
+      Consumed byte count, -1 for disconnection, or None on shutdown.
+  """
+  while pipe.result is None and not closing.is_set():
+    port.wait(0xffffffff)
+  return None if closing.is_set() else pipe.take()
+
+
+def read_allocation_request(port, inbound, closing):
+  """Read exactly one bounded serial GET line.
+
+  Parameters
+  ----------
+  port : CompletionPort
+      Borrowed event queue.
+  inbound : Pipe
+      Borrowed selected request channel; no prior read may remain pending.
+  closing : threading.Event
+      Manager shutdown flag.
+
+  Returns
+  -------
+  bool
+      True for a complete GET line, False on shutdown; malformed input raises.
+  """
+  frame=bytearray()
+  while len(frame)<4:
+    inbound.issue("read",size=4-len(frame))
+    count=wait_operation(port,inbound,closing)
+    if count is None:
+      return False
+    if count<=0:
+      raise ConnectionError("persistent GET channel closed")
+    frame.extend(inbound.buffer.raw[:count])
+    if not b"GET\n".startswith(frame):
+      raise ValueError("invalid persistent GET line")
+  return True
+
+
+def wait_ready_worker(port, pool):
+  """Allocate immediately or await a READY notification within five seconds.
+
+  Parameters
+  ----------
+  port : CompletionPort
+      Borrowed queue receiving the pool's readiness and shutdown notifications.
+  pool : Pool
+      Borrowed live worker pool.
+
+  Returns
+  -------
+  str or None
+      Owned-by-client worker PID line, or None for shortage/shutdown.
+      The caller checks the closing flag before publishing a shortage reply.
+  """
+  deadline=time.monotonic()+5
+  while not pool.closing.is_set():
+    answer=pool.alloc()
+    if answer is not None or time.monotonic()>=deadline:
+      return answer
+    port.wait(max(1,int((deadline-time.monotonic())*1000)))
+  return None
+
+
+def send_allocation_reply(port, outbound, pool, answer):
+  """Publish one PID or shortage reply before initiating replacement startup.
+
+  Parameters
+  ----------
+  port : CompletionPort
+      Borrowed event queue.
+  outbound : Pipe
+      Borrowed selected reply channel with no pending write.
+  pool : Pool
+      Borrowed live pool; replacement follows successful reply submission.
+  answer : str or None
+      Allocated PID plus newline, or None to send WAIT.
+
+  Returns
+  -------
+  bool
+      True after full write completion, False on shutdown; short writes raise.
+  """
+  payload=(answer or "WAIT\n").encode("ascii")
+  assert payload.endswith(b"\n")
+  outbound.issue("write",data=payload)
+  if answer is not None:
+    pool.replenish()
+  count=wait_operation(port,outbound,pool.closing)
+  if count is None:
+    return False
+  if count!=len(payload):
+    raise ConnectionError("short persistent PID reply")
+  if answer is not None:
+    pool.commit_allocation()
+  return True
 
 
 def allocation_server(owner_pid:int,pool:Pool):
-  """Serve serial GET lines and PID lines over two permanent named pipes."""
+  """Serve serial GET and PID lines over two permanent named pipes.
+
+  Parameters
+  ----------
+  owner_pid : int
+      Native owner PID identifying the allocation pipe names.
+  pool : Pool
+      Borrowed live pool; its closing event ends this server. Readiness
+      notifications use this server's queue until final cleanup.
+  """
   port=CompletionPort()
   pool.notify=port.wake
   request=None
@@ -426,68 +667,14 @@ def allocation_server(owner_pid:int,pool:Pool):
     request=TransportPair(port,r"\\.\pipe\git-preload-allocate-req-"+str(owner_pid),0)
     reply=TransportPair(port,r"\\.\pipe\git-preload-allocate-reply-"+str(owner_pid),0)
     print(f"ALLOCATOR_START persistent owner={owner_pid}",flush=True)
-
-    while not pool.closing.is_set() and (
-        request.selected is None or reply.selected is None):
-      port.drain()
-      request.advance()
-      reply.advance()
-      if request.selected is None or reply.selected is None:
-        deadline=min(pair.deadline for pair in (request,reply)
-                     if pair.selected is None)
-        port.wait(max(1,int((deadline-time.monotonic())*1000)))
-
-    if pool.closing.is_set():
+    if not connect_allocation_pairs(port,request,reply,pool.closing):
       return
-    inbound=request.selected
-    outbound=reply.selected
-    frame=bytearray()
-    state="get"
-    deadline=None
-    answer=None
-    inbound.issue("read",size=4)
-
-    while not pool.closing.is_set():
-      port.drain()
-
-      if state=="get" and inbound.result is not None:
-        count=inbound.take()
-        if count<=0:
-          raise ConnectionError("persistent GET channel closed")
-        frame.extend(inbound.buffer.raw[:count])
-        if not b"GET\n".startswith(frame):
-          raise ValueError("invalid persistent GET line")
-        if frame==b"GET\n":
-          frame.clear()
-          deadline=time.monotonic()+5
-          state="allocate"
-        else:
-          inbound.issue("read",size=4-len(frame))
-
-      if state=="allocate":
-        answer=pool.alloc()
-        if answer is not None or time.monotonic()>=deadline:
-          allocated=answer is not None
-          answer=(answer or "WAIT\n").encode("ascii")
-          assert answer.endswith(b"\n")
-          outbound.issue("write",data=answer)
-          # Start replacement after submitting the reply. Never join this thread.
-          if allocated:
-            pool.replenish()
-          state="reply"
-
-      if state=="reply" and outbound.result is not None:
-        if outbound.take()!=len(answer):
-          raise ConnectionError("short persistent PID reply")
-        inbound.issue("read",size=4)
-        state="get"
-
-      if state=="allocate":
-        # A READY notification wakes this wait before the five-second limit.
-        port.wait(max(1,int((deadline-time.monotonic())*1000)))
-      elif (inbound.result is None and outbound.result is None and
-            not pool.closing.is_set()):
-        port.wait(0xffffffff)
+    while read_allocation_request(port,request.selected,pool.closing):
+      answer=wait_ready_worker(port,pool)
+      if pool.closing.is_set():
+        break
+      if not send_allocation_reply(port,reply.selected,pool,answer):
+        break
   except Exception as error:
     if not pool.closing.is_set():
       with pool.lock:

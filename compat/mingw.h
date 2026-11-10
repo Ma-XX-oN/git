@@ -132,6 +132,8 @@ static inline int xutftowcs(wchar_t *wcs, const char *utf, size_t wcslen)
  * drive-directory pseudo-variables survive replacement; duplicate names are
  * case-insensitive, retaining the first spelling and last value. Return zero,
  * or -1 with errno set.
+ * @param environment Borrowed NULL-terminated array of validated UTF-8 NAME=VALUE entries.
+ * @return Zero on success, -1 with errno set on environment application failure.
  */
 int mingw_replace_environment(const char *const *environment);
 

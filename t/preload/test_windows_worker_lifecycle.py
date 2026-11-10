@@ -66,10 +66,11 @@ def run_case(git, name, arguments, expected_status, expected_output,
              missing_end=False, delayed_request=False, delayed_output=False,
              abandoned_probes=False, duplicate_control=False, held_probes=False,
              marker_order=None, status_after_output=False, delayed_status=False,
-             expected_errors=b""):
+             expected_errors=b"", context=b""):
     """Run a worker with stdin held open while output and status are drained."""
     env = os.environ.copy()
     env["GIT_PRELOAD_OWNER_PID"] = str(os.getpid())
+    env["GIT_EDITOR"] = "preload-worker-inherited-editor"
     directory = tempfile.TemporaryDirectory(prefix="preload-worker-")
     worker = subprocess.Popen([git, "--preload-worker", directory.name], env=env,
                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -107,7 +108,8 @@ def run_case(git, name, arguments, expected_status, expected_output,
             write(handles["stdin"], b"1")
         elif "param-env-cwd" in handles:
             frame = struct.pack("<I", len(arguments) + 1) + b"git\0"
-            frame += b"".join(arg.encode() + b"\0" for arg in arguments) + b"end\0"
+            frame += b"".join((arg.encode() if isinstance(arg, str) else arg) + b"\0"
+                              for arg in arguments) + context + b"end\0"
             payload = b"\0" if malformed else frame
             if missing_end:
                 payload = payload[:-4]
@@ -221,6 +223,14 @@ if __name__ == "__main__":
     run_case(git, "malformed-request-closes-output", [], 124, b"", malformed=True)
     run_case(git, "missing-end-tag-closes-output", ["--version"], 124, b"",
              missing_end=True)
+    environment = b"GIT_EDITOR=native-api-value\0\0"
+    run_case(git, "binary-environment", ["var", "GIT_EDITOR"], 0,
+             b"native-api-value\n", context=b"env\0" +
+             struct.pack("<I", len(environment)) + environment)
+    run_case(git, "omitted-environment-inherits-spawn-snapshot", ["var", "GIT_EDITOR"],
+             0, b"preload-worker-inherited-editor\n")
+    for bad in (b"\xff", b"\xc0\x80", b"\xed\xa0\x80"):
+        run_case(git, "invalid-utf8-argv-" + bad.hex(), [bad], 128, b"")
     for iteration in range(10):
         run_case(git, f"duplicate-control-markers-{iteration}", [], 122, b"",
                  duplicate_control=True)

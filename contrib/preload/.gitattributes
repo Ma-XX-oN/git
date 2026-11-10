@@ -1,2 +1,4 @@
 # Preserve the Bash client's two-space nesting without changing repository-wide rules.
 *.sh whitespace=trail,space,incomplete text eol=lf
+# Preserve original measurement bytes and their recorded digests.
+performance/evidence/* -text -whitespace

@@ -40,29 +40,38 @@ struct preload_transport {
 	char expected_marker; /**< Configured digit or first valid consumed marker. */
 };
 
-/** @brief Read shared progress without modifying it. */
-static LONG preload_transport_atomic_read(LONG *value)
+/**
+ * @brief Read shared progress without modifying it.
+ * @param value Borrowed aligned atomic LONG shared by the connector threads.
+ * @return Value observed with an interlocked memory barrier.
+ */
+static LONG atomic_read(LONG *value)
 {
 	return InterlockedCompareExchange(value, 0, 0);
 }
 
-/** @brief Connect one candidate and consume exactly one marker byte. */
-static void preload_transport_connect_candidate(struct preload_transport *connections,
-						int channel, int index)
+/**
+ * @brief Connect one candidate and consume exactly one marker byte.
+ * @param connections Borrowed live transport; caller is one of its connectors.
+ * @param channel Configured logical channel index.
+ * @param index Calling connector's instance index, zero or one.
+ */
+static void connect_candidate(struct preload_transport *connections,
+			      int channel, int index)
 {
 	struct preload_transport_channel *state = &connections->channels[channel];
 	HANDLE pipe = connections->pipes[channel][index];
 
 	state->result[index] = CANDIDATE_CANCELED;
-	while (!preload_transport_atomic_read(&connections->failure) &&
-	       !preload_transport_atomic_read(&state->winner)) {
+	while (!atomic_read(&connections->failure) &&
+	       !atomic_read(&state->winner)) {
 		DWORD n = 0, error = 0;
 
 		if (!ConnectNamedPipe(pipe, NULL))
 			error = GetLastError();
 		if (!error || error == ERROR_PIPE_CONNECTED) {
-			if (preload_transport_atomic_read(&connections->failure) ||
-			    preload_transport_atomic_read(&state->winner))
+			if (atomic_read(&connections->failure) ||
+			    atomic_read(&state->winner))
 				return;
 			if (ReadFile(pipe, &state->marker[index], 1, &n, NULL)) {
 				if (n == 1) {
@@ -76,8 +85,8 @@ static void preload_transport_connect_candidate(struct preload_transport *connec
 				error = GetLastError();
 			}
 		}
-		if (preload_transport_atomic_read(&connections->failure) ||
-		    preload_transport_atomic_read(&state->winner))
+		if (atomic_read(&connections->failure) ||
+		    atomic_read(&state->winner))
 			return;
 		if (error != ERROR_BROKEN_PIPE && error != ERROR_NO_DATA &&
 		    error != ERROR_PIPE_NOT_CONNECTED) {
@@ -95,13 +104,20 @@ static void preload_transport_connect_candidate(struct preload_transport *connec
 	}
 }
 
-/** @brief Inspect both completed candidates and publish this channel's result. */
-static void preload_transport_finish_channel(struct preload_transport *connections,
-					     int channel)
+/**
+ * @brief Collect marker results after both connectors have arrived.
+ * @param connections Borrowed transport with both candidate operations returned.
+ * @param channel Logical channel index in the configuration.
+ * @param chosen Receives the last marked candidate index, or -1 if none.
+ * @return Number of marked candidates, zero through two.
+ */
+static int collect_channel_markers(struct preload_transport *connections,
+				   int channel, int *chosen)
 {
 	struct preload_transport_channel *state = &connections->channels[channel];
-	int index, seen = 0, chosen = -1, result = PRELOAD_TRANSPORT_OK;
+	int index, seen = 0;
 
+	*chosen = -1;
 	for (index = 0; index < 2; index++) {
 		if (state->result[index] == CANDIDATE_CANCELED) {
 			DWORD available = 0, n = 0;
@@ -120,9 +136,23 @@ static void preload_transport_finish_channel(struct preload_transport *connectio
 		}
 		if (state->result[index] == CANDIDATE_MARKED) {
 			seen++;
-			chosen = index;
+			*chosen = index;
 		}
 	}
+	return seen;
+}
+/**
+ * @brief Inspect completed candidates and publish the channel's result.
+ * @param connections Borrowed shared state, accessed by the winning connector.
+ * @param channel Configured logical channel index; both operations have returned.
+ */
+static void finish_channel(struct preload_transport *connections,
+			   int channel)
+{
+	struct preload_transport_channel *state = &connections->channels[channel];
+	int chosen, result = PRELOAD_TRANSPORT_OK;
+	int seen = collect_channel_markers(connections, channel, &chosen);
+
 	if (seen == 2) {
 		trace_printf_key(&preload_worker_trace,
 				 "pid=%lu duplicate markers first=%u second=%u expected=%u channel=%s\n",
@@ -138,6 +168,11 @@ static void preload_transport_finish_channel(struct preload_transport *connectio
 		    (connections->expected_marker &&
 		     marker != connections->expected_marker)) {
 			result = PRELOAD_TRANSPORT_INVALID_MARKER;
+			trace_printf_key(&preload_worker_trace,
+					 "pid=%lu invalid marker=%u expected=%u channel=%s\n",
+					 GetCurrentProcessId(), (unsigned char)marker,
+					 (unsigned char)connections->expected_marker,
+					 connections->config.channels[channel].name);
 		} else {
 			connections->expected_marker = marker;
 			connections->accepted[channel] =
@@ -164,16 +199,21 @@ static void preload_transport_finish_channel(struct preload_transport *connectio
  * cancellation is accepted or the peer arrives. The winner then inspects both
  * results and publishes completion. Keeping cancellation and marker inspection
  * on one thread prevents a late cancel from interrupting duplicate inspection.
+ * @param connections Borrowed live transport, shared by both connectors.
+ * @param channel Configured logical channel index for this rendezvous.
+ * @param step One-based channel generation in the configured connection order.
+ * @param index Calling connector's instance index, zero or one.
+ * @return Zero after peer completion, -1 if connection or cancellation failed.
  */
-static int preload_transport_rendezvous(struct preload_transport *connections,
-					int channel, int step, int index)
+static int rendezvous(struct preload_transport *connections,
+		      int channel, int step, int index)
 {
 	int cancellation_requested = 0;
 
 	InterlockedExchange(&connections->arrived[index], step);
-	if (preload_transport_atomic_read(&connections->channels[channel].winner) == index + 1) {
-		while (preload_transport_atomic_read(&connections->arrived[1 - index]) < step) {
-			if (preload_transport_atomic_read(&connections->failure))
+	if (atomic_read(&connections->channels[channel].winner) == index + 1) {
+		while (atomic_read(&connections->arrived[1 - index]) < step) {
+			if (atomic_read(&connections->failure))
 				return -1;
 			if (!cancellation_requested) {
 				if (CancelIoEx(connections->pipes[channel][1 - index],
@@ -187,20 +227,24 @@ static int preload_transport_rendezvous(struct preload_transport *connections,
 			}
 			YieldProcessor();
 		}
-		preload_transport_finish_channel(connections, channel);
+		finish_channel(connections, channel);
 		InterlockedExchange(&connections->completed, step);
 	} else {
-		while (preload_transport_atomic_read(&connections->completed) < step) {
-			if (preload_transport_atomic_read(&connections->failure))
+		while (atomic_read(&connections->completed) < step) {
+			if (atomic_read(&connections->failure))
 				return -1;
 			YieldProcessor();
 		}
 	}
-	return preload_transport_atomic_read(&connections->failure) ? -1 : 0;
+	return atomic_read(&connections->failure) ? -1 : 0;
 }
 
-/** @brief Traverse every channel, then return normally to signal thread completion. */
-static DWORD WINAPI preload_transport_connect_channels(LPVOID data)
+/**
+ * @brief Traverse channels, then return normally to signal thread completion.
+ * @param data Borrowed preload_transport_connector, stable until this thread is joined.
+ * @return Zero; shared failure state records connection errors.
+ */
+static DWORD WINAPI connect_channels(LPVOID data)
 {
 	struct preload_transport_connector *connector = data;
 	struct preload_transport *connections = connector->connections;
@@ -208,17 +252,21 @@ static DWORD WINAPI preload_transport_connect_channels(LPVOID data)
 	int step;
 
 	for (step = 0; step < connections->config.nr; step++) {
-		preload_transport_connect_candidate(connections, order[step], connector->index);
-		if (preload_transport_atomic_read(&connections->failure) ||
-		    preload_transport_rendezvous(connections, order[step], step + 1,
+		connect_candidate(connections, order[step], connector->index);
+		if (atomic_read(&connections->failure) ||
+		    rendezvous(connections, order[step], step + 1,
 						 connector->index))
 			break;
 	}
 	return 0;
 }
 
-/** @brief Pass the complete handle table to two threads before publishing READY. */
-static int preload_transport_start_connections(struct preload_transport *connections)
+/**
+ * @brief Pass the complete handle table to two threads before publishing READY.
+ * @param connections Borrowed initialized transport; retains owned thread handles.
+ * @return Zero on success, -1 on thread creation failure; release still joins partial startup.
+ */
+static int start_connections(struct preload_transport *connections)
 {
 	int index;
 
@@ -229,7 +277,8 @@ static int preload_transport_start_connections(struct preload_transport *connect
 		connections->connectors[index].connections = connections;
 		connections->connectors[index].index = index;
 		connections->threads[index] = CreateThread(NULL, 0,
-							   preload_transport_connect_channels, &connections->connectors[index], 0, NULL);
+			connect_channels,
+			&connections->connectors[index], 0, NULL);
 		if (!connections->threads[index]) {
 			InterlockedCompareExchange(&connections->failure,
 						   PRELOAD_TRANSPORT_SYSTEM_ERROR, 0);
@@ -240,14 +289,15 @@ static int preload_transport_start_connections(struct preload_transport *connect
 }
 
 /**
- * @brief Join both threads, close probes, and transfer accepted handles to the caller.
+ * @brief Wait for connector completion, retrying handle cancellation on failure.
  *
  * Main waits for final completion. A deadline recheck is needed only if a wait
  * expires after the workers have advanced to another channel. On failure, retry
  * handle-targeted cancellation until both threads exit; storage and handles stay
  * alive throughout cancellation, including a call submitted just after a retry.
+ * @param connections Borrowed live state; all handles remain owned until threads stop.
  */
-static int preload_transport_finish_connections(struct preload_transport *connections)
+static void join_connector_threads(struct preload_transport *connections)
 {
 	HANDLE threads[2];
 	DWORD count = 0;
@@ -259,12 +309,12 @@ static int preload_transport_finish_connections(struct preload_transport *connec
 	while (count) {
 		DWORD wait, timeout = 1;
 
-		if (preload_transport_atomic_read(&connections->failure)) {
+		if (atomic_read(&connections->failure)) {
 			for (channel = 0; channel < connections->config.nr; channel++)
 				for (index = 0; index < 2; index++)
 					CancelIoEx(connections->pipes[channel][index], NULL);
 		} else {
-			LONG remaining = (LONG)((DWORD)preload_transport_atomic_read(
+			LONG remaining = (LONG)((DWORD)atomic_read(
 							&connections->deadline) -
 						GetTickCount());
 
@@ -281,6 +331,17 @@ static int preload_transport_finish_connections(struct preload_transport *connec
 		if (wait != WAIT_TIMEOUT)
 			BUG("cannot join Git IPC connection threads: %lu", GetLastError());
 	}
+}
+/**
+ * @brief Join connectors, discard probes and retain selected synchronous handles.
+ * @param connections Borrowed prepared state; relinquishes owned thread handles.
+ * @return First connection failure, or PRELOAD_TRANSPORT_OK.
+ */
+static int finish_connections(struct preload_transport *connections)
+{
+	int channel, index;
+
+	join_connector_threads(connections);
 	for (index = 0; index < 2; index++) {
 		if (connections->threads[index])
 			CloseHandle(connections->threads[index]);
@@ -295,7 +356,7 @@ static int preload_transport_finish_connections(struct preload_transport *connec
 		connections->pipes[channel][0] = INVALID_HANDLE_VALUE;
 		connections->pipes[channel][1] = connections->accepted[channel];
 	}
-	return preload_transport_atomic_read(&connections->failure);
+	return atomic_read(&connections->failure);
 }
 
 /**
@@ -320,7 +381,10 @@ static int validate_config(const struct preload_transport_config *config)
 	size_t i, j;
 
 	if (!config || !config->location || !config->nr || config->nr > 32 ||
-	    !config->channels || !config->order || !config->timeout_ms)
+	    !config->channels || !config->order || !config->timeout_ms ||
+	    config->timeout_ms > INT_MAX ||
+	    (config->expected_marker &&
+	     (config->expected_marker < '0' || config->expected_marker > '9')))
 		goto invalid;
 	for (i = 0; i < config->nr; i++) {
 		if (!config->channels[i].name || config->order[i] >= config->nr)
@@ -452,7 +516,7 @@ int preload_transport_start(struct preload_transport **out,
 	*out = allocate_transport(config);
 	if (!prepare_pipe_security(&security) &&
 	    !create_pipe_instances(*out, &security.attributes))
-		result = preload_transport_start_connections(*out);
+		result = start_connections(*out);
 	error = result ? GetLastError() : 0;
 	free(security.acl);
 	free(security.user);
@@ -465,13 +529,24 @@ int preload_transport_start(struct preload_transport **out,
 	return result;
 }
 
-/** @brief Join the two blocking selectors before application I/O begins. */
+/**
+ * @brief Complete connections in the configured order before application I/O.
+ * @param transport Borrowed prepared state; invoke once before transferring channels.
+ * @return A preload_transport_result; failed connections remain owned until release.
+ */
 int preload_transport_wait(struct preload_transport *transport)
 {
-	return preload_transport_finish_connections(transport);
+	return finish_connections(transport);
 }
 
-/** @brief Read from a selected synchronous application handle. */
+/**
+ * @brief Read application bytes from a connected input channel.
+ * @param transport Borrowed connected state.
+ * @param channel Configured zero-based channel index, still owned by transport.
+ * @param buffer Caller-owned destination with at least size writable bytes.
+ * @param size Maximum byte count to read.
+ * @return Bytes read, zero at EOF, or -1 with errno set; short reads are valid.
+ */
 ssize_t preload_transport_read(struct preload_transport *transport, size_t channel,
 			       void *buffer, size_t size)
 {
@@ -485,7 +560,14 @@ ssize_t preload_transport_read(struct preload_transport *transport, size_t chann
 	return -1;
 }
 
-/** @brief Write to a selected synchronous application handle. */
+/**
+ * @brief Write application bytes to a connected output channel.
+ * @param transport Borrowed connected state.
+ * @param channel Configured zero-based channel index, still owned by transport.
+ * @param buffer Borrowed source with at least size readable bytes.
+ * @param size Maximum byte count to write.
+ * @return Bytes written, or -1 with errno set; callers handle short writes.
+ */
 ssize_t preload_transport_write(struct preload_transport *transport, size_t channel,
 				const void *buffer, size_t size)
 {
@@ -497,7 +579,12 @@ ssize_t preload_transport_write(struct preload_transport *transport, size_t chan
 	return -1;
 }
 
-/** @brief Wait for the peer to consume outstanding pipe bytes. */
+/**
+ * @brief Finish buffered delivery where the platform requires it.
+ * @param transport Borrowed connected state.
+ * @param channel Configured output channel index, still owned by transport.
+ * @return Zero on success, -1 with errno set on failure. Windows waits for consumption.
+ */
 int preload_transport_flush(struct preload_transport *transport, size_t channel)
 {
 	if (FlushFileBuffers(transport->pipes[channel][1]))
@@ -506,7 +593,12 @@ int preload_transport_flush(struct preload_transport *transport, size_t channel)
 	return -1;
 }
 
-/** @brief Transfer a selected synchronous handle into an owned CRT descriptor. */
+/**
+ * @brief Transfer a connected channel to a caller-owned CRT/POSIX descriptor.
+ * @param transport Borrowed connected state; relinquishes the selected channel.
+ * @param channel Configured channel index, still owned by transport.
+ * @return Descriptor on success, -1 on failure, retaining ownership on failure.
+ */
 int preload_transport_detach_fd(struct preload_transport *transport, size_t channel)
 {
 	int fd = _open_osfhandle((intptr_t)transport->pipes[channel][1], _O_BINARY);
@@ -517,13 +609,21 @@ int preload_transport_detach_fd(struct preload_transport *transport, size_t chan
 	return fd;
 }
 
-/** @brief Close a connected channel still owned by this transport. */
+/**
+ * @param transport Borrowed prepared or connected state.
+ * @param channel Configured zero-based channel index.
+ * @return Nonzero if selected and still owned, zero before connection or after transfer/close.
+ */
 int preload_transport_has_channel(struct preload_transport *transport, size_t channel)
 {
 	return transport->accepted[channel] != INVALID_HANDLE_VALUE;
 }
 
-/** @brief Close a connected channel still owned by this transport. */
+/**
+ * @brief Close one channel after connection work has finished.
+ * @param transport Borrowed connected state; retains all other channels.
+ * @param channel Configured zero-based index; closing an already closed channel is safe.
+ */
 void preload_transport_close_channel(struct preload_transport *transport, size_t channel)
 {
 	int index;
@@ -537,7 +637,10 @@ void preload_transport_close_channel(struct preload_transport *transport, size_t
 	transport->accepted[channel] = INVALID_HANDLE_VALUE;
 }
 
-/** @brief Cancel/join connection operations before freeing their shared storage. */
+/**
+ * @brief Cancel/join pending connections and release all owned resources.
+ * @param transport Owned prepared or connected state, including partial startup; NULL is safe.
+ */
 void preload_transport_release(struct preload_transport *transport)
 {
 	size_t channel;
@@ -545,7 +648,7 @@ void preload_transport_release(struct preload_transport *transport)
 		return;
 	if (transport->threads[0] || transport->threads[1]) {
 		InterlockedCompareExchange(&transport->failure, PRELOAD_TRANSPORT_SYSTEM_ERROR, 0);
-		preload_transport_finish_connections(transport);
+		finish_connections(transport);
 	}
 	for (channel = 0; channel < transport->config.nr; channel++)
 		preload_transport_close_channel(transport, channel);

@@ -7,7 +7,12 @@
 # include <windows.h>
 #endif
 
-/** @brief Validate UTF-8 NAME=VALUE entries and their double-NUL terminator. */
+/**
+ * @brief Validate UTF-8 NAME=VALUE entries and their double-NUL terminator.
+ * @param buf Borrowed complete environment block, bounded by len.
+ * @param len Block byte count, including its two final NUL bytes.
+ * @return Zero if valid, -1 for malformed entries or termination.
+ */
 static int valid_environment_block(const char *buf, size_t len)
 {
 	size_t offset = 0;
@@ -31,7 +36,10 @@ static int valid_environment_block(const char *buf, size_t len)
 }
 
 #ifndef GIT_WINDOWS_NATIVE
-/** @brief Remove ordinary inherited POSIX environment entries. */
+/**
+ * @brief Remove ordinary inherited POSIX environment entries.
+ * @return Zero after clearing the environment, -1 on invalid entries or removal failure.
+ */
 static int clear_worker_environment(void)
 {
 	extern char **environ;
@@ -57,7 +65,12 @@ static int clear_worker_environment(void)
 }
 #endif
 
-/** @brief Validate and apply a complete UTF-8 binary environment snapshot. */
+/**
+ * @brief Validate and apply a complete UTF-8 binary environment snapshot.
+ * @param buf Borrowed double-NUL-terminated NAME=VALUE block.
+ * @param len Readable block size in bytes, including its terminators.
+ * @return Zero on success, -1 on validation or environment application failure.
+ */
 static int apply_environment_block(const char *buf, size_t len)
 {
 	size_t offset = 0;
@@ -99,13 +112,18 @@ static int apply_environment_block(const char *buf, size_t len)
 #endif
 }
 
-/* Restricted Bash export -p decoder. Included in preload-context.c after
- * clear_worker_environment(); never interpret commands or expansions. */
+/* Restricted Bash export -p decoder: never interpret commands or expansions. */
 /* Native Windows snapshot application uses mingw_replace_environment(). */
+/** One fully decoded exported variable, owned until snapshot application ends. */
 struct export_pair {
-	char *name, *value;
+	char *name; /**< Owned validated ASCII shell identifier. */
+	char *value; /**< Owned decoded UTF-8 value, including the empty string. */
 };
-/** @brief Decode one hexadecimal digit, returning -1 for an invalid digit. */
+/**
+ * @brief Decode one ASCII hexadecimal digit.
+ * @param c Input byte, with either letter case accepted.
+ * @return Digit value from zero through 15, or -1 for invalid input.
+ */
 static int export_hex(unsigned char c)
 {
 	if (c >= '0' && c <= '9')
@@ -116,7 +134,13 @@ static int export_hex(unsigned char c)
 		return c - 'A' + 10;
 	return -1;
 }
-/** @brief Append a non-NUL Unicode scalar in UTF-8, updating the byte count. */
+/**
+ * @brief Append a non-NUL Unicode scalar in UTF-8.
+ * @param out Caller-owned destination with at least four available bytes.
+ * @param n In/out number of bytes written to out.
+ * @param cp Unicode scalar value to encode.
+ * @return Zero on success, -1 for NUL, surrogate or out-of-range scalars.
+ */
 static int export_cp(char *out, size_t *n, unsigned long cp)
 {
 	if (!cp || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff))
@@ -138,31 +162,143 @@ static int export_cp(char *out, size_t *n, unsigned long cp)
 	}
 	return 0;
 }
-/** @brief Decode Bash literal quoting into a newly owned UTF-8 value. */
+/**
+ * @brief Decode a hexadecimal byte or Unicode escape after its prefix.
+ * @param p Borrowed quoted value contents, bounded by len.
+ * @param len Number of readable input bytes.
+ * @param i In/out index of x, u or U; advances through consumed digits.
+ * @param out Caller-owned output buffer with four bytes per input byte.
+ * @param n In/out number of output bytes written.
+ * @return Zero on success, -1 for invalid digits, NUL or Unicode scalars.
+ */
+static int decode_export_hex(const char *p, size_t len, size_t *i,
+			     char *out, size_t *n)
+{
+	int limit = p[*i] == 'x' ? 2 : p[*i] == 'u' ? 4 : 8;
+	unsigned long cp = 0;
+	int d, count = 0;
+
+	while (count < limit && *i + 1 < len &&
+	       (d = export_hex(p[*i + 1])) >= 0) {
+		cp = cp * 16 + d;
+		(*i)++;
+		count++;
+	}
+	if (!count || (limit > 2 && count != limit))
+		return -1;
+	if (limit != 2)
+		return export_cp(out, n, cp);
+	/* Bash hex escapes describe raw bytes, not Unicode code points. */
+	if (!cp)
+		return -1;
+	out[(*n)++] = (char)cp;
+	return 0;
+}
+
+/**
+ * @brief Decode one escape in ordinary double quotes.
+ * @param ch Byte immediately following the backslash.
+ * @param out Caller-owned output buffer with space for two bytes.
+ * @param n In/out byte count in out.
+ * @return Zero; unknown escapes retain their backslash, and newline is continued.
+ */
+static int decode_double_quote_escape(unsigned char ch, char *out, size_t *n)
+{
+	if (strchr("$\x60\"\\", ch))
+		out[(*n)++] = ch;
+	else if (ch != '\n') {
+		out[(*n)++] = '\\';
+		out[(*n)++] = ch;
+	}
+	return 0;
+}
+
+/**
+ * @brief Decode one ANSI-quoted octal byte escape.
+ * @param p Borrowed value contents, bounded by len.
+ * @param len Number of readable bytes.
+ * @param i In/out index of the first octal digit, advanced over consumed digits.
+ * @param out Caller-owned output buffer with space for one byte.
+ * @param n In/out byte count in out.
+ * @return Zero on success, -1 if the decoded byte is NUL.
+ */
+static int decode_export_octal(const char *p, size_t len, size_t *i,
+			       char *out, size_t *n)
+{
+	unsigned int cp = p[*i] - '0';
+	int count;
+
+	for (count = 1; count < 3 && *i + 1 < len &&
+	     p[*i + 1] >= '0' && p[*i + 1] <= '7'; count++)
+		cp = cp * 8 + (unsigned char)p[++*i] - '0';
+	if (!(unsigned char)cp)
+		return -1;
+	out[(*n)++] = (unsigned char)cp;
+	return 0;
+}
+
+/**
+ * @brief Decode one escape in ANSI-quoted Bash text.
+ * @param p Borrowed value contents, bounded by len.
+ * @param len Number of readable bytes.
+ * @param i In/out index immediately after the backslash, advanced over the escape.
+ * @param out Caller-owned output buffer with four bytes per input byte.
+ * @param n In/out byte count in out.
+ * @return Zero on success, -1 for an incomplete escape or encoded NUL.
+ */
+static int decode_ansi_escape(const char *p, size_t len, size_t *i,
+			      char *out, size_t *n)
+{
+	static const char letters[] = "abeEfnrtv\\'\"?";
+	static const char replacements[] = "\a\b\033\033\f\n\r\t\v\\'\"?";
+	unsigned char ch = p[*i];
+	const char *simple = strchr(letters, ch);
+
+	if (simple)
+		ch = replacements[simple - letters];
+	else if (ch == 'c') {
+		if (++*i == len)
+			return -1;
+		ch = p[*i] & 31;
+	} else if (strchr("xuU", ch)) {
+		return decode_export_hex(p, len, i, out, n);
+	} else if (ch >= '0' && ch <= '7') {
+		return decode_export_octal(p, len, i, out, n);
+	} else {
+		out[(*n)++] = '\\';
+	}
+	if (!ch)
+		return -1;
+	out[(*n)++] = ch;
+	return 0;
+}
+
+/**
+ * @brief Decode Bash literal quoting into a newly owned UTF-8 value.
+ * @param p Borrowed complete quoted value, including its quote delimiters.
+ * @param len Number of readable bytes in p.
+ * @param value Receives newly allocated decoded text on success; caller frees it.
+ * @return Zero on success, -1 for malformed quoting, invalid UTF-8 or allocation failure.
+ */
 static int decode_export_value(const char *p, size_t len, char **value)
 {
 	int ansi = len >= 3 && p[0] == '$' && p[1] == '\'';
 	char quote = ansi ? '\'' : '"', *out;
-	size_t i, n = 0;
-	if (ansi) {
-		p += 2;
-		len -= 2;
-	} else {
-		if (len < 2 || p[0] != '"')
-			return -1;
-		p++;
-		len--;
-	}
-	if (!len || p[len - 1] != quote)
+	size_t i, n = 0, prefix = ansi ? 2 : 1;
+
+	if ((!ansi && (len < 2 || p[0] != '"')) || len <= prefix)
+		return -1;
+	p += prefix;
+	len -= prefix;
+	if (p[len - 1] != quote)
 		return -1;
 	len--;
-	out = malloc(len * 4 + 1);
+	out = malloc(st_add(st_mult(len, 4), 1));
 	if (!out)
 		return -1;
 	for (i = 0; i < len; i++) {
 		unsigned char ch = p[i];
-		unsigned long cp;
-		int d, count, limit;
+
 		if (!ch || ch == quote)
 			goto fail;
 		if (ch != '\\') {
@@ -171,90 +307,9 @@ static int decode_export_value(const char *p, size_t len, char **value)
 		}
 		if (++i == len)
 			goto fail;
-		ch = p[i];
-		if (!ansi) {
-			if (ch == '$' || ch == 0x60 || ch == '"' || ch == '\\')
-				out[n++] = ch;
-			else if (ch != '\n') {
-				out[n++] = '\\';
-				out[n++] = ch;
-			}
-			continue;
-		}
-		switch (ch) {
-		case 'a':
-			ch = '\a';
-			break;
-		case 'b':
-			ch = '\b';
-			break;
-		case 'e':
-		case 'E':
-			ch = 27;
-			break;
-		case 'f':
-			ch = '\f';
-			break;
-		case 'n':
-			ch = '\n';
-			break;
-		case 'r':
-			ch = '\r';
-			break;
-		case 't':
-			ch = '\t';
-			break;
-		case 'v':
-			ch = '\v';
-			break;
-		case '\\':
-		case '\'':
-		case '"':
-		case '?':
-			break;
-		case 'c':
-			if (++i == len)
-				goto fail;
-			ch = p[i] & 31;
-			break;
-		case 'x':
-		case 'u':
-		case 'U':
-			limit = ch == 'x' ? 2 : ch == 'u' ? 4 :
-							    8;
-			cp = 0;
-			count = 0;
-			while (count < limit && i + 1 < len &&
-			       (d = export_hex(p[i + 1])) >= 0) {
-				cp = cp * 16 + d;
-				i++;
-				count++;
-			}
-			if (!count || (limit > 2 && count != limit))
-				goto fail;
-			if (limit == 2) {
-				/* Bash hex escapes describe raw bytes, not Unicode code points. */
-				if (!cp)
-					goto fail;
-				out[n++] = (char)cp;
-			} else if (export_cp(out, &n, cp))
-				goto fail;
-			continue;
-		default:
-			if (ch >= '0' && ch <= '7') {
-				cp = ch - '0';
-				for (count = 1; count < 3 && i + 1 < len &&
-						p[i + 1] >= '0' && p[i + 1] <= '7';
-				     count++)
-					cp = cp * 8 + (unsigned char)p[++i] - '0';
-				ch = cp;
-			} else
-				out[n++] = '\\';
-			break;
-		}
-		if (!ch)
+		if (ansi ? decode_ansi_escape(p, len, &i, out, &n) :
+		    decode_double_quote_escape(p[i], out, &n))
 			goto fail;
-		out[n++] = ch;
 	}
 	out[n] = '\0';
 	if (!is_utf8(out))
@@ -265,7 +320,12 @@ fail:
 	free(out);
 	return -1;
 }
-/** @brief Recognize a shell variable name without interpreting shell syntax. */
+/**
+ * @brief Recognize a shell variable name without interpreting shell syntax.
+ * @param p Borrowed name bytes, excluding any equal sign or terminator.
+ * @param len Number of readable name bytes.
+ * @return Nonzero for an ASCII shell identifier, zero otherwise.
+ */
 static int export_name_ok(const char *p, size_t len)
 {
 	size_t i;
@@ -279,81 +339,184 @@ static int export_name_ok(const char *p, size_t len)
 			return 0;
 	return 1;
 }
-/** @brief Decode restricted Bash exports and apply their complete snapshot. */
-static int apply_export_stream(const char *buf, size_t len)
+/**
+ * @brief Recognize exported variable attributes without applying shell behavior.
+ * @param line Borrowed complete declaration, excluding its newline.
+ * @param len Number of readable bytes in line.
+ * @param name Receives a borrowed pointer to the variable name and optional value.
+ * @return Zero for a scalar, one for an array (not part of the child environment),
+ *   or -1 for an invalid declaration or a missing export attribute.
+ */
+static int export_declaration(const char *line, size_t len, const char **name)
 {
-	struct export_pair *pairs = NULL, *grown;
-	size_t off = 0, used = 0, cap = 0, i;
-	int rc = -1;
+	const char *flags, *end;
+	int exported = 0, array = 0;
+
+	if (len >= 11 && !memcmp(line, "declare -x ", 11)) {
+		*name = line + 11;
+		return 0;
+	}
+	if (len < 11 || memcmp(line, "declare -", 9))
+		return -1;
+	flags = line + 9;
+	end = memchr(flags, ' ', len - 9);
+	if (!end)
+		return -1;
+	for (; flags < end; flags++) {
+		if (!strchr("aAilnrtux", *flags))
+			return -1;
+		exported |= *flags == 'x';
+		array |= *flags == 'a' || *flags == 'A';
+	}
+	*name = end + 1;
+	return exported ? array : -1;
+}
+
+/**
+ * @brief Decode one export declaration without evaluating shell syntax.
+ * @param line Borrowed declaration, excluding its terminating newline.
+ * @param len Number of readable bytes in line.
+ * @param pair Zero-initialized result; receives owned name/value strings, or no name
+ *   for an exported variable with no value. Caller frees both strings.
+ * @return Zero on success, -1 for malformed text or allocation failure.
+ */
+static int decode_export_line(const char *line, size_t len, struct export_pair *pair)
+{
+	const char *name, *eq;
+	size_t name_len;
+	int array = export_declaration(line, len, &name);
+
+	if (array < 0)
+		return -1;
+	eq = memchr(name, '=', line + len - name);
+	name_len = eq ? (size_t)(eq - name) : (size_t)(line + len - name);
+	if (!export_name_ok(name, name_len))
+		return -1;
+	if (!eq || array)
+		return 0;
+	pair->name = xmemdupz(name, name_len);
+	if (decode_export_value(eq + 1, line + len - eq - 1, &pair->value)) {
+		free(pair->name);
+		pair->name = NULL;
+		return -1;
+	}
+	return 0;
+}
+
+/**
+ * @brief Apply a fully decoded snapshot after all declarations have validated.
+ * @param pairs Borrowed array of complete name/value pairs.
+ * @param nr Number of entries; zero replaces the environment with an empty snapshot.
+ * @return Zero on success, -1 on environment application failure.
+ */
+static int apply_export_pairs(const struct export_pair *pairs, size_t nr)
+{
+	size_t i;
 #ifdef GIT_WINDOWS_NATIVE
 	struct strvec environment = STRVEC_INIT;
+	int result;
+
+	for (i = 0; i < nr; i++)
+		strvec_pushf(&environment, "%s=%s", pairs[i].name, pairs[i].value);
+	result = mingw_replace_environment(environment.v);
+	strvec_clear(&environment);
+	return result;
+#else
+	if (clear_worker_environment())
+		return -1;
+	for (i = 0; i < nr; i++)
+		if (setenv(pairs[i].name, pairs[i].value, 1))
+			return -1;
+	return 0;
 #endif
+}
+
+/**
+ * @brief Decode and apply a restricted Bash export snapshot.
+ * @param buf Borrowed UTF-8 declarations, each terminated by newline.
+ * @param len Number of readable bytes; excludes the wire NUL terminator.
+ * @return Zero on success, -1 for invalid text or environment application failure.
+ */
+static int apply_export_stream(const char *buf, size_t len)
+{
+	struct export_pair *pairs = NULL;
+	size_t off = 0, used = 0, cap = 0, i;
+	int result = -1;
+
 	if ((len && buf[len - 1] != '\n') || memchr(buf, '\0', len))
 		return -1;
 	while (off < len) {
 		const char *line = buf + off;
 		const char *end = memchr(line, '\n', len - off);
-		const char *name, *eq;
-		size_t line_len, name_len;
-		if (!end)
-			goto cleanup;
-		line_len = end - line;
-		if (line_len < 11 || memcmp(line, "declare -x ", 11))
-			goto cleanup;
-		name = line + 11;
-		eq = memchr(name, '=', line_len - 11);
-		name_len = eq ? (size_t)(eq - name) : line_len - 11;
-		if (!export_name_ok(name, name_len))
-			goto cleanup;
-		off = (size_t)(end - buf) + 1;
-		if (!eq)
+		struct export_pair pair = { 0 };
+
+		if (!end || decode_export_line(line, end - line, &pair))
+			goto done;
+		off = end - buf + 1;
+		if (!pair.name)
 			continue;
-		if (used == cap) {
-			size_t next = cap ? cap * 2 : 32;
-			if (next > SIZE_MAX / sizeof(*pairs))
-				goto cleanup;
-			grown = realloc(pairs, next * sizeof(*pairs));
-			if (!grown)
-				goto cleanup;
-			pairs = grown;
-			cap = next;
-		}
-		pairs[used].name = malloc(name_len + 1);
-		if (!pairs[used].name)
-			goto cleanup;
-		memcpy(pairs[used].name, name, name_len);
-		pairs[used].name[name_len] = '\0';
-		pairs[used].value = NULL;
-		used++;
-		if (decode_export_value(eq + 1, end - eq - 1,
-					&pairs[used - 1].value))
-			goto cleanup;
+		ALLOC_GROW(pairs, used + 1, cap);
+		pairs[used++] = pair;
 	}
-#ifdef GIT_WINDOWS_NATIVE
-	for (i = 0; i < used; i++)
-		strvec_pushf(&environment, "%s=%s", pairs[i].name, pairs[i].value);
-	rc = mingw_replace_environment(environment.v);
-#else
-	if (clear_worker_environment())
-		goto cleanup;
-	for (i = 0; i < used; i++)
-		if (setenv(pairs[i].name, pairs[i].value, 1))
-			goto cleanup;
-	rc = 0;
-#endif
-cleanup:
-#ifdef GIT_WINDOWS_NATIVE
-	strvec_clear(&environment);
-#endif
+	result = apply_export_pairs(pairs, used);
+done:
 	for (i = 0; i < used; i++) {
 		free(pairs[i].name);
 		free(pairs[i].value);
 	}
 	free(pairs);
-	return rc;
+	return result;
 }
 
-/** @brief Apply validated cwd and environment fields to this worker process. */
+/**
+ * @brief Apply a path emitted directly by the caller's pwd builtin.
+ * @param value Borrowed native UTF-8 path followed by exactly one framing newline.
+ * @param len Readable bytes, excluding the wire NUL terminator.
+ * @return Zero on success, -1 for invalid text or chdir failure.
+ */
+static int apply_cwd_field(const char *value, size_t len)
+{
+	char *path;
+	int result;
+
+	if (len < 2 || value[len - 1] != '\n')
+		return -1;
+	path = xmemdupz(value, len - 1);
+	result = !is_utf8(path) || chdir(path) ? -1 : 0;
+	free(path);
+	return result;
+}
+
+/**
+ * @brief Apply one byte-counted binary environment field.
+ * @param buf Borrowed context frame, bounded by len.
+ * @param len Number of readable bytes.
+ * @param offset In/out position of the little-endian byte count; advances past the block.
+ * @return Zero on success, -1 for invalid framing or environment application failure.
+ */
+static int apply_binary_env_field(const char *buf, size_t len, size_t *offset)
+{
+	const unsigned char *p;
+	uint32_t size;
+
+	if (len - *offset < 4)
+		return -1;
+	p = (const unsigned char *)buf + *offset;
+	size = (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+		((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+	*offset += 4;
+	if (size > len - *offset || apply_environment_block(buf + *offset, size))
+		return -1;
+	*offset += size;
+	return 0;
+}
+
+/**
+ * @brief Apply validated cwd and environment fields to this worker process.
+ * @param buf Borrowed encoded fields, excluding argv and the request end tag.
+ * @param len Number of readable bytes; zero retains inherited context.
+ * @return Zero on success, -1 for invalid fields or a context application failure.
+ */
 int preload_context_apply(const char *buf, size_t len)
 {
 	size_t offset = 0;
@@ -362,54 +525,33 @@ int preload_context_apply(const char *buf, size_t len)
 	while (offset < len) {
 		const char *tag = buf + offset;
 		const char *end = memchr(tag, '\0', len - offset);
+		const char *value;
+
 		if (!end)
 			return -1;
-		offset = (size_t)(end - buf) + 1;
-		if (!strcmp(tag, "cwd") && !seen_cwd) {
-			size_t n;
-			char *path;
-			int bad;
-			end = memchr(buf + offset, '\0', len - offset);
-			if (!end)
-				return -1;
-			n = (size_t)(end - (buf + offset));
-			if (n < 2 || buf[offset + n - 1] != '\n')
-				return -1;
-			path = malloc(n);
-			if (!path)
-				return -1;
-			memcpy(path, buf + offset, n - 1);
-			path[n - 1] = '\0';
-			bad = !is_utf8(path) || chdir(path);
-			free(path);
-			if (bad)
-				return -1;
-			seen_cwd = 1;
-			offset = (size_t)(end - buf) + 1;
-		} else if (!strcmp(tag, "env-export") && !seen_env) {
-			end = memchr(buf + offset, '\0', len - offset);
-			if (!end || apply_export_stream(buf + offset,
-							(size_t)(end - (buf + offset))))
+		offset = end - buf + 1;
+		if (!strcmp(tag, "env") && !seen_env) {
+			if (apply_binary_env_field(buf, len, &offset))
 				return -1;
 			seen_env = 1;
-			offset = (size_t)(end - buf) + 1;
-		} else if (!strcmp(tag, "env") && !seen_env) {
-			unsigned long size;
-			if (len - offset < 4)
+			continue;
+		}
+		value = buf + offset;
+		end = memchr(value, '\0', len - offset);
+		if (!end)
+			return -1;
+		if (!strcmp(tag, "cwd") && !seen_cwd) {
+			if (apply_cwd_field(value, end - value))
 				return -1;
-			size = (unsigned char)buf[offset] |
-			       ((unsigned long)(unsigned char)buf[offset + 1] << 8) |
-			       ((unsigned long)(unsigned char)buf[offset + 2] << 16) |
-			       ((unsigned long)(unsigned char)buf[offset + 3] << 24);
-			offset += 4;
-			if (size > len - offset ||
-			    apply_environment_block(buf + offset, size))
+			seen_cwd = 1;
+		} else if (!strcmp(tag, "env-export") && !seen_env) {
+			if (apply_export_stream(value, end - value))
 				return -1;
-			offset += size;
 			seen_env = 1;
 		} else {
 			return -1;
 		}
+		offset = end - buf + 1;
 	}
 	return 0;
 }

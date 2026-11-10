@@ -1,8 +1,5 @@
 #include "git-compat-util.h"
-#include "common-init.h"
 #include "preload-worker.h"
-#include "preload-transport.h"
-#include "preload-context.h"
 #include "trace.h"
 
 /* Owned process-lifetime path; owner monitoring remains active through CRT exit. */
@@ -19,7 +16,11 @@ static wchar_t preload_worker_exit_log_path[4096];
  * Use a new Win32 handle for every diagnostic: Git may already have closed
  * Trace2 and trace_printf_key's descriptors during shutdown.
  */
-/** @brief Append retained shutdown evidence without relying on trace descriptors. */
+/**
+ * @brief Append retained shutdown evidence without relying on trace descriptors.
+ * @param event Borrowed event label, valid for this call.
+ * @param status Exit value to append, or a negative value to record only the label.
+ */
 void preload_worker_exit_diagnostic(const char *event, int status)
 {
 	char message[160], error_message[200];
@@ -59,16 +60,6 @@ static void preload_worker_atexit_log(void)
 	preload_worker_exit_diagnostic("exiting...", -1);
 }
 
-/*
- * The standard Git builtin dispatcher calls exit(ret) from git.c.
- * The temporary benchmark build intercepts that dispatcher exit only, so
- * the one-shot worker can flush its native pipes and deliver the status.
- */
-/*
- * Preserve Git's existing common_exit() tracing on the caller side.
- * Return to the existing CRT exit() call after completion, without tracing twice.
- */
-#undef exit
 /**
  * Wait for the reader to consume buffered output before closing its pipe.
  * @param fd Borrowed synchronous output descriptor, still open.
@@ -82,11 +73,6 @@ int preload_worker_flush_output(int fd)
 	return -1;
 }
 
-#define exit(code) exit(common_exit(__FILE__, __LINE__, (code)))
-/*
- * Experimental preinitialized Git worker.  The PID identifies four
- * two instances per channel; the Python manager never forwards command bytes.
- */
 /*
  * Git Bash can open a throwaway pipe instance during redirection.
  * Two threads, created before READY, traverse all five channels themselves.
@@ -94,24 +80,32 @@ int preload_worker_flush_output(int fd)
  */
 /*
  * The manager transfers each worker to git-ipc at allocation time. Keep an
- * independent reference to the owning Bash process so an abandoned worker
+ * independent reference to the owning application so an abandoned worker
  * terminates even if it is blocked on a named pipe.
  *
  * Waiting on the process handle is stronger than polling its PID: it wakes
  * when the original process exits and cannot confuse a reused numeric PID.
  */
-/** @brief Terminate an abandoned worker when the captured owner handle signals. */
+/**
+ * @brief Terminate an abandoned worker when the captured owner handle signals.
+ * @param context Owned synchronous owner process handle, retained until process exit.
+ * @return Never returns; owner death terminates the worker with status 137.
+ */
 static DWORD WINAPI preload_worker_watch_owner(LPVOID context)
 {
 	HANDLE owner = (HANDLE)context;
 	WaitForSingleObject(owner, INFINITE);
+	trace_printf_key(&preload_worker_trace, "owner died\n");
 	preload_worker_exit_diagnostic("ExitProcess owner-death", 137);
 	rmdir(preload_worker_directory);
 	ExitProcess(137);
 	return 0;
 }
 
-/** @brief Capture the original shell process and start its lifetime watcher. */
+/**
+ * @brief Capture the original application process and start its lifetime watcher.
+ * @return Zero on success, -1 for an invalid/dead owner or native startup failure.
+ */
 static int preload_worker_start_owner_watch(void)
 {
 	char value[32];
@@ -152,9 +146,10 @@ static int preload_worker_start_owner_watch(void)
 /**
  * @brief Prepare owner monitoring and retain startup diagnostics.
  * @param directory Borrowed existing private worker directory.
+ * @param location Receives an owned native pipe-name stem on success.
  * @return Zero on success, or a worker startup status on failure.
  */
-int preload_worker_platform_prepare(const char *directory)
+int preload_worker_platform_prepare(const char *directory, char **location)
 {
 	preload_worker_directory = xstrdup(directory);
 	{
@@ -175,21 +170,12 @@ int preload_worker_platform_prepare(const char *directory)
 	if (preload_worker_start_owner_watch()) {
 		return 136;
 	}
+	*location = xstrfmt("\\\\.\\pipe\\git-preload-%lu", (unsigned long)getpid());
 	return 0;
 }
 
 /**
- * @brief Build the worker's native named-pipe stem.
- * @param directory Borrowed private directory; endpoint identity uses native PID.
- * @return Newly owned pipe-name stem, freed by the shared worker.
- */
-char *preload_worker_platform_location(const char *directory UNUSED)
-{
-	return xstrfmt("\\\\.\\pipe\\git-preload-%lu", (unsigned long)getpid());
-}
-
-/**
- * @brief Open the client's unsupported application input as EOF.
+ * @brief Open an EOF-producing command input descriptor.
  * @return Owned binary NUL descriptor, or -1 with errno set.
  */
 int preload_worker_open_input(void)

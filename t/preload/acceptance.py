@@ -32,6 +32,17 @@ for value in simple 'sp ace' 'slash\back' 'quote"value' '$(echo DO-NOT-EXECUTE)'
   [[ $actual == "$value" ]] || exit 15
 done
 [[ ! -v GIT_EDITOR ]] || exit 16
+(
+  declare -rx GIT_EDITOR='readonly value'
+  actual=$(git-ipc var GIT_EDITOR) || exit 26
+  [[ $actual == 'readonly value' ]] || exit 27
+) || exit 28
+(
+  declare -ix GIT_EDITOR=42
+  declare -ax PRELOAD_ARRAY=(first second)
+  actual=$(git-ipc var GIT_EDITOR) || exit 29
+  [[ $actual == 42 ]] || exit 30
+) || exit 31
 git-ipc rev-parse --show-toplevel >"$3/cwd.txt" || exit 17
 cd "$4/contrib/preload" || exit 19
 actual=$(git-ipc rev-parse --show-prefix) || exit 20

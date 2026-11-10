@@ -2,12 +2,18 @@
 #include "preload-transport.h"
 #include "strbuf.h"
 
+/** Owns connected FIFO descriptors and borrows immutable endpoint configuration. */
 struct preload_transport {
-	struct preload_transport_config config;
-	int *fds;
+	struct preload_transport_config config; /**< Copied configuration; strings remain borrowed. */
+	int *fds; /**< Owned descriptor table, with -1 for unconnected or transferred entries. */
 };
 
-/** @brief Prepare borrowed FIFO names; their manager owns creation and removal. */
+/**
+ * @brief Prepare borrowed FIFO names created by the worker's endpoint preparation.
+ * @param out Receives owned state, or NULL on configuration failure; caller releases it.
+ * @param config Borrowed configuration; referenced strings outlive the transport.
+ * @return Zero on success, -1 with errno set for invalid configuration.
+ */
 int preload_transport_start(struct preload_transport **out,
 			    const struct preload_transport_config *config)
 {
@@ -40,7 +46,11 @@ int preload_transport_start(struct preload_transport **out,
 	return 0;
 }
 
-/** @brief Open each unidirectional FIFO in the established client/server order. */
+/**
+ * @brief Complete connections in the configured order before application I/O.
+ * @param transport Borrowed prepared state; invoke once before transferring channels.
+ * @return A preload_transport_result; failed connections remain owned until release.
+ */
 int preload_transport_wait(struct preload_transport *transport)
 {
 	size_t step;
@@ -58,21 +68,40 @@ int preload_transport_wait(struct preload_transport *transport)
 	return PRELOAD_TRANSPORT_OK;
 }
 
-/** @brief Read application bytes, retrying interrupted FIFO reads. */
+/**
+ * @brief Read application bytes from a connected input channel.
+ * @param transport Borrowed connected state.
+ * @param channel Configured zero-based channel index, still owned by transport.
+ * @param buffer Caller-owned destination with at least size writable bytes.
+ * @param size Maximum byte count to read.
+ * @return Bytes read, zero at EOF, or -1 with errno set; short reads are valid.
+ */
 ssize_t preload_transport_read(struct preload_transport *transport, size_t channel,
 			       void *buffer, size_t size)
 {
 	return xread(transport->fds[channel], buffer, size);
 }
 
-/** @brief Write application bytes, retrying interrupted FIFO writes. */
+/**
+ * @brief Write application bytes to a connected output channel.
+ * @param transport Borrowed connected state.
+ * @param channel Configured zero-based channel index, still owned by transport.
+ * @param buffer Borrowed source with at least size readable bytes.
+ * @param size Maximum byte count to write.
+ * @return Bytes written, or -1 with errno set; callers handle short writes.
+ */
 ssize_t preload_transport_write(struct preload_transport *transport, size_t channel,
 				const void *buffer, size_t size)
 {
 	return xwrite(transport->fds[channel], buffer, size);
 }
 
-/** @brief FIFO writes have no additional userspace transport buffer to flush. */
+/**
+ * @brief Finish buffered delivery where the platform requires it.
+ * @param transport Borrowed connected state.
+ * @param channel Configured output channel index, still owned by transport.
+ * @return Zero on success, -1 with errno set on failure. Windows waits for consumption.
+ */
 int preload_transport_flush(struct preload_transport *transport, size_t channel)
 {
 	if (transport->fds[channel] < 0) {
@@ -82,7 +111,12 @@ int preload_transport_flush(struct preload_transport *transport, size_t channel)
 	return 0;
 }
 
-/** @brief Transfer one FIFO descriptor and remove it from transport ownership. */
+/**
+ * @brief Transfer a connected channel to a caller-owned CRT/POSIX descriptor.
+ * @param transport Borrowed connected state; relinquishes the selected channel.
+ * @param channel Configured channel index, still owned by transport.
+ * @return Descriptor on success, -1 on failure, retaining ownership on failure.
+ */
 int preload_transport_detach_fd(struct preload_transport *transport, size_t channel)
 {
 	int fd = transport->fds[channel];
@@ -90,13 +124,21 @@ int preload_transport_detach_fd(struct preload_transport *transport, size_t chan
 	return fd;
 }
 
-/** @brief Close a descriptor owned by the transport, including error cleanup. */
+/**
+ * @param transport Borrowed prepared or connected state.
+ * @param channel Configured zero-based channel index.
+ * @return Nonzero if selected and still owned, zero before connection or after transfer/close.
+ */
 int preload_transport_has_channel(struct preload_transport *transport, size_t channel)
 {
 	return transport->fds[channel] >= 0;
 }
 
-/** @brief Close a descriptor owned by the transport, including error cleanup. */
+/**
+ * @brief Close one channel after connection work has finished.
+ * @param transport Borrowed connected state; retains all other channels.
+ * @param channel Configured zero-based index; closing an already closed channel is safe.
+ */
 void preload_transport_close_channel(struct preload_transport *transport, size_t channel)
 {
 	if (transport->fds[channel] >= 0)
@@ -104,7 +146,10 @@ void preload_transport_close_channel(struct preload_transport *transport, size_t
 	transport->fds[channel] = -1;
 }
 
-/** @brief Close all descriptors still owned by the transport. */
+/**
+ * @brief Cancel/join pending connections and release all owned resources.
+ * @param transport Owned prepared or connected state, including partial startup; NULL is safe.
+ */
 void preload_transport_release(struct preload_transport *transport)
 {
 	size_t channel;

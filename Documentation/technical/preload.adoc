@@ -20,8 +20,10 @@ count from 1 through 32. Call `git-ipc` with ordinary Git arguments. Calls from
 one owner are serial; the persistent allocator connection permits one
 outstanding request. The default pool contains three workers.
 
-The manager returns only workers that have reported READY. It replies with
-the selected worker before scheduling a replacement. Every worker runs one
+The manager returns only workers that have reported READY. It publishes
+the selected worker's reply before scheduling a replacement and retains
+ownership until the full reply write completes. A failed reply therefore leaves
+the worker available to manager cleanup. Every worker runs one
 command and terminates, so repository state cannot leak into the next call.
 The manager implementation remains Python; a native `--preload-manager` is a
 separate task.
@@ -46,6 +48,9 @@ endpoint setup, standard-handle adaptation and owner monitoring.
 applies the command's complete working-directory and environment snapshot.
 The export decoder accepts restricted Bash quoting; it never evaluates shell
 commands or substitutions.
+The Bash snapshot covers exported scalar variables and omits exported Bash
+functions. Native environment-block callers can supply those encoded function
+entries directly.
 
 `preload-transport.h` exposes an opaque transport. Start prepares endpoints
 before READY, wait completes connection selection, and release cancels and
@@ -54,6 +59,8 @@ are borrowed until release. A detached descriptor transfers ownership to the
 caller; all other channels remain owned by the transport. Only the applicable
 Windows or POSIX implementation is built. The unrelated index preloading
 implementation is independent of these modules.
+POSIX worker mode requires pthread support for owner monitoring. Builds with
+`NO_PTHREADS` retain ordinary Git commands and reject worker startup explicitly.
 
 == Worker request and completion
 
@@ -77,6 +84,8 @@ environment map. Bash clients use `env-export` because `export -p` captures
 exported variables using a builtin, avoiding process startup and per-variable
 shell serialization. The double NUL belongs to the environment-block encoding,
 including an empty block; it is independent of the host operating system.
+Shell variable attributes such as readonly and integer preserve their emitted
+scalar value. Array declarations have no child-environment value and are ignored.
 Omitting both environment fields retains the worker's environment inherited
 when the manager spawned it. That snapshot can differ from the caller's
 environment at command submission.

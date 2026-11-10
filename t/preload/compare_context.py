@@ -59,6 +59,16 @@ def main():
     ]
     for size in (32766, 32767, 32768, 40000):
         cases.append((f"value-size-{size}", initial, binary(["LONG=" + "x" * size])))
+    for name, escape in (
+            ("simple", br'''\a\b\e\E\f\n\r\t\v\\\'\"\?'''),
+            ("hex-utf8", br"\xC3\xA9"), ("octal-utf8", br"\303\251"),
+            ("unicode", br"\u00e9\U0001f600"), ("control", br"\cA"),
+            ("unknown", br"\q"), ("nul", br"\x00"),
+            ("surrogate", br"\uD800"), ("out-of-range", br"\U00110000"),
+            ("missing-hex", br"\x"), ("short-unicode", br"\u00"),
+            ("octal-nul", br"\400")):
+        cases.append(("export-escape-" + name, initial,
+                      b"env-export\0declare -x LONG_VARIABLE_NAME=$'" + escape + b"'\n\0"))
     report = {
         "probes": {name: {"path": str(exe.resolve()),
                           "sha256": hashlib.sha256(exe.read_bytes()).hexdigest()}

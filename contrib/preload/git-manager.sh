@@ -34,10 +34,11 @@ sleep() {
   return "$status"
 }
 
+# Argument 1: initial worker count (default 3, range 1 through 32).
+# Retain manager identity and discovery paths in the sourcing owner shell.
+# Return zero after READY; nonzero denotes configuration or startup failure.
 _git_preload_source_manager() {
-  local requested
-  requested=$1
-  [[ -n $requested ]] || requested=3
+  local requested=${1:-3}
   if [[ ! $requested =~ ^[1-9][0-9]*$ ]] ||
      (( ${#requested} > 2 || requested > 32 )); then
     printf 'worker count must be an integer from 1 to 32\n' >&2
@@ -105,6 +106,9 @@ fi
 
 # Close selected descriptor numbers, or all reserved IPC descriptors in the
 # current git-ipc call when no arguments are supplied. Repeated closes are safe.
+# Arguments: optional descriptor numbers from 3 through 7; zero arguments closes all.
+# Preserve allocator descriptors 8 and 9. Return zero after cleanup, or 2 for
+# an invalid descriptor argument; unopened and already closed descriptors are safe.
 close_fhs() {
   local fd
   if (( $# == 0 )); then
@@ -121,6 +125,10 @@ close_fhs() {
 
 # Open any Windows IPC channel and consume its one-byte call marker here.
 # Keep the established descriptor numbers and opening order unchanged.
+# Arguments: descriptor number, validated native pipe path, decimal marker,
+# and maximum attempts (default 1). Failed attempts use a builtin sleep retry delay.
+# On success the caller owns the descriptor and the marker has been written.
+# Return zero on success, nonzero after invalid arguments or exhausted attempts.
 _git_preload_open_pipe() {
   local fd=$1 path=$2 marker=$3 retries=${4:-1} attempt
   [[ $fd == [3-9] && $marker == [0-9] &&
@@ -150,6 +158,9 @@ _git_preload_open_pipe() {
 }
 
 # Keep the two allocation channels connected for the owning shell's lifetime.
+# Connect the owning session's persistent request/reply descriptors 8 and 9.
+# Takes no arguments; uses the captured native owner PID. Return zero after
+# connection or when already connected; return nonzero on connection failure.
 _git_preload_connect_allocator() {
   if [[ ${_GIT_PRELOAD_ALLOC_CONNECTED:-} == 1 ]]; then return 0; fi
   local request reply
@@ -169,6 +180,10 @@ _git_preload_connect_allocator || {
 
 # Request a worker PID, then talk directly to its five worker channels.
 # The Python manager only allocates IDs; it never forwards Git output.
+# Run one serial Git command using the persistent allocator.
+# Arguments: ordinary Git arguments, at most 31; each is encoded without evaluation.
+# Write text stdout/stderr to the caller; stdin is an EOF-producing channel.
+# Return the command status, or 255 for a transport/protocol failure.
 git-ipc() {
   local fd_worker_stdin=3 fd_worker_stdout=4 fd_worker_stderr=5
   local fd_worker_exit=6 fd_worker_control=7

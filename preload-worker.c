@@ -28,7 +28,7 @@ struct preload_worker {
 
 static struct preload_worker *active_worker;
 static void finish_worker_on_exit(int status);
-static int preload_worker_run(const char *directory);
+static int run_worker(const char *directory);
 
 /**
  * Decode the protocol's unsigned little-endian integer without alignment assumptions.
@@ -82,7 +82,7 @@ static int skip_context_value(const char *frame, size_t used,
  * @param used Number of readable bytes in frame.
  * @return One if complete, zero if incomplete, -1 for invalid framing.
  */
-static int preload_worker_request_complete(const char *frame, size_t used)
+static int request_complete(const char *frame, size_t used)
 {
 	size_t pos = 4;
 	unsigned int count, i;
@@ -147,8 +147,8 @@ static void close_redirected_stdio(unsigned int mask)
  * @param status Command exit value to encode as an EXIT record.
  * @return Zero on delivery and flush success, -1 on failure, with errno set.
  */
-static int preload_worker_send_status(struct preload_transport *transport,
-			       size_t channel, int status)
+static int send_status(struct preload_transport *transport,
+		       size_t channel, int status)
 {
 	char record[64];
 	int length = xsnprintf(record, sizeof(record), "EXIT %d\n", status);
@@ -207,11 +207,10 @@ static int start_worker_transport(struct preload_worker *worker)
 		WORKER_STDOUT, WORKER_STDERR, WORKER_STATUS, WORKER_STDIN, WORKER_CONTEXT
 	};
 	struct preload_transport_config config = { 0 };
-	int status = preload_worker_platform_prepare(worker->directory);
+	int status = preload_worker_platform_prepare(worker->directory, &worker->location);
 
 	if (status)
 		return status;
-	worker->location = preload_worker_platform_location(worker->directory);
 	config.location = worker->location;
 	config.channels = channels;
 	config.order = order;
@@ -249,7 +248,7 @@ static int read_worker_request(struct preload_worker *worker)
 		worker->used += n;
 		trace_printf_key(&preload_worker_trace, "request-read bytes=%lu used=%lu\n",
 				 (unsigned long)n, (unsigned long)worker->used);
-		complete = preload_worker_request_complete(worker->frame, worker->used);
+		complete = request_complete(worker->frame, worker->used);
 		if (complete < 0)
 			return 124;
 		if (complete) {
@@ -328,7 +327,7 @@ static int finish_worker(struct preload_worker *worker, int status)
 			if (i != WORKER_STATUS)
 				preload_transport_close_channel(worker->transport, i);
 		if (preload_transport_has_channel(worker->transport, WORKER_STATUS) &&
-		    preload_worker_send_status(worker->transport, WORKER_STATUS, status))
+		    send_status(worker->transport, WORKER_STATUS, status))
 			status = 138;
 		preload_transport_release(worker->transport);
 		worker->transport = NULL;
@@ -358,7 +357,7 @@ static void finish_worker_on_exit(int status)
  * @param directory Borrowed private worker directory, valid through process exit.
  * @return Startup failure status; successful commands leave through normal exit.
  */
-static int preload_worker_run(const char *directory)
+static int run_worker(const char *directory)
 {
 	struct preload_worker worker = { 0 };
 	int status, count;
@@ -411,7 +410,7 @@ int preload_worker_main(int argc, const char **argv)
 	if (mkdir(directory, 0700)) {
 		result = error_errno("--preload-worker cannot create %s", directory);
 	} else {
-		result = preload_worker_run(directory);
+		result = run_worker(directory);
 		rmdir(directory);
 	}
 	free(directory);

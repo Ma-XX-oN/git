@@ -171,6 +171,7 @@ def test_allocator_isolation():
       self.errors=[]
       self.notify=None
       self.replacements=0
+      self.commits=0
       self.replacement_release=threading.Event()
 
     def alloc(self):
@@ -184,6 +185,10 @@ def test_allocator_isolation():
       """Record replacement requests without starting fixture subprocesses."""
       self.replacements+=1
       assert self.replacement_release.wait(10),"replacement test was not released"
+
+    def commit_allocation(self):
+      """Record publication of a synthetic PID; this fixture owns no processes."""
+      self.commits+=1
 
   pool=ReadyPool()
   owner=90000000+int(uuid.uuid4().hex[:6],16)

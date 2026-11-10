@@ -4,7 +4,12 @@
 #include "strbuf.h"
 
 #ifdef GIT_WINDOWS_NATIVE
-/** @brief Apply a real context frame and emit the resulting Windows block. */
+/**
+ * @brief Apply a real context frame and emit the resulting Windows environment.
+ * @param argc Argument count, including the fixture mode; must be three.
+ * @param argv Borrowed mode, initial-environment path and context-frame path.
+ * @return Zero on success, or a fixture error from 90 through 96.
+ */
 static int windows_context_fixture(int argc, const char **argv)
 {
 	struct strbuf initial = STRBUF_INIT, frame = STRBUF_INIT;
@@ -55,7 +60,11 @@ static int windows_context_fixture(int argc, const char **argv)
 }
 #endif
 
-/** @brief Apply a context fixture through the production context decoder. */
+/**
+ * @brief Apply a context fixture through the production decoder and print its result.
+ * @param path Borrowed filename containing the encoded context fields.
+ * @return Zero on successful application, one for invalid context; read errors are fatal.
+ */
 static int context_fixture(const char *path)
 {
 	struct strbuf frame = STRBUF_INIT;
@@ -74,7 +83,11 @@ static int context_fixture(const char *path)
 	return 0;
 }
 
-/** @brief Select real production transport channels and echo their payload. */
+/**
+ * @brief Select real production transport channels and echo their payload.
+ * @param location Borrowed Windows pipe stem or existing directory with test FIFOs.
+ * @return A preload_transport_result, including system error for failed payload delivery.
+ */
 static int transport_fixture(const char *location)
 {
 	static const struct preload_channel_spec channels[] = {
@@ -105,7 +118,12 @@ static int transport_fixture(const char *location)
 	return result;
 }
 
-/** @brief Exercise the linked context and transport implementations. */
+/**
+ * @brief Exercise the linked context and transport implementations.
+ * @param argc Number of argv entries, including the preload fixture name.
+ * @param argv Borrowed fixture name, mode and mode-specific paths.
+ * @return Fixture status; invalid usage terminates through the test-tool usage handler.
+ */
 int cmd__preload(int argc, const char **argv)
 {
 #ifdef GIT_WINDOWS_NATIVE
