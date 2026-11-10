@@ -1,9 +1,12 @@
-name: RWF 809 MSYS2 unchanged FIFO RED baseline
+name: RWF 809 unchanged MSYS2 pipe-connection RED benchmark
 on:
   push:
     branches: [experiment-809-msys2-fifo-wfmo-main]
     paths:
+      - experiments/issue-809/windows_pipe_open_trace.py
+      - experiments/issue-809/windows_pipe_open_latency.py
       - experiments/issue-809/msys2_fifo_unmodified_baseline.c
+      - experiments/issue-809/MSYS2-FIFO-WFMO-DESIGN.md
       - .github/workflows/issue-809-msys2-fifo-red-baseline.yml
   workflow_dispatch:
 permissions:
@@ -19,50 +22,79 @@ jobs:
       - uses: git-for-windows/setup-git-for-windows-sdk@v2
         with:
           flavor: full
-      - name: Measure installed UNMODIFIED MSYS2 FIFO (no runtime changes)
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Capture unchanged runtime identity and independent FIFO read CPU baseline
         shell: bash
         run: |
           set -euxo pipefail
           export MSYSTEM=MSYS
           export PATH="/usr/bin:$PATH"
           command -v gcc
-          command -v mkfifo
           pacman -Q msys2-runtime
           sha256sum /usr/bin/msys-2.0.dll
-          gcc --version | head -n 1
           gcc -std=gnu11 -O2 -Wall -Wextra -Werror -pthread \
             experiments/issue-809/msys2_fifo_unmodified_baseline.c \
             -o "$RUNNER_TEMP/git809_fifo_baseline.exe"
-          printf 'UNMODIFIED native FIFO baseline on this Windows runner\n' > "$RUNNER_TEMP/baseline_results.txt"
-          for workers in 1 3 16 32; do
-            for repetition in 1 2 3; do
-              printf 'REPETITION=%s ' "$repetition" | tee -a "$RUNNER_TEMP/baseline_results.txt"
-              "$RUNNER_TEMP/git809_fifo_baseline.exe" "$workers" 1001 600 | tee -a "$RUNNER_TEMP/baseline_results.txt"
+          printf 'Supplementary already-open FIFO data-read benchmark\n' > "$RUNNER_TEMP/fifo_read_baseline.txt"
+          for writers in 1 3 16 32; do
+            for repetition in 1 2; do
+              printf 'REPETITION=%s ' "$repetition" | tee -a "$RUNNER_TEMP/fifo_read_baseline.txt"
+              "$RUNNER_TEMP/git809_fifo_baseline.exe" "$writers" 1001 600 | tee -a "$RUNNER_TEMP/fifo_read_baseline.txt"
             done
           done
-          cat "$RUNNER_TEMP/baseline_results.txt"
-      - name: Assert pinned upstream FIFO still has polling (intentional RED)
-        if: success()
-        shell: bash
+      - name: Verify native connection control and reproduce two-instance stock behavior
+        shell: pwsh
         run: |
-          set -euxo pipefail
-          export MSYSTEM=MSYS
-          export PATH="/usr/bin:$PATH"
-          curl --fail --location --silent --show-error \
-            https://raw.githubusercontent.com/msys2/msys2-runtime/50c44b7c03c8a3298dc838b8768973e2020b9ed6/winsup/cygwin/fhandler/fifo.cc \
-            -o "$RUNNER_TEMP/msys2-fifo-pinned.cc"
-          test "$(git hash-object "$RUNNER_TEMP/msys2-fifo-pinned.cc")" = \
-            15117db6eb359eabd7b49913cb2cebb6af85c275
-          if grep -Fq 'cygwait (select_sem, 1, cw_cancel | cw_sig_eintr)' \
-            "$RUNNER_TEMP/msys2-fifo-pinned.cc"; then
-            echo 'EXPECTED_RED: pinned FIFO raw_read() still waits 1ms between scans'
-            exit 1
-          fi
-          echo 'GREEN: source no longer includes polling'
-      - name: Preserve baseline measurements despite intentional RED
+          $ErrorActionPreference = 'Stop'
+          $bash = 'D:\git-sdk-64-full\usr\bin\bash.exe'
+          if (-not (Test-Path $bash)) { throw "Git-for-Windows SDK Bash missing: $bash" }
+          foreach ($direction in @('read', 'write')) {
+            Write-Host "CONTROL: two native instances, Git Bash $direction"
+            & python -u experiments/issue-809/windows_pipe_open_trace.py --client bash --instances 2 --direction $direction --bash $bash --expect success 2>&1 |
+              Tee-Object -Append -FilePath "$env:RUNNER_TEMP\native_connection_trace.txt"
+            if ($LASTEXITCODE -ne 0) { throw "Two-instance control failed: $direction" }
+            Write-Host "KNOWN BROKEN: one native instance, Git Bash $direction"
+            & python -u experiments/issue-809/windows_pipe_open_trace.py --client bash --instances 1 --direction $direction --bash $bash --expect failure 2>&1 |
+              Tee-Object -Append -FilePath "$env:RUNNER_TEMP\native_connection_trace.txt"
+            if ($LASTEXITCODE -ne 0) { throw "Negative control failed: $direction" }
+          }
+      - name: Benchmark opening and closing native pipes in one persistent Git Bash
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bash = 'D:\git-sdk-64-full\usr\bin\bash.exe'
+          & python -u experiments/issue-809/windows_pipe_open_latency.py --bash $bash --iterations 50 --out "$env:RUNNER_TEMP\native_connection_latency.json" 2>&1 |
+            Tee-Object -FilePath "$env:RUNNER_TEMP\native_connection_latency.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Persistent Bash open/transfer/close measurement failed' }
+      - name: Require one-instance native connection for both directions (intentional functional RED)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $bash = 'D:\git-sdk-64-full\usr\bin\bash.exe'
+          $failures = 0
+          foreach ($direction in @('read', 'write')) {
+            & python -u experiments/issue-809/windows_pipe_open_trace.py --client bash --instances 1 --direction $direction --bash $bash --expect success 2>&1 |
+              Tee-Object -Append -FilePath "$env:RUNNER_TEMP\native_connection_trace.txt"
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "EXPECTED_RED: extra metadata connection prevents single-instance Bash $direction"
+              $failures += 1
+            }
+          }
+          if ($failures -gt 0) {
+            throw "RED: $failures of 2 single-instance native-connection assertions failed"
+          }
+          Write-Host "GREEN: read and write both function with one native server instance"
+      - name: Preserve RED and performance evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: msys2-fifo-unmodified-red-baseline
-          path: ${{ runner.temp }}/baseline_results.txt
+          name: issue-809-pipe-open-red-baseline
+          path: |
+            ${{ runner.temp }}/fifo_read_baseline.txt
+            ${{ runner.temp }}/native_connection_trace.txt
+            ${{ runner.temp }}/native_connection_latency.json
+            ${{ runner.temp }}/native_connection_latency.log
           if-no-files-found: warn

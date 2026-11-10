@@ -20,6 +20,15 @@ Scope: experimental MSYS2 runtime FIFO read path only. Do not alter production G
 7. Treat every pending operation and event as owned by a clearly defined reader-handler lifetime. Before closing, reordering, transferring, or duplicating native handles, cancel and *settle* any pending operation; a close while `WaitForMultipleObjects()` is waiting is undefined behavior. Never hold `fifo_client_lock` while waiting for notifications needed by the connection-accept thread. Concurrent handler-list mutation requires an explicit stable snapshot/ownership invariant.
 8. **Readiness must not consume bytes.** Pending multi-client data reads would require persistent private buffers and ownership-transfer handoff; avoid that complexity if zero-byte reads work. Re-arm only after retrieving completion status and verifying whether the pipe is readable, disconnected, or still empty (including zero-byte write edge cases). Do not spin on immediately-completed empty reads.
 
+## RED baseline and separation of failure modes
+
+The baseline needs **two independent metrics**:
+- **Native named-pipe connection path (Git IPC issue):** Reuse the previously verified RWF 809 `windows_pipe_open_trace.py`. For unmodified Git Bash, one server pipe instance must fail and two must succeed for *both* directions. Record native server connection counts, actual data transfer, and negative/positive assertions. The **one-instance Bash test is the functional RED**, not a source-text grep.
+- **Native named-pipe per-invocation overhead:** Use `windows_pipe_open_latency.py` to repeatedly open/transfer/close *new Windows named pipes* through a **single persistent Git Bash process**, excluding Bash startup and server setup from individual timings. Require two native connections and exactly one payload per successful request; measure median, p95, mean and range in milliseconds.
+- **POSIX FIFO read-side polling (different issue):** Retain the already-connected `mkfifo` read/CPU baseline as supporting evidence. That test alone does **not** exercise the metadata path or native connection establishment.
+
+For a later fixed-runtime comparison, execute stock and isolated patched Bash on the **same Windows runner**, against identical native server configurations and workloads. Record installed runtime version and DLL SHA256. Report improvements in open latency and read-side CPU separately; do not attribute Git IPC startup delays to the read-side 1 ms polling without evidence.
+
 ## Windows-first verification ledger (all TO_PROCESS)
 | ID | Acceptance requirement | Method |
 |----|------------------------|--------|
@@ -28,7 +37,7 @@ Scope: experimental MSYS2 runtime FIFO read path only. Do not alter production G
 | A3 | Multiple-reader ownership transfer with pending reads loses no bytes; no stalled or use-after-close events | Native stress; instrument owner handoff |
 | A4 | Blocking/nonblocking read, EOF, EINTR/cancellation, select/poll, and SIGPIPE/EPIPE pass | Existing upstream `winsup/testsuite` registered tests and targeted cases |
 | A5 | Repeated create/open/close/unlink and fork/exec/dup leave no events/handles/threads | Windows native stress; count handles |
-| A6 | Per-command latency and CPU improvement measured against unchanged source/config on same runner | Same-runner control and treatment |
+| A6 | Measure native named-pipe open/transfer/close latency separately from FIFO read latency and CPU; same-runner stock/patch comparison | Native persistent Bash plus existing POSIX FIFO benchmark |
 | A7 | Existing path-metadata double-connection problem independently fixed/verified | Dedicated prior Detours one-instance probe; do not conflate with read polling |
 | A8 | Native acceptance on Windows, then Linux/macOS as applicable | Native CI at exact SHA; report all evidence and failures |
 
