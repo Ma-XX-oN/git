@@ -348,6 +348,10 @@ The Makefile run-command regression passed all 24 cases (including its platform
 skips). After the Meson rebuild, its real SDK-shell launcher passed t5790 (10
 subtests), t5580 (eight UNC subtests) and t0061 (20 passed subtests, four skipped).
 No compiler errors or warnings were reported by either rebuild.
+The follow-up same-laptop untraced ABBA comparison at `2ac970f4cb` measured
+6.5345 ms baseline and 5.6155 ms candidate (-0.9190 ms, -14.06%). This is a new
+matched cohort, not an isolated before/after comparison of the removed code.
+Raw samples are in [migration-2ac970-windows-laptop-matched.json](evidence/migration-2ac970-windows-laptop-matched.json).
 
 Investigative diagnostics remain in the source. After all native acceptance
 passes, remove the ad hoc exit-file logger, per-phase breadcrumbs/timers,

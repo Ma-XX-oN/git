@@ -15,6 +15,7 @@ Each row compares revisions on one host/job. Lower latency is better.
 | Windows CI / pre-cleanup | 4.3145 | 3.2590 | -1.0555 | 75.54% | -24.46% |
 | Linux CI / pre-cleanup | 1.4295 | 0.8555 | -0.5740 | 59.85% | -40.15% |
 | macOS CI / pre-cleanup | 3.9835 | 2.4150 | -1.5685 | 60.63% | -39.37% |
+| Laptop / cwd-only context | 6.5345 | 5.6155 | -0.9190 | 85.94% | -14.06% |
 
 ![Absolute and normalized medians](preload-comparison.png)
 
@@ -31,3 +32,5 @@ Windows CI / pre-cleanup: git --version; environment unchanged after manager sta
 Linux CI / pre-cleanup: git --version; environment unchanged after manager startup. Baseline: complete environment snapshot per command; candidate: environment inherited from manager startup. This row measures the stated contract as well as implementation changes.
 
 macOS CI / pre-cleanup: git --version; environment unchanged after manager startup. Baseline: complete environment snapshot per command; candidate: environment inherited from manager startup. This row measures the stated contract as well as implementation changes.
+
+Laptop / cwd-only context: git --version; environment unchanged after manager startup. Baseline: complete environment snapshot per command; candidate: environment inherited from manager startup. This row measures the stated contract as well as implementation changes.

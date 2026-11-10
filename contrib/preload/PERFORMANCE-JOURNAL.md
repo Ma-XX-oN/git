@@ -84,6 +84,26 @@ hardware/runtime metadata are in
 [Linux](performance/evidence/migration-3b0bdb-linux-matched.json) and
 [macOS](performance/evidence/migration-3b0bdb-macos-matched.json).
 
+### Environment-code removal checkpoint
+
+The user required removal of the unused native environment-update API as well
+as the Bash sender. Commit `2ac970f4cb` removes both decoders, the worker-only
+Windows replacement helpers/snapshot mode and their obsolete comparator.
+The worker context implementation is reduced from 558 to 43 lines; ordinary
+child-process environment merging remains live. Re-sourcing refreshes inherited
+values for all callers. The local Makefile and Meson builds, cwd/inheritance,
+worker lifecycle, supported output, manager restart, ordinary run-command and
+6,000-command stress checks pass. Full native CI remains required.
+
+The same-laptop ABBA comparison measured **6.5345 ms baseline** versus
+**5.6155 ms migrated**: **85.94% of baseline**, **-14.06%**, or **-0.9190 ms**.
+Baseline rounds were 6.5470/6.5185 ms; candidate rounds were 5.6980/5.5665 ms.
+Each variant has 240 IPC samples, three workers, matching flags and tracing
+disabled. Both absolute medians are higher than in the earlier laptop run;
+this comparison does not isolate the removal's effect or establish its cause.
+The unchanged-environment workload and per-variant capture policies are retained
+in [migration-2ac970-windows-laptop-matched.json](performance/evidence/migration-2ac970-windows-laptop-matched.json).
+
 ## Historical path-shadow correction checkpoint
 
 The Windows shell caches converted values for the runtime's eight standard
