@@ -24,7 +24,8 @@ jobs:
   ci-config:
     name: config
     # Migration pushes use preload-validation.yml; full suites run at PR preparation.
-    if: github.ref != 'refs/heads/production/preload' && (vars.CI_BRANCHES == '' || contains(vars.CI_BRANCHES, github.ref_name))
+    # Workbench branches run only their own measurement workflows.
+    if: github.ref != 'refs/heads/production/preload' && !startsWith(github.ref, 'refs/heads/workbench/') && (vars.CI_BRANCHES == '' || contains(vars.CI_BRANCHES, github.ref_name))
     runs-on: ubuntu-latest
     outputs:
       enabled: ${{ steps.check-ref.outputs.enabled }}${{ steps.skip-if-redundant.outputs.enabled }}

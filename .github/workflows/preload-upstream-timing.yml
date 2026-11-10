@@ -1,0 +1,69 @@
+name: Preload timing against unmodified Git
+on:
+  push:
+    branches: ['workbench/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  timing:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      # Branch point of production/preload on upstream master (v2.56.0-349).
+      UPSTREAM_REV: 750f5de7dfe9a4062f95088212b063f189d50e91
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+        if: runner.os == 'Windows'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Ensure Bash with EPOCHREALTIME on macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          brew list bash >/dev/null 2>&1 || brew install bash
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+      - name: Check out unmodified upstream Git
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.UPSTREAM_REV }}
+          path: upstream
+          persist-credentials: false
+      - name: Build migrated and upstream Git in this job
+        shell: bash
+        run: |
+          if [[ $RUNNER_OS == Windows ]]; then
+            . /etc/profile || exit 1
+            cd "$GITHUB_WORKSPACE"
+          fi
+          target=git$([[ $RUNNER_OS == Windows ]] && printf .exe)
+          make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease "$target"
+          make -C upstream -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease "$target"
+          ./"$target" --version
+          upstream/"$target" --version
+      - name: Time upstream direct, migrated direct and migrated preloaded
+        shell: bash
+        run: |
+          if [[ $RUNNER_OS == Windows ]]; then
+            . /etc/profile || exit 1
+            cd "$GITHUB_WORKSPACE"
+            py="$(cygpath -u "$pythonLocation")/python.exe"
+          else
+            py="$pythonLocation/bin/python3"
+          fi
+          "$py" t/perf/compare_preload_upstream.py --upstream upstream --output preload-upstream
+      - name: Preserve raw timing evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: preload-upstream-${{ runner.os }}-${{ github.sha }}
+          path: preload-upstream/

@@ -34,6 +34,8 @@ SHELL = r"""
   count=$1
   manager_script=$2
   gitbin=$3
+  # Directly timed binary; defaults to the worker build, may be unmodified Git.
+  directbin=${4:-$gitbin}
   source "$manager_script" "$count" || exit 31
   _pool_ab_diagnostics() {
     local exit_code=$?
@@ -59,11 +61,12 @@ SHELL = r"""
   expected=$("$gitbin" --version) || exit 33
   actual=$(git-ipc --version) || exit 34
   [[ $actual == "$expected" ]] || exit 35
+  "$directbin" --version >/dev/null || exit 36
   printf 'READY_CHECK %s\n' "$count"
   for ((i=0;i<120;i++)); do
     if (( i % 2 == 0 )); then
       a=$EPOCHREALTIME
-      "$gitbin" --version >/dev/null || exit 41
+      "$directbin" --version >/dev/null || exit 41
       b=$EPOCHREALTIME
       c=$EPOCHREALTIME
       git-ipc --version >/dev/null || exit 42
@@ -73,7 +76,7 @@ SHELL = r"""
       git-ipc --version >/dev/null || exit 43
       d=$EPOCHREALTIME
       a=$EPOCHREALTIME
-      "$gitbin" --version >/dev/null || exit 44
+      "$directbin" --version >/dev/null || exit 44
       b=$EPOCHREALTIME
     fi
     printf 'PAIR %s %s %s %s %s\n' "$i" "$a" "$b" "$c" "$d"
@@ -104,12 +107,17 @@ def prepare(root, windows):
     git = (root / ("git.exe" if windows else "git")).resolve(strict=True)
     return git, "native source-built Git from workflow checkout"
 
-def run_case(bash, script, git_shell, environment, workers, round_index, windows):
-    """Run and validate one serial paired direct and IPC benchmark round."""
+def run_case(bash, script, git_shell, environment, workers, round_index, windows,
+             direct_git=None):
+    """Run and validate one serial paired direct and IPC benchmark round.
+
+    direct_git selects the directly timed executable, for example unmodified
+    upstream Git; it defaults to git_shell, the build serving IPC workers.
+    """
     started = time.perf_counter()
     process = subprocess.Popen(
         [bash, "--noprofile", "--norc", "-c", SHELL,
-         "pool-ab", str(workers), script, git_shell],
+         "pool-ab", str(workers), script, git_shell, direct_git or git_shell],
         env=environment, stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
@@ -161,6 +169,7 @@ def run_case(bash, script, git_shell, environment, workers, round_index, windows
         "worker allocation lacks corresponding READY event", allocated_by_pid, ready_by_pid)
     return {
         "workers": workers, "round": round_index,
+        "direct_git": direct_git or git_shell,
         "direct": summarize(direct), "ipc": summarize(ipc),
         "allocated": len(allocations), "ready_events": len(ready),
         "elapsed_wall_seconds": elapsed,
