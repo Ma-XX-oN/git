@@ -1,0 +1,68 @@
+name: RWF 809 MSYS2 unchanged FIFO RED baseline
+on:
+  push:
+    branches: [experiment-809-msys2-fifo-wfmo-main]
+    paths:
+      - experiments/issue-809/msys2_fifo_unmodified_baseline.c
+      - .github/workflows/issue-809-msys2-fifo-red-baseline.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  red-baseline:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+        with:
+          flavor: full
+      - name: Measure installed UNMODIFIED MSYS2 FIFO (no runtime changes)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export MSYSTEM=MSYS
+          export PATH="/usr/bin:$PATH"
+          command -v gcc
+          command -v mkfifo
+          pacman -Q msys2-runtime
+          sha256sum /usr/bin/msys-2.0.dll
+          gcc --version | head -n 1
+          gcc -std=gnu11 -O2 -Wall -Wextra -Werror -pthread \
+            experiments/issue-809/msys2_fifo_unmodified_baseline.c \
+            -o "$RUNNER_TEMP/git809_fifo_baseline.exe"
+          printf 'UNMODIFIED native FIFO baseline on this Windows runner\n' > "$RUNNER_TEMP/baseline_results.txt"
+          for workers in 1 3 16 32; do
+            for repetition in 1 2 3; do
+              printf 'REPETITION=%s ' "$repetition" | tee -a "$RUNNER_TEMP/baseline_results.txt"
+              "$RUNNER_TEMP/git809_fifo_baseline.exe" "$workers" 1001 600 | tee -a "$RUNNER_TEMP/baseline_results.txt"
+            done
+          done
+          cat "$RUNNER_TEMP/baseline_results.txt"
+      - name: Assert pinned upstream FIFO still has polling (intentional RED)
+        if: success()
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export MSYSTEM=MSYS
+          export PATH="/usr/bin:$PATH"
+          curl --fail --location --silent --show-error \
+            https://raw.githubusercontent.com/msys2/msys2-runtime/50c44b7c03c8a3298dc838b8768973e2020b9ed6/winsup/cygwin/fhandler/fifo.cc \
+            -o "$RUNNER_TEMP/msys2-fifo-pinned.cc"
+          test "$(git hash-object "$RUNNER_TEMP/msys2-fifo-pinned.cc")" = \
+            15117db6eb359eabd7b49913cb2cebb6af85c275
+          if grep -Fq 'cygwait (select_sem, 1, cw_cancel | cw_sig_eintr)' \
+            "$RUNNER_TEMP/msys2-fifo-pinned.cc"; then
+            echo 'EXPECTED_RED: pinned FIFO raw_read() still waits 1ms between scans'
+            exit 1
+          fi
+          echo 'GREEN: source no longer includes polling'
+      - name: Preserve baseline measurements despite intentional RED
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: msys2-fifo-unmodified-red-baseline
+          path: ${{ runner.temp }}/baseline_results.txt
+          if-no-files-found: warn
