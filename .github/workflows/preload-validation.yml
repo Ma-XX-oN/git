@@ -47,7 +47,10 @@ jobs:
         run: |
           # SDK profile.d scripts use nonzero tests during normal startup;
           # source in a conditional context, then keep errexit for the build.
-          if [[ $RUNNER_OS == Windows ]]; then . /etc/profile || exit 1; fi
+          if [[ $RUNNER_OS == Windows ]]; then
+            . /etc/profile || exit 1
+            cd "$GITHUB_WORKSPACE"
+          fi
           make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease all
       - name: Native preload and 6000-command stress
         if: ${{ !cancelled() }}
@@ -55,6 +58,7 @@ jobs:
         run: |
           if [[ $RUNNER_OS == Windows ]]; then
             . /etc/profile || exit 1
+            cd "$GITHUB_WORKSPACE"
             py="$(cygpath -u "$pythonLocation")/python.exe"
             gitbin="$(cygpath -w "$PWD/git.exe")"
             helper="$(cygpath -w "$PWD/t/helper/test-tool.exe")"
@@ -83,6 +87,7 @@ jobs:
         run: |
           if [[ $RUNNER_OS == Windows ]]; then
             . /etc/profile || exit 1
+            cd "$GITHUB_WORKSPACE"
             export GIT_BUILD_DIR="$(cygpath -au "$PWD")"
             # Git resolves script interpreters by basename. Select MSYS Perl
             # so the send-email tests can execute their shell sendmail fixture.
@@ -95,6 +100,7 @@ jobs:
         run: |
           if [[ $RUNNER_OS == Windows ]]; then
             . /etc/profile || exit 1
+            cd "$GITHUB_WORKSPACE"
             py="$(cygpath -u "$pythonLocation")/python.exe"
             export PATH="$(cygpath -u "$pythonLocation")/Scripts:$PATH"
           else
@@ -117,6 +123,7 @@ jobs:
         run: |
           if [[ $RUNNER_OS == Windows ]]; then
             . /etc/profile || exit 1
+            cd "$GITHUB_WORKSPACE"
             py="$(cygpath -u "$pythonLocation")/python.exe"
           else
             py="$pythonLocation/bin/python3"

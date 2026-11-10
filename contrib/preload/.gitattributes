@@ -2,3 +2,5 @@
 *.sh whitespace=trail,space,incomplete text eol=lf
 # Preserve original measurement bytes and their recorded digests.
 performance/evidence/* -text -whitespace
+# Preserve Matplotlib's serialized path spacing in generated figures.
+performance/migration-checkpoints/*.svg -whitespace
