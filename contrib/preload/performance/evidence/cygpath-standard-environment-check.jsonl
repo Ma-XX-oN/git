@@ -1,0 +1,16 @@
+{"bash": "C:/Program Files/Git/usr/bin/bash.exe", "variable": "PATH", "cygpath": "C:\\Program Files\\Git\\usr\\bin;C:\\Windows\\System32", "native_child": "C:\\Program Files\\Git\\usr\\bin;C:\\Windows\\System32", "same_path": true}
+{"bash": "C:/Program Files/Git/usr/bin/bash.exe", "variable": "HOME", "cygpath": "C:\\Program Files\\Git\\home\\preload conversion", "native_child": "C:\\Program Files\\Git\\home\\preload conversion", "same_path": true}
+{"bash": "C:/Program Files/Git/usr/bin/bash.exe", "variable": "LD_LIBRARY_PATH", "cygpath": "C:\\Program Files\\Git\\usr\\lib;C:\\Tools\\lib", "native_child": "C:\\Program Files\\Git\\usr\\lib;C:\\Tools\\lib", "same_path": true}
+{"bash": "C:/Program Files/Git/usr/bin/bash.exe", "variable": "ORIGINAL_PATH", "cygpath": "C:\\Program Files\\Git\\usr\\bin;C:\\Windows", "native_child": "C:\\Program Files\\Git\\usr\\bin;C:\\Windows", "same_path": true}
+{"bash": "C:/Program Files/Git/usr/bin/bash.exe", "variable": "SHELL", "cygpath": "C:\\Program Files\\Git\\usr\\bin\\bash.exe", "native_child": "C:\\Program Files\\Git\\usr\\bin\\bash.exe", "same_path": true}
+{"bash": "C:/Program Files/Git/usr/bin/bash.exe", "variable": "TMPDIR", "cygpath": "C:\\Users\\adria\\AppData\\Local\\Temp\\preload conversion", "native_child": "C:\\Users\\adria\\AppData\\Local\\Temp\\preload conversion", "same_path": true}
+{"bash": "C:/Program Files/Git/usr/bin/bash.exe", "variable": "TMP", "cygpath": "C:\\Users\\adria\\AppData\\Local\\Temp\\preload conversion", "native_child": "C:\\Users\\adria\\AppData\\Local\\Temp\\preload conversion", "same_path": true}
+{"bash": "C:/Program Files/Git/usr/bin/bash.exe", "variable": "TEMP", "cygpath": "C:\\Users\\adria\\AppData\\Local\\Temp\\preload conversion", "native_child": "C:\\Users\\adria\\AppData\\Local\\Temp\\preload conversion", "same_path": true}
+{"bash": "C:/msys64/usr/bin/bash.exe", "variable": "PATH", "cygpath": "C:\\msys64\\usr\\bin;C:\\Windows\\System32", "native_child": "C:\\msys64\\usr\\bin;C:\\Windows\\System32", "same_path": true}
+{"bash": "C:/msys64/usr/bin/bash.exe", "variable": "HOME", "cygpath": "C:\\msys64\\home\\preload conversion", "native_child": "C:\\msys64\\home\\preload conversion", "same_path": true}
+{"bash": "C:/msys64/usr/bin/bash.exe", "variable": "LD_LIBRARY_PATH", "cygpath": "C:\\msys64\\usr\\lib;C:\\Tools\\lib", "native_child": "C:\\msys64\\usr\\lib;C:\\Tools\\lib", "same_path": true}
+{"bash": "C:/msys64/usr/bin/bash.exe", "variable": "ORIGINAL_PATH", "cygpath": "C:\\msys64\\usr\\bin;C:\\Windows", "native_child": "C:\\msys64\\usr\\bin;C:\\Windows", "same_path": true}
+{"bash": "C:/msys64/usr/bin/bash.exe", "variable": "SHELL", "cygpath": "C:\\msys64\\usr\\bin\\bash.exe", "native_child": "C:\\msys64\\usr\\bin\\bash.exe", "same_path": true}
+{"bash": "C:/msys64/usr/bin/bash.exe", "variable": "TMPDIR", "cygpath": "C:\\msys64\\tmp\\preload conversion", "native_child": "C:\\msys64\\tmp\\preload conversion", "same_path": true}
+{"bash": "C:/msys64/usr/bin/bash.exe", "variable": "TMP", "cygpath": "C:\\msys64\\tmp\\preload conversion", "native_child": "C:\\msys64\\tmp\\preload conversion", "same_path": true}
+{"bash": "C:/msys64/usr/bin/bash.exe", "variable": "TEMP", "cygpath": "C:\\msys64\\tmp\\preload conversion", "native_child": "C:\\msys64\\tmp\\preload conversion", "same_path": true}

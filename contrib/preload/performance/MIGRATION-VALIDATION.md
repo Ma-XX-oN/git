@@ -111,6 +111,63 @@ machines. Each row uses its own host/job baseline at 100%; results are not poole
 across hardware. The JSON companion preserves machine/runtime metadata, raw
 samples, compiler flags, source revisions and source-report digests.
 
+## Windows Bash environment conversion
+
+A new client-level output/status test reproduces a pre-existing failure with a
+small shell alias: `export -p` sends a colon-separated MSYS PATH, native shell
+lookup returns NULL, and `git_shell_path()` faults before status delivery.
+The same alias fails through the preserved `working-version-two` client;
+inherited native environment values succeed. This is not a measured migration
+regression. The shadow-based correction passes the reduced shell alias, all
+31 native worker lifecycle cases and all 28 baseline context comparisons.
+The environment cache test verifies eight startup conversions, zero conversions
+for unchanged values and one conversion after changing a value. Empty, unset
+and readonly originals retain their intended behavior. Both context encodings
+select native shadows on Windows and discard the transport metadata.
+
+The expanded dual-output alias remains a failing acceptance case: 10,000 bytes
+per stream completes with status 7, while 100,000 bytes per stream stalls in the
+Bash drain. A bounded-read probe advanced past stdout but then blocked reading
+stderr; adding a readiness probe did not resolve it. These temporary diagnostic
+probes did not alter the production reader. Native worker backpressure tests
+still pass. This failure is not evidence that full Bash output acceptance has
+passed, and investigative diagnostics remain in place.
+
+The shell client should invoke its own `cygpath`, as requested, so conversion
+uses the caller's installation and mount table. A single path uses `-w`; a path
+list uses `-wp`. Preserve the caller's HOME choice rather than deriving it from
+USERPROFILE or the worker's build SDK. The runtime's explicit standard table
+contains PATH, HOME, LD_LIBRARY_PATH, ORIGINAL_PATH, SHELL, TMPDIR, TMP and TEMP.
+Other variables can already contain native Windows paths or participate in
+MSYS's additional native-spawn heuristics; enumerating the standard table does
+not establish complete equivalence for those variables.
+
+A local probe compared all eight standard variables through both Git Bash and
+MSYS2 Bash against a native Python child launched by the same shell. All 16
+comparisons matched. The probe deliberately used `/home/preload conversion`
+and `/tmp/preload conversion`: Git Bash and MSYS2 produced their own distinct
+home/temp mappings, and each matched its corresponding native child. Raw values
+are preserved in
+[cygpath-standard-environment-check.jsonl](evidence/cygpath-standard-environment-check.jsonl).
+This validates the converter choice for those inputs; it does not yet validate
+cache invalidation, empty/unset values or arbitrary custom-variable heuristics.
+
+Source inspection found that `CW_CVT_ENV_TO_WINENV` calls `build_env` with
+`keep_posix=true`, bypassing the additional custom-variable heuristics. The
+installed MSYS DLL does not export `arg_heuristic_with_exclusions`, despite its
+header declaration; a temporary probe failed to link against it. Neither API
+is accepted as a complete environment-conversion solution. No runtime DLL is
+loaded into native Git for this investigation.
+
+Validate conversion against the environment actually received by a native child
+of the same shell, including standard paths, custom paths/path lists, exclusions,
+empty values, removals and later changes. Keep conversion costs separate from
+steady-state command timings and preserve new matched evidence after a fix.
+
+References: [Git Bash standard environment table](https://github.com/git-for-windows/msys2-runtime/blob/main/winsup/cygwin/environ.cc),
+[environment wrapper](https://github.com/git-for-windows/msys2-runtime/blob/main/winsup/cygwin/external.cc),
+and [MSYS path conversion rules](https://www.msys2.org/docs/filesystem-paths/).
+
 ## Final cleanup gate
 
 Investigative diagnostics remain in the source. After all native acceptance

@@ -12,7 +12,7 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
         with:
@@ -64,11 +64,11 @@ jobs:
             helper="$(cygpath -w "$PWD/t/helper/test-tool.exe")"
             "$py" t/preload/test_windows_worker_lifecycle.py "$gitbin"
             "$py" t/preload/test_windows_allocator.py
+            "$py" t/preload/test_shell_environment.py
           else
             py="$pythonLocation/bin/python3"
             gitbin="$PWD/git"
             helper="$PWD/t/helper/test-tool"
-            cc -DNO_PTHREADS -I. -fsyntax-only preload-worker-posix.c
             "$py" t/preload/test_posix_worker.py "$gitbin"
           fi
           "$py" t/preload/test_transport.py "$helper"

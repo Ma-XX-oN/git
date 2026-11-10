@@ -63,6 +63,7 @@ _git_preload_source_manager() {
     printf 'set GIT_PRELOAD_WORKER_GIT and GIT_PRELOAD_MANAGER_PYTHON before sourcing\n' >&2
     return 2
   fi
+  _git_preload_refresh_paths || return 1
   local owner_pid
   IFS= read -r owner_pid < "/proc/$BASHPID/winpid" || return 1
   if [[ ! $owner_pid =~ ^[1-9][0-9]*$ ]]; then
@@ -71,9 +72,9 @@ _git_preload_source_manager() {
   fi
   local script_path script_dir temp native_directory
   script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) || return 1
-  script_path=$(cygpath -w "$script_dir/windows_git_ipc_pool.py") || return 1
+  script_path=$(/usr/bin/cygpath -w "$script_dir/windows_git_ipc_pool.py") || return 1
   temp=$(mktemp -d "${TMPDIR:-${TEMP:-${TMP:-/tmp}}}/git-preload-$owner_pid-XXXXXXXX") || return 1
-  native_directory=$(cygpath -w "$temp") || return 1
+  native_directory=$(/usr/bin/cygpath -w "$temp") || return 1
   "$GIT_PRELOAD_MANAGER_PYTHON" "$script_path" --git "$GIT_PRELOAD_WORKER_GIT" \
     --workers "$requested" --owner-pid "$owner_pid" --directory "$native_directory" \
     >"$temp/manager.log" 2>&1 </dev/null &
@@ -191,6 +192,10 @@ git-ipc() {
     printf 'git-ipc requires a connected allocator and at most 31 arguments\n' >&2
     printf 'GIT-IPC ERROR: invalid invocation\n' >&2; return 255
   fi
+  _git_preload_refresh_paths || {
+    printf 'GIT-IPC ERROR: native environment path conversion failed\n' >&2
+    return 255
+  }
   [[ ${GIT_PRELOAD_TRACE:-} == 1 ]] && printf 'TRACE start bashpid=%s\n' "$BASHPID" >>"$_GIT_PRELOAD_MANAGER_LOG"
   _GIT_PRELOAD_REQUEST_SEQ=$(( ${_GIT_PRELOAD_REQUEST_SEQ:-0} + 1 ))
   local marker=$(( _GIT_PRELOAD_REQUEST_SEQ % 10 ))

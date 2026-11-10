@@ -7,6 +7,23 @@ The objective is **4–5 ms median on the native Windows GitHub runner**, with t
 workers and complete cwd/environment transfer. Application stdin and binary output
 retain the limitations in [the transport contract](TRANSPORT-CONTRACT.md).
 
+## Unmeasured path-shadow correction
+
+The Windows shell caches converted values for the runtime's eight standard
+path variables through its own `/usr/bin/cygpath`. Exported `__git_env_NAME`
+shadows accompany the unchanged `export -p` snapshot; the worker selects their
+native values and removes the metadata. Source-value caches remain unexported.
+Startup performs the conversions; an unchanged serial call checks the caches
+with Bash builtins. A changed value invokes one conversion process.
+
+The cache test verifies eight initial conversions, zero on an unchanged refresh
+and one after a single value changes. The command path gains eight comparisons,
+the shadow declarations and worker-side selection. No latency improvement is
+claimed: these costs need a new matched baseline comparison. The correction
+allows a small shell alias to complete with status 7 where the raw POSIX PATH
+previously prevented native shell lookup. The larger dual-stream alias remains
+an unresolved acceptance failure, recorded in the migration validation notes.
+
 ## Comparison rules
 
 - Compare laptop with the same laptop experiment, or CI variants within the same

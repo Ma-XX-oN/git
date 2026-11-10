@@ -87,6 +87,16 @@ shell serialization. The double NUL belongs to the environment-block encoding,
 including an empty block; it is independent of the host operating system.
 Shell variable attributes such as readonly and integer preserve their emitted
 scalar value. Array declarations have no child-environment value and are ignored.
+The Windows Bash client caches native forms of the runtime's standard path
+variables in exported `__git_env_NAME` shadows. It uses its own
+`/usr/bin/cygpath -w` for individual paths and `-wp` for path lists, creating
+the cache during startup and refreshing entries whose original values change.
+The builtin `export -p` snapshot includes originals and shadows. The Windows
+worker selects the shadow value under the original name; POSIX workers retain
+the original value. Both workers discard the reserved `__git_env_` metadata.
+A shadow cannot introduce a variable absent from the original snapshot. This
+selection applies to both environment encodings. Raw source cache values stay
+unexported, and ordinary Git environment lookups use the original variable names.
 Omitting both environment fields retains the worker's environment inherited
 when the manager spawned it. That snapshot can differ from the caller's
 environment at command submission.

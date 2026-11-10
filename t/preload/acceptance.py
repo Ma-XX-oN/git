@@ -48,6 +48,16 @@ cd "$4/contrib/preload" || exit 19
 actual=$(git-ipc rev-parse --show-prefix) || exit 20
 [[ $actual == 'contrib/preload/' ]] || exit 21
 cd "$4" || exit 22
+for order in out-first err-first; do
+  if [[ $order == out-first ]]; then
+    output_alias='!printf "%01048576d" 0; printf "%01048576d" 0 >&2; exit 7'
+  else
+    output_alias='!printf "%01048576d" 0 >&2; printf "%01048576d" 0; exit 7'
+  fi
+  git-ipc -c "alias.preload-output=$output_alias" preload-output \
+    >"$3/$order.stdout" 2>"$3/$order.stderr"
+  [[ $? == 7 ]] || exit 32
+done
 for ((i=0; i<$2; i++)); do
   begin=$EPOCHREALTIME
   git-ipc --version >"$3/actual.txt" || exit 23
@@ -117,6 +127,10 @@ def main():
                 raise
             if result:
                 raise subprocess.CalledProcessError(result, command)
+    for order in ("out-first", "err-first"):
+        for stream in ("stdout", "stderr"):
+            actual = (output / f"{order}.{stream}").read_bytes()
+            assert actual == b"0" * 1048576, (order, stream, len(actual))
     rows = (output / "stress.csv").read_text(encoding="utf-8").splitlines()[1:]
     assert len(rows) == args.count, len(rows)
     samples = [float((Decimal(row.split(",")[2]) - Decimal(row.split(",")[1])) * 1000)
