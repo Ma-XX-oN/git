@@ -121,24 +121,25 @@ def make_server(name, direction):
 def benchmark(bash, direction, iterations):
   p = subprocess.Popen([bash,"--noprofile","--norc","-c",SCRIPTS[direction]],
                        stdin=subprocess.PIPE,stdout=subprocess.PIPE,
-                       stderr=subprocess.PIPE,text=True,encoding="utf-8",
-                       errors="replace",bufsize=1)
+                       stderr=subprocess.PIPE,bufsize=0)
   assert p.stdin and p.stdout and p.stderr
   replies, errors = queue.Queue(), queue.Queue()
   threading.Thread(target=source,args=(p.stdout,replies),daemon=True).start()
   threading.Thread(target=source,args=(p.stderr,errors),daemon=True).start()
   timings = []
   try:
-    if replies.get(timeout=10).strip() != "READY":
+    if replies.get(timeout=10).strip() != b"READY":
       raise RuntimeError("Bash startup handshake incorrect")
     for index in range(iterations):
       name = r"\\.\pipe\git809-open-red-" + uuid.uuid4().hex
       handles, threads, records, states = make_server(name, direction)
       try:
         began = time.perf_counter_ns()
-        p.stdin.write(name + "\n")
+        if any(ord(ch) < 32 for ch in name):
+          raise ValueError("control character in native pipe path")
+        p.stdin.write((name + "\n").encode("utf-8"))
         p.stdin.flush()
-        got = replies.get(timeout=8).strip()
+        got = replies.get(timeout=8).strip().decode("utf-8", "replace")
         ms = (time.perf_counter_ns() - began) / 1000000
         if index == 0:
           print("FIRST_TRIAL " + json.dumps({"direction": direction, "reply": got,
@@ -173,7 +174,7 @@ def benchmark(bash, direction, iterations):
     return report
   finally:
     try:
-      p.stdin.write("STOP\n")
+      p.stdin.write(b"STOP\n")
       p.stdin.flush()
     except (BrokenPipeError,OSError):
       pass
