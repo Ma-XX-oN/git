@@ -11,6 +11,15 @@ from test_shell_output import stop_owned_tree
 
 SHELL = r'''
 set -u
+# No arguments; report the current assertion phase and exit status on failure.
+report_exit() {
+  local status=$?
+  if (( status )); then
+    printf 'ENVIRONMENT_RESTART_FAILURE phase=%s status=%s\n' "$phase" "$status" >&2
+  fi
+}
+phase=startup
+trap report_exit EXIT
 # Capture the sourcing owner's discovery paths after each replacement.
 # No arguments; session and ready receive borrowed shell path values.
 session_paths() {
@@ -32,32 +41,41 @@ source "$1" 2 || exit 10
 session_paths
 cp "$ready" "$2/first.json" || exit 11
 first_session=$session
+phase=initial-value
 actual=$(git-ipc var GIT_EDITOR) || exit 12
 [[ $actual == 'initial editor' ]] || exit 13
 export GIT_EDITOR='refreshed editor'
+phase=frozen-value
 actual=$(git-ipc var GIT_EDITOR) || exit 14
 [[ $actual == 'initial editor' ]] || exit 15
+phase=restart
 source "$1" 4 || exit 16
 check_retired_session "$first_session" || exit 17
 session_paths
 cp "$ready" "$2/second.json" || exit 18
 second_session=$session
+phase=refreshed-value
 actual=$(git-ipc var GIT_EDITOR) || exit 19
 [[ $actual == 'refreshed editor' ]] || exit 20
 unset GIT_EDITOR
+phase=unset-reference
 expected=$("$GIT_PRELOAD_WORKER_GIT" var GIT_EDITOR) || exit 21
+phase=unset-restart
 source "$1" 3 || exit 22
 check_retired_session "$second_session" || exit 23
 actual=$(git-ipc var GIT_EDITOR) || exit 24
 [[ $actual == "$expected" ]] || exit 25
+phase=subshell
 (
   export GIT_EDITOR='subshell editor'
   source "$1" 1 || exit 26
   actual=$(git-ipc var GIT_EDITOR) || exit 27
   [[ $actual == 'subshell editor' ]] || exit 28
 ) || exit 29
+phase=parent-after-subshell
 actual=$(git-ipc var GIT_EDITOR) || exit 30
 [[ $actual == "$expected" ]] || exit 31
+phase=invalid-resize
 if source "$1" 0 >/dev/null 2>&1; then exit 32; fi
 actual=$(git-ipc var GIT_EDITOR) || exit 33
 [[ $actual == "$expected" ]] || exit 34

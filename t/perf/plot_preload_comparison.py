@@ -21,7 +21,12 @@ def load_comparison(path):
     """
     data = path.read_bytes()
     report = json.loads(data)
-    assert report["full_context"] and not report["tracing"], "comparison controls differ"
+    assert not report["tracing"], "comparison tracing must be disabled"
+    if "environment_policy" in report:
+        assert set(report["environment_policy"]) == {"baseline", "candidate"}
+        assert report.get("workload"), "environment policies require a stated workload"
+    else:
+        assert report["full_context"], "historical comparison omitted full context"
     variants = report["variants"]
     assert variants["baseline"]["flags"] == variants["candidate"]["flags"], "compiler flags differ"
     assert all(value > 0 for value in report["medians_ms"].values()), "invalid timing"
@@ -104,6 +109,12 @@ def write_report(reports, labels, output):
               "Full machine metadata, compiler flags, source digests and raw samples are in",
               "[graph-evidence.json](graph-evidence.json). Missing historical hardware fields",
               "remain unspecified. No timings are averaged across machines.", ""]
+    for label, report in zip(labels, reports):
+        if "environment_policy" in report:
+            policy = report["environment_policy"]
+            lines += [f"{label}: {report['workload']}. Baseline: {policy['baseline']}; "
+                      f"candidate: {policy['candidate']}. This row measures the stated "
+                      "contract as well as implementation changes.", ""]
     (output / "report.md").write_text("\n".join(lines), encoding="utf-8", newline="\n")
     (output / "graph-evidence.json").write_text(
         json.dumps(evidence, indent=2) + "\n", encoding="utf-8", newline="\n")

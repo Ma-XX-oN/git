@@ -25,6 +25,20 @@ claim from that number. A new untraced ABBA comparison is required, with an
 unchanged environment and the two revisions' different capture policies stated
 explicitly in its metadata.
 
+The same-laptop ABBA comparison for `ba16959609` measured **4.6580 ms baseline**
+versus **4.0860 ms migrated**: **87.72% of baseline**, **-12.28%**, or
+**-0.5720 ms**. Baseline round medians were 4.6820/4.6455 ms; candidate rounds
+were 4.0515/4.1175 ms. Each variant has 240 IPC samples, three workers, matching
+compiler flags and tracing disabled, on DESKTOP-P0W3R (AMD Ryzen 7 5700U).
+The workload leaves the environment unchanged after manager startup. Baseline
+serializes its snapshot per call; the candidate inherits startup values. This
+measures the revised contract and combined implementation, not an isolated
+shadow-removal gain. Do not subtract the earlier shadow checkpoint's times:
+its matched baseline was different. Raw samples and machine/runtime identities
+are in [migration-ba1695-windows-laptop-matched.json](performance/evidence/migration-ba1695-windows-laptop-matched.json).
+The [checkpoint graphs](performance/migration-checkpoints/report.md) show both
+absolute milliseconds and within-comparison baseline-normalized percentages.
+
 ## Historical path-shadow correction checkpoint
 
 The Windows shell caches converted values for the runtime's eight standard

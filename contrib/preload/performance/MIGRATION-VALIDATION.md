@@ -137,6 +137,16 @@ Its local raw CSV, manager log, worker trace and binary identity are in
 `Temp/preload-startup-environment-6000`; exact-revision CI evidence remains
 required before diagnostic removal.
 
+Untraced ABBA timing at committed `ba16959609` measured baseline 4.6580 ms
+versus candidate 4.0860 ms (-0.5720 ms, -12.28%) on the same Ryzen 7 5700U laptop.
+The unchanged-environment workload and per-variant environment policies are
+explicit in the [raw report](evidence/migration-ba1695-windows-laptop-matched.json).
+The current CI run is [42774012137](https://github.com/Ma-XX-oN/git/actions/runs/42774012137).
+Its Linux and macOS native step failed in the new environment restart fixture;
+the early artifacts contain first and second READY records with empty stdout
+and stderr. Full job logs are not yet available. These are acceptance failures
+under investigation, not a passed gate; investigative diagnostics stay enabled.
+
 ### Historical shadow checkpoint
 
 A new client-level output/status test reproduces a pre-existing failure with a
