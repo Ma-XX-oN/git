@@ -67,7 +67,16 @@ platforms in [run 42697246570](https://github.com/Ma-XX-oN/git/actions/runs/4269
 The Linux job also passed both full Git suites and the matched comparison.
 Its raw matched timings are in
 [migration-87-linux-matched.json](evidence/migration-87-linux-matched.json).
-Windows and macOS full-suite acceptance remains pending at this checkpoint.
+The macOS job passed both full Git suites and its matched comparison.
+The Windows job passed native preload acceptance and the matched comparison
+(3.9595 ms baseline, 3.9540 ms candidate), but failed the Makefile send-email
+suite and the Meson build. Meson's probes ran against the minimal SDK, which
+omits `shellapi.h` and the `winspool` import library. The validation workflow
+uses the full SDK for those probes. A local verbose reproduction of the
+send-email failure selected native MinGW Perl; the test's shell sendmail
+fixture requires MSYS Perl. The workflow selects it for the test suites and
+captures verbose logs. Windows acceptance remains open until the corrected
+workflow passes.
 
 Local review validation expanded to 31 Windows worker cases and 28 exact
 environment comparisons, including native API environment frames, omitted

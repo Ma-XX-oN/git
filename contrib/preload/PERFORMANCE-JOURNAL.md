@@ -250,7 +250,7 @@ measured revisions. The maintained protocol is documented in
 | Adopted optimization | Production implementation audit |
 | --- | --- |
 | Prestarted blocking connector pair and peer spin rendezvous | Retained in `preload-transport-win32.c`; selector regression coverage includes both connection orders, held probes, duplicate markers and cancellation. |
-| Persistent serial allocator channels | Retained on both platforms. |
+| Persistent serial allocator channels | Both client request/reply descriptors remain open for the owner session on both platforms. |
 | Publish allocation reply before starting replacement | Retained on Windows; POSIX refill moved after successful reply write during review. |
 | Group request writes under one Bash redirection | Retained on Windows; applied to POSIX during protocol unification. |
 | Shell-pattern validation of pipe names | Retained in the Windows Bash connection helper. |
@@ -307,6 +307,10 @@ are correctness fixes; their combined timing effect belongs in the next matched
 comparison rather than an unmeasured gain claim.
 Exported Bash functions remain outside the Bash client's snapshot scope; this
 existing limitation is documented rather than expanded during this migration.
+The POSIX client also retains its request writer for the session, matching the
+persistent Windows request/reply pair. Earlier POSIX revisions reopened that
+writer for each GET. This removes repeated FIFO opens from the serial path;
+its timing contribution remains unmeasured until the next matched run.
 
 ### Shared-worker checkpoint on Linux CI
 

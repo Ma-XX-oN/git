@@ -20,6 +20,10 @@ jobs:
           persist-credentials: false
       - uses: git-for-windows/setup-git-for-windows-sdk@v2
         if: runner.os == 'Windows'
+        with:
+          # Meson's feature probes need headers and import libraries omitted
+          # from the SDK's Makefile-focused minimal subset.
+          flavor: full
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -78,8 +82,11 @@ jobs:
           if [[ $RUNNER_OS == Windows ]]; then
             . /etc/profile
             export GIT_BUILD_DIR="$(cygpath -au "$PWD")"
+            # Git resolves script interpreters by basename. Select MSYS Perl
+            # so the send-email tests can execute their shell sendmail fixture.
+            export PATH="/usr/bin:$PATH"
           fi
-          make -C t -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease DEFAULT_TEST_TARGET=test GIT_TEST_OPTS=--tee
+          make -C t -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease DEFAULT_TEST_TARGET=test GIT_TEST_OPTS=--verbose-log
       - name: Build and test Meson
         if: ${{ !cancelled() }}
         shell: bash
@@ -93,6 +100,7 @@ jobs:
           fi
           "$py" -m mesonbuild.mesonmain setup build-preload -Drust=disabled -Dcurl=disabled -Dgettext=disabled -Dgit_gui=disabled -Dgitk=disabled -Dzlib_backend=zlib
           "$py" -m mesonbuild.mesonmain compile -C build-preload -j4
+          if [[ $RUNNER_OS == Windows ]]; then export PATH="/usr/bin:$PATH"; fi
           "$py" -m mesonbuild.mesonmain test -C build-preload --print-errorlogs --num-processes 4
       - name: Check out preserved baseline
         if: ${{ !cancelled() }}

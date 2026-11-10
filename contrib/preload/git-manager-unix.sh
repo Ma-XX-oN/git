@@ -2,7 +2,7 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/git-ipc-request.sh" || return 1
 # Source in Bash on Linux/macOS after setting GIT_PRELOAD_WORKER_GIT.
 # Single-use native Git --preload-worker worker; Bash client remains text-output only.
 # Argument 1: initial worker count (default 3, range 1 through 32).
-# Retain the manager session and reply descriptor in the sourcing owner shell.
+# Retain the manager session and allocation descriptors in the owner shell.
 # Return zero after READY, or 255 on configuration/startup failure.
 _git_preload_unix_source() {
   local requested=${1:-3}
@@ -39,6 +39,11 @@ _git_preload_unix_source() {
         printf 'GIT-IPC ERROR: Unix allocation reply channel open failed\n' >&2
         return 255
       }
+      exec {_GIT_PRELOAD_UNIX_REQUEST_FD}> "$directory/allocate-req" || {
+        exec {_GIT_PRELOAD_UNIX_REPLY_FD}<&-
+        printf 'GIT-IPC ERROR: Unix allocation request channel open failed\n' >&2
+        return 255
+      }
       _GIT_PRELOAD_UNIX_DIRECTORY=$directory
       _GIT_PRELOAD_UNIX_MANAGER_PID=$launched
       _GIT_PRELOAD_UNIX_MANAGER_LOG=$directory/manager.log
@@ -71,11 +76,11 @@ git-ipc() {
     return 255
   fi
   local dir=$_GIT_PRELOAD_UNIX_DIRECTORY worker count header arg chunk rc status
-  [[ -n ${_GIT_PRELOAD_UNIX_REPLY_FD:-} ]] || {
-    printf 'GIT-IPC ERROR: Unix allocation reply channel unavailable\n' >&2
+  [[ -n ${_GIT_PRELOAD_UNIX_REPLY_FD:-} && -n ${_GIT_PRELOAD_UNIX_REQUEST_FD:-} ]] || {
+    printf 'GIT-IPC ERROR: Unix allocation channels unavailable\n' >&2
     return 255
   }
-  printf 'GET\n' > "$dir/allocate-req" || {
+  printf 'GET\n' >&"$_GIT_PRELOAD_UNIX_REQUEST_FD" || {
     printf 'GIT-IPC ERROR: allocation request failed\n' >&2
     return 255
   }
@@ -101,7 +106,7 @@ git-ipc() {
   exec 8>"$worker/stdin" || { exec 4<&- 5<&- 6<&-; printf 'GIT-IPC ERROR: stdin open failed\n' >&2; return 255; }
   exec 7>"$worker/param-env-cwd" || { exec 4<&- 5<&- 6<&- 8>&-; printf 'GIT-IPC ERROR: control open failed\n' >&2; return 255; }
   # No relay process: stdin is unavailable pending process-free handle
-  # transfer. Close the worker channel after Windows has consumed T.
+  # transfer. Close the unused worker input channel.
   exec 8>&-
 
 

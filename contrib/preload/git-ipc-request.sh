@@ -1,5 +1,5 @@
 # Shared Bash request extension for both --preload-worker transports.
-# All text fields are UTF-8; environment is an exact byte-counted snapshot.
+# All text fields are UTF-8; environment uses NUL-terminated Bash declarations.
 # Emit cwd and the complete ordinary exported-variable snapshot on stdout.
 # Argument 1: windows or unix, selecting only the native pwd spelling.
 # Return zero on success, one if a builtin cannot emit its field.
