@@ -16,13 +16,28 @@ int main() {
     1, 4096, 4096, 0, nullptr);
   if (server == INVALID_HANDLE_VALUE) return fail("CreateNamedPipeW");
 
+  HANDLE connect_evt = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  if (!connect_evt) return fail("CreateEventW connect");
+  OVERLAPPED connection = {};
+  connection.hEvent = connect_evt;
+  BOOL connected_now = ConnectNamedPipe(server, &connection);
+  DWORD connect_issue = connected_now ? ERROR_SUCCESS : GetLastError();
+  if (!connected_now && connect_issue != ERROR_IO_PENDING &&
+      connect_issue != ERROR_PIPE_CONNECTED)
+    return fail("ConnectNamedPipe", connect_issue);
+
   HANDLE client = CreateFileW(path, GENERIC_WRITE, 0, nullptr,
     OPEN_EXISTING, 0, nullptr);
   if (client == INVALID_HANDLE_VALUE) return fail("CreateFileW");
 
-  if (!ConnectNamedPipe(server, nullptr) &&
-      GetLastError() != ERROR_PIPE_CONNECTED)
-    return fail("ConnectNamedPipe");
+  if (!connected_now && connect_issue == ERROR_IO_PENDING) {
+    if (WaitForSingleObject(connect_evt, 3000) != WAIT_OBJECT_0)
+      return fail("ConnectNamedPipe timeout", WAIT_TIMEOUT);
+    DWORD ignored = 0;
+    if (!GetOverlappedResult(server, &connection, &ignored, FALSE))
+      return fail("GetOverlappedResult connect");
+  }
+  CloseHandle(connect_evt);
 
   HANDLE ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   if (!ready) return fail("CreateEventW zero-read");
