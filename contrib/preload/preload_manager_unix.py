@@ -163,8 +163,8 @@ class Server:
       if words[1] == self.stop_slot:
         self.stopped.set()
     elif command == "GET" and len(words) == 3 and self.mailbox(words[2]):
-      threading.Thread(target=self._get, args=(words[1], self.mailbox(words[2])),
-                       daemon=True).start()
+      threading.Thread(target=self._get, daemon=True,
+                       args=(words[1], self.mailbox(words[2]), time.time())).start()
     elif command == "PRELOAD" and len(words) == 4 and self.mailbox(words[2]):
       threading.Thread(target=self._preload, daemon=True,
                        args=(words[1], self.mailbox(words[2]), words[3])).start()
@@ -178,9 +178,21 @@ class Server:
     else:
       log("INVALID_REQUEST " + repr(line))
 
-  def _get(self, name, mailbox):
-    """Allocate one worker for a caller."""
+  def _get(self, name, mailbox, received):
+    """Allocate one worker for a caller.
+
+    Parameters
+    ----------
+    name : str
+        Requested command name.
+    mailbox : Mailbox
+        Claimed reply mailbox.
+    received : float
+        Wall-clock time the request line was parsed, for PRELOAD_TIMING.
+    """
+    started = time.time()
     result = self.manager.allocate(name)
+    allocated = time.time()
     if isinstance(result, str):
       mailbox.deliver(result)
     elif not mailbox.deliver(str(self.directory / ("worker-" + str(result.pid)))):
@@ -188,6 +200,9 @@ class Server:
       # it does not remain as a zombie.
       result.kill()
       result.wait(timeout=5)
+    if preload_pool.TIMING:
+      log(f"TIMING GET received={received:.6f} thread={started:.6f} "
+          f"allocated={allocated:.6f} delivered={time.time():.6f}")
 
   def _preload(self, name, mailbox, path):
     """Create a command's pool for a caller."""

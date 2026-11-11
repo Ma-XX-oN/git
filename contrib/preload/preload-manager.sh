@@ -88,7 +88,7 @@ _preload_write_context() {
 # exited cannot raise SIGPIPE and kill this shell.
 # Sets _PRELOAD_REPLY. Returns zero once a reply has been read.
 _preload_unix_exchange() {
-  local slot i fd line rc noclobber=0
+  local slot start i fd line rc noclobber=0
   _PRELOAD_REPLY=
   if [[ ${_PRELOAD_FD_DIR:-} != "$PRELOAD_DIR" ]]; then
     local ready
@@ -102,18 +102,24 @@ _preload_unix_exchange() {
     exec {_PRELOAD_REQ_FD}>"$PRELOAD_DIR/request" || return 1
     _PRELOAD_FD_DIR=$PRELOAD_DIR
   fi
-  # Claim a free mailbox, starting at a PID-derived index to avoid collisions.
+  # Claim a free mailbox, starting at a random index to make collisions
+  # between concurrent callers unlikely ($RANDOM is reseeded in each subshell
+  # since Bash 5.1; a collision only means trying the next mailbox).
   [[ $- == *C* ]] && noclobber=1
   set -C
   while :; do
     [[ -f $PRELOAD_DIR/ready.json ]] || { (( noclobber )) || set +C; return 1; }
+    start=$(( RANDOM % _PRELOAD_SLOTS ))
     for (( i = 0; i < _PRELOAD_SLOTS; i++ )); do
-      slot=$(( (BASHPID + i) % _PRELOAD_SLOTS ))
+      slot=$(( (start + i) % _PRELOAD_SLOTS ))
       { printf '%s' "$BASHPID" >"$PRELOAD_DIR/slot.$slot.lock"; } 2>/dev/null && break 2
     done
     _preload_sleep .001  # Every mailbox is busy; wait for a FREE.
   done
   (( noclobber )) || set +C
+  # Stage timestamps for PRELOAD_TIMING: claimed, opened, sent, replied, freed.
+  _PRELOAD_TX=
+  [[ -z ${PRELOAD_TIMING:-} ]] || _PRELOAD_TX=$EPOCHREALTIME
   # Opening a FIFO for reading blocks until it has a writer; the manager holds
   # the only one. A manager that crashed (leaving ready.json) would make the
   # open hang, so check it is alive first. Once open, its death gives EOF.
@@ -122,14 +128,19 @@ _preload_unix_exchange() {
     printf 'FREE %s\n' "$slot" >&"$_PRELOAD_REQ_FD"
     return 1
   fi
+  [[ -z ${PRELOAD_TIMING:-} ]] || _PRELOAD_TX+=" $EPOCHREALTIME"
   case $1 in
     STOP) line="STOP $slot" ;;
     *) line="$1 $2 $slot${3:+ $3}" ;;
   esac
-  printf '%s\n' "$line" >&"$_PRELOAD_REQ_FD" && IFS= read -r _PRELOAD_REPLY <&"$fd"
+  printf '%s\n' "$line" >&"$_PRELOAD_REQ_FD" &&
+    { [[ -z ${PRELOAD_TIMING:-} ]] || _PRELOAD_TX+=" $EPOCHREALTIME"; } &&
+    IFS= read -r _PRELOAD_REPLY <&"$fd"
   rc=$?
+  [[ -z ${PRELOAD_TIMING:-} ]] || _PRELOAD_TX+=" $EPOCHREALTIME"
   exec {fd}<&-
   printf 'FREE %s\n' "$slot" >&"$_PRELOAD_REQ_FD"
+  [[ -z ${PRELOAD_TIMING:-} ]] || _PRELOAD_TX+=" $EPOCHREALTIME"
   return "$rc"
 }
 
@@ -153,8 +164,9 @@ _preload_request() {
 # replaced by the command name. Arguments: the command's arguments (at most
 # 31). Returns the command's exit status, or 255 for a preload failure.
 _preload_template_windows() {
-  local req wdir rc marker count header chunk status out_open=1 err_open=1
+  local req wdir rc marker count header chunk status out_open=1 err_open=1 _pt=
   local fd_in fd_out fd_err fd_exit fd_ctl
+  [[ -z ${PRELOAD_TIMING:-} ]] || _pt=$EPOCHREALTIME
   if (( $# > 31 )); then
     printf '__PRELOAD_NAME__: preload supports at most 31 arguments\n' >&2
     return 255
@@ -163,8 +175,12 @@ _preload_template_windows() {
     printf 'PRELOAD ERROR: cannot connect to the preload manager\n' >&2
     return 255
   fi
-  printf 'GET __PRELOAD_NAME__\n' >&"$req" && IFS= read -r wdir <&"$req"
+  [[ -z ${PRELOAD_TIMING:-} ]] || _pt+=" $EPOCHREALTIME"
+  printf 'GET __PRELOAD_NAME__\n' >&"$req" &&
+    { [[ -z ${PRELOAD_TIMING:-} ]] || _pt+=" $EPOCHREALTIME"; } &&
+    IFS= read -r wdir <&"$req"
   rc=$?
+  [[ -z ${PRELOAD_TIMING:-} ]] || _pt+=" $EPOCHREALTIME"
   exec {req}>&-
   if (( rc )) || [[ $wdir != *'\worker-'* ]]; then
     printf 'PRELOAD ERROR: %s\n' "${wdir:-no reply from the preload manager}" >&2
@@ -181,6 +197,7 @@ _preload_template_windows() {
     printf 'PRELOAD ERROR: cannot connect to worker %s\n' "$wdir" >&2
     return 255
   fi
+  [[ -z ${PRELOAD_TIMING:-} ]] || _pt+=" $EPOCHREALTIME"
   count=$(( $# + 1 ))
   printf -v header '\\x%02x\\x00\\x00\\x00' "$count"
   if ! { printf '%b%s\0' "$header" '__PRELOAD_NAME__' &&
@@ -190,6 +207,7 @@ _preload_template_windows() {
     printf 'PRELOAD ERROR: worker request write failed\n' >&2
     return 255
   fi
+  [[ -z ${PRELOAD_TIMING:-} ]] || _pt+=" $EPOCHREALTIME"
   # Keep stdin and params-cwd open until output EOF so closing them cannot
   # discard a marker before the worker reads it. Alternate between stdout
   # and stderr so neither stream blocks the other.
@@ -217,11 +235,14 @@ _preload_template_windows() {
       fi
     fi
   done
+  [[ -z ${PRELOAD_TIMING:-} ]] || _pt+=" $EPOCHREALTIME"
   exec {fd_in}>&- {fd_ctl}>&-
   IFS= read -r status <&"$fd_exit"
   rc=$?
   exec {fd_exit}<&-
   if (( rc == 0 )) && [[ $status =~ ^EXIT[[:space:]]([0-9]+)$ ]]; then
+    # W entry connected sent replied channels request output status
+    [[ -z ${PRELOAD_TIMING:-} ]] || printf 'W %s %s\n' "$_pt" "$EPOCHREALTIME" >>"$PRELOAD_TIMING"
     return "${BASH_REMATCH[1]}"
   fi
   printf 'PRELOAD ERROR: invalid worker exit status: %s\n' "$status" >&2
@@ -230,13 +251,15 @@ _preload_template_windows() {
 
 # Template for generated Linux/macOS command functions; see the Windows one.
 _preload_template_unix() {
-  local wdir rc count header chunk status out_open=1 err_open=1
+  local wdir rc count header chunk status out_open=1 err_open=1 _pt=
   local fd_in fd_out fd_err fd_exit fd_ctl
+  [[ -z ${PRELOAD_TIMING:-} ]] || _pt=$EPOCHREALTIME
   if (( $# > 31 )); then
     printf '__PRELOAD_NAME__: preload supports at most 31 arguments\n' >&2
     return 255
   fi
   _preload_unix_exchange GET __PRELOAD_NAME__
+  [[ -z ${PRELOAD_TIMING:-} ]] || _pt+=" $_PRELOAD_TX"
   wdir=$_PRELOAD_REPLY
   if [[ $wdir != "$PRELOAD_DIR/worker-"* ]]; then
     printf 'PRELOAD ERROR: %s\n' "${wdir:-the preload manager stopped}" >&2
@@ -252,6 +275,7 @@ _preload_template_unix() {
   }
   # stdin is connected but unused until a multitee builtin exists.
   exec {fd_in}>&-
+  [[ -z ${PRELOAD_TIMING:-} ]] || _pt+=" $EPOCHREALTIME"
   count=$(( $# + 1 ))
   printf -v header '\\x%02x\\x00\\x00\\x00' "$count"
   if ! { printf '%b%s\0' "$header" '__PRELOAD_NAME__' &&
@@ -261,6 +285,7 @@ _preload_template_unix() {
     printf 'PRELOAD ERROR: worker request write failed\n' >&2
     return 255
   fi
+  [[ -z ${PRELOAD_TIMING:-} ]] || _pt+=" $EPOCHREALTIME"
   while (( out_open || err_open )); do
     if (( out_open )); then
       chunk=
@@ -285,11 +310,14 @@ _preload_template_unix() {
       fi
     fi
   done
+  [[ -z ${PRELOAD_TIMING:-} ]] || _pt+=" $EPOCHREALTIME"
   exec {fd_ctl}>&-
   IFS= read -r status <&"$fd_exit"
   rc=$?
   exec {fd_exit}<&-
   if (( rc == 0 )) && [[ $status =~ ^EXIT[[:space:]]([0-9]+)$ ]]; then
+    # U entry claimed opened sent replied freed channels request output status
+    [[ -z ${PRELOAD_TIMING:-} ]] || printf 'U %s %s\n' "$_pt" "$EPOCHREALTIME" >>"$PRELOAD_TIMING"
     return "${BASH_REMATCH[1]}"
   fi
   printf 'PRELOAD ERROR: invalid worker exit status: %s\n' "$status" >&2

@@ -169,10 +169,12 @@ class Server:
     line = self._read_line(handle)
     if line is None:
       return  # Git Bash's throwaway connection, or an aborted client.
+    received = time.time()
     command, _, rest = line.partition(" ")
     worker = None
     if command == "GET":
       result = self.manager.allocate(rest)
+      allocated = time.time()
       if isinstance(result, str):
         reply = result
       else:
@@ -191,6 +193,9 @@ class Server:
       if worker is not None:  # The client never learned of this worker.
         worker.kill()
       raise
+    if command == "GET" and preload_pool.TIMING:
+      log(f"TIMING GET received={received:.6f} allocated={allocated:.6f} "
+          f"delivered={time.time():.6f}")
     if command == "STOP":
       log("MANAGER_STOP_REQUEST")
       self.stopped.set()

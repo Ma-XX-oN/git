@@ -12,6 +12,9 @@ import queue
 import subprocess
 import threading
 
+# Log per-request stage times (TIMING lines) when the client's PRELOAD_TIMING
+# is set in the environment the manager inherited.
+TIMING = bool(os.environ.get("PRELOAD_TIMING"))
 INITIAL_WORKERS = 3
 MAX_WORKERS = 32
 SUPPORT_TIMEOUT = 1.0

@@ -133,6 +133,10 @@ jobs:
           fi
           make -C baseline -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git$([[ $RUNNER_OS == Windows ]] && printf .exe)
           "$py" t/perf/compare_preload_versions.py --baseline baseline --baseline-ref production/preload --rounds 3 --output preload-comparison
+          # Per-stage latency of preloaded calls (client and manager timestamps).
+          if [[ $RUNNER_OS == Windows ]]; then gitbin="$(cygpath -w "$PWD/git.exe")"; else gitbin="$PWD/git"; fi
+          "$py" t/perf/preload_stage_timing.py --git "$gitbin" --mode paced --output preload-stage-timing
+          "$py" t/perf/preload_stage_timing.py --git "$gitbin" --mode burst --output preload-stage-timing
       - name: Verify POSIX builds without pthread support
         if: runner.os != 'Windows'
         shell: bash
@@ -155,6 +159,7 @@ jobs:
           path: |
             preload-results/
             preload-comparison/
+            preload-stage-timing/
             t/test-results/
             build-preload/meson-logs/
             preload-no-threads.*
