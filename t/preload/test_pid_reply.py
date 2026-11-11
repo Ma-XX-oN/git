@@ -70,5 +70,60 @@ done
                 self.assertEqual(result.stdout, b"")
 
 
+PREFIX = "\\\\.\\pipe\\preload-1\\worker-"
+"""Windows-style worker directory prefix passed to _preload_read_pid."""
+
+
+class ReadPidTests(unittest.TestCase):
+    """Run the shared frame reader on any platform, including Git Bash."""
+
+    def read(self, payload, calls=1):
+        """Return a Bash result for frames read with a Windows-style prefix.
+
+        Parameters
+        ----------
+        payload : bytes
+            Reply stream on stdin followed by EOF.
+        calls : int
+            Number of frames to read.
+
+        Returns
+        -------
+        subprocess.CompletedProcess
+            Status and replies; a failed read prints `FAIL <reply>`.
+        """
+        library = Path(__file__).resolve().parents[2] / "contrib/preload/preload-manager.sh"
+        # Passed by environment: MSYS argument parsing collapses a leading \\.
+        environment = dict(os.environ, PRELOAD_TEST_PREFIX=PREFIX)
+        # Define only the helper: sourcing the library would start a session.
+        script = r'''
+eval "$(sed -n '/^_preload_read_pid() {/,/^}/p' "$1")" || exit 10
+for ((i=0; i<$2; i++)); do
+  if _preload_read_pid 0 "$PRELOAD_TEST_PREFIX"; then
+    printf '%s\n' "$_PRELOAD_REPLY"
+  else
+    printf 'FAIL %s\n' "$_PRELOAD_REPLY"
+  fi
+done
+'''
+        return subprocess.run([shutil.which("bash"), "--noprofile", "--norc", "-c",
+                               script, "test", library.as_posix(), str(calls)],
+                              input=payload, capture_output=True, timeout=10,
+                              env=environment)
+
+    def test_frames_errors_and_failures(self):
+        """Frames stay aligned; errors keep their text; bad frames clear or name it."""
+        result = self.read(b"0000007b00000000ERROR not preloaded: x\n000001ff"
+                           b"zzzzzzzz0000", calls=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        prefix = PREFIX.encode("ascii")
+        self.assertEqual(result.stdout.replace(b"\r\n", b"\n"),
+                         prefix + b"123\n"
+                         b"ERROR not preloaded: x\n" +
+                         prefix + b"511\n"
+                         b"FAIL invalid worker PID reply\n"
+                         b"FAIL \n")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -71,6 +71,24 @@ _preload_write_context() {
   printf '\0end\0'
 }
 
+# Read one GET reply frame: eight lowercase hexadecimal PID digits without a
+# newline. A zero PID is followed by an `ERROR <reason>` line. The fixed
+# length lets Bash read the frame in bulk; a line read on a pipe costs one
+# read() per byte.
+# Arguments: descriptor, worker directory prefix (`$PRELOAD_DIR/worker-` or
+# `$PRELOAD_WIN_DIR\worker-`).
+# Sets _PRELOAD_REPLY to the worker directory or the error line. Returns zero
+# once a complete reply has been read; an incomplete or invalid frame returns
+# failure.
+_preload_read_pid() {
+  IFS= read -r -N 8 -u "$1" _PRELOAD_REPLY || { _PRELOAD_REPLY=; return 1; }
+  case $_PRELOAD_REPLY in
+    00000000) IFS= read -r -u "$1" _PRELOAD_REPLY ;;
+    *[!0-9a-f]*) _PRELOAD_REPLY='invalid worker PID reply'; return 1 ;;
+    *) _PRELOAD_REPLY="$2$((16#$_PRELOAD_REPLY))" ;;
+  esac
+}
+
 # Linux/macOS: exchange one request and reply through a mailbox.
 # Arguments: request command (GET, PRELOAD or STOP), then for GET/PRELOAD the
 # command name, then for PRELOAD the executable path. The claimed mailbox
@@ -87,9 +105,8 @@ _preload_write_context() {
 # the request FIFO always has a reader, so a write after the manager has
 # exited cannot raise SIGPIPE and kill this shell.
 # Sets _PRELOAD_REPLY. Returns zero once a reply has been read.
-# GET reads eight hexadecimal PID bytes (no newline) and reconstructs the
-# worker directory. A zero PID is followed by an error line; other commands
-# use line replies. An incomplete or invalid PID frame returns failure.
+# GET replies are PID frames read by _preload_read_pid; other commands use
+# line replies.
 _preload_unix_exchange() {
   local slot start i fd line rc noclobber=0
   _PRELOAD_REPLY=
@@ -159,18 +176,11 @@ _preload_unix_exchange() {
   printf '%s\n' "$line" >&"$_PRELOAD_REQ_FD" &&
     { [[ -z ${PRELOAD_TIMING:-} ]] || _PRELOAD_TX+=" $EPOCHREALTIME"; } &&
     if [[ $1 == GET ]]; then
-      IFS= read -r -N 8 -u "$fd" _PRELOAD_REPLY
+      _preload_read_pid "$fd" "$PRELOAD_DIR/worker-"
     else
       IFS= read -r _PRELOAD_REPLY <&"$fd"
     fi
   rc=$?
-  if (( rc == 0 )) && [[ $1 == GET ]]; then
-    case $_PRELOAD_REPLY in
-      00000000) IFS= read -r -u "$fd" _PRELOAD_REPLY; rc=$? ;;
-      *[!0-9a-f]*) _PRELOAD_REPLY='invalid worker PID reply'; rc=1 ;;
-      *) _PRELOAD_REPLY="$PRELOAD_DIR/worker-$((16#$_PRELOAD_REPLY))" ;;
-    esac
-  fi
   [[ -z ${PRELOAD_TIMING:-} ]] || _PRELOAD_TX+=" $EPOCHREALTIME"
   if (( keep )); then
     # EOF means the manager is gone; drop the kept mailbox.
@@ -191,7 +201,12 @@ _preload_request() {
   _PRELOAD_REPLY=
   if [[ $_PRELOAD_PLATFORM == windows ]]; then
     _preload_open req "$PRELOAD_WIN_DIR\\request" 40 || return 1
-    printf '%s\n' "$*" >&"$req" && IFS= read -r _PRELOAD_REPLY <&"$req"
+    printf '%s\n' "$*" >&"$req" &&
+      if [[ $1 == GET ]]; then
+        _preload_read_pid "$req" "$PRELOAD_WIN_DIR\\worker-"
+      else
+        IFS= read -r _PRELOAD_REPLY <&"$req"
+      fi
     local rc=$?
     exec {req}>&-
     return "$rc"
@@ -215,10 +230,11 @@ _preload_template_windows() {
     return 255
   fi
   [[ -z ${PRELOAD_TIMING:-} ]] || _pt+=" $EPOCHREALTIME"
+  _PRELOAD_REPLY=
   printf 'GET __PRELOAD_NAME__\n' >&"$req" &&
     { [[ -z ${PRELOAD_TIMING:-} ]] || _pt+=" $EPOCHREALTIME"; } &&
-    IFS= read -r wdir <&"$req"
-  rc=$?
+    _preload_read_pid "$req" "$PRELOAD_WIN_DIR\\worker-"
+  rc=$? wdir=$_PRELOAD_REPLY
   [[ -z ${PRELOAD_TIMING:-} ]] || _pt+=" $EPOCHREALTIME"
   exec {req}>&-
   if (( rc )) || [[ $wdir != *'\worker-'* ]]; then
@@ -514,7 +530,7 @@ _preload_start_session() {
 }
 
 export -f _preload_sleep _preload_open _preload_open_marked _preload_write_context \
-  _preload_request _preload_unix_exchange
+  _preload_read_pid _preload_request _preload_unix_exchange
 if ! _preload_start_session; then
   return 1
 fi

@@ -42,6 +42,49 @@ if WINDOWS:
   INVALID = C.c_void_p(-1).value
 
 
+def reply_complete(reply, get):
+  """Return whether reply bytes hold one complete reply.
+
+  Parameters
+  ----------
+  reply : bytes
+      Bytes received so far.
+  get : bool
+      Whether the request was GET, whose reply is an eight-digit hexadecimal
+      PID frame, or 00000000 followed by an error line.
+  """
+  if not get:
+    return b"\n" in reply
+  if len(reply) < 8:
+    return False
+  return reply[:8] != b"00000000" or b"\n" in reply[8:]
+
+
+def decode_reply(reply, get, prefix):
+  """Decode one complete reply.
+
+  Parameters
+  ----------
+  reply : bytes
+      Complete reply accepted by reply_complete().
+  get : bool
+      Whether the request was GET.
+  prefix : str
+      Worker directory prefix the client prepends to a decimal PID.
+
+  Returns
+  -------
+  str
+      Worker directory, error line, or reply line.
+  """
+  if get:
+    if reply[:8] == b"00000000":
+      return reply[8:reply.index(b"\n", 8)].decode("utf-8")
+    assert len(reply) == 8 and all(c in b"0123456789abcdef" for c in reply), reply
+    return f"{prefix}{int(reply, 16)}"
+  return reply[:reply.index(b"\n")].decode("utf-8")
+
+
 class Session:
   """A manager process owned by this test.
 
@@ -92,16 +135,17 @@ class Session:
     raise C.WinError(C.get_last_error())
 
   def request_on(self, handle, line):
-    """Send one request on an open Windows connection and read its reply line."""
+    """Send one request on an open Windows connection and decode its reply."""
     data = (line + "\n").encode("utf-8")
     count = W.DWORD()
     assert K.WriteFile(handle, data, len(data), C.byref(count), None)
     reply = bytearray()
     buffer = C.create_string_buffer(4096)
-    while b"\n" not in reply:
+    get = line.startswith("GET ")
+    while not reply_complete(reply, get):
       assert K.ReadFile(handle, buffer, 4096, C.byref(count), None), C.get_last_error()
       reply.extend(buffer.raw[:count.value])
-    return reply[:reply.index(b"\n")].decode("utf-8")
+    return decode_reply(bytes(reply), get, self.pipe_dir + "\\worker-")
 
   def request(self, line, pid=None):
     """Send one request and return its reply line.
@@ -138,8 +182,7 @@ class Session:
       reply = bytearray()
       deadline = time.monotonic() + 15
       get = line.startswith("GET ")
-      while (len(reply) < 8 if get else b"\n" not in reply) or (
-          get and reply[:8] == b"00000000" and b"\n" not in reply[8:]):
+      while not reply_complete(reply, get):
         left = deadline - time.monotonic()
         assert left > 0, "no reply; log:\n" + self.read_log()
         if select.select([fd], [], [], left)[0]:
@@ -147,12 +190,7 @@ class Session:
     finally:
       os.close(fd)
     self.send(f"FREE {slot}")  # After STOP, the manager exits on this FREE.
-    if get:
-      if reply[:8] == b"00000000":
-        return reply[8:-1].decode("utf-8")
-      assert len(reply) == 8 and all(c in b"0123456789abcdef" for c in reply), reply
-      return str(self.directory / f"worker-{int(reply, 16)}")
-    return reply[:reply.index(b"\n")].decode("utf-8")
+    return decode_reply(bytes(reply), get, str(self.directory / "worker-"))
 
   def claim(self, pid):
     """Claim a free mailbox the way the Bash client does.

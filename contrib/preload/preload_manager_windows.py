@@ -5,8 +5,13 @@ Clients connect to the duplex named pipe `<pipe-dir>\\request` once per call
 and send one line on that connection:
 
   PRELOAD <name> <native-executable-path>   ->  OK | ERROR <reason>
-  GET <name>                                ->  <pipe-dir>\\worker-<pid> | ERROR <reason>
+  GET <name>                                ->  eight hexadecimal PID bytes, no newline
+                                                or 00000000 + ERROR <reason> + newline
   STOP                                      ->  OK, then the manager exits
+
+The client rebuilds the worker's pipe directory `<pipe-dir>\\worker-<pid>`
+from the PID. A fixed-length reply lets Bash read it in one call; a line
+reply costs Bash one read per byte on a pipe.
 
 Each connection is a private reply channel, so concurrent subshells never see
 each other's replies. Git Bash opens a throwaway connection before the real
@@ -77,15 +82,12 @@ class Server:
   ----------
   address : str
       Full request pipe name, `<pipe-dir>\\request`.
-  pipe_dir : str
-      Session pipe directory used to build worker replies.
   manager : preload_pool.Manager
       Pools serving PRELOAD and GET requests.
   """
 
-  def __init__(self, address, pipe_dir, manager):
+  def __init__(self, address, manager):
     self.address = address
-    self.pipe_dir = pipe_dir
     self.manager = manager
     self.lock = threading.Lock()
     self.listening = 0
@@ -176,10 +178,10 @@ class Server:
       result = self.manager.allocate(rest)
       allocated = time.time()
       if isinstance(result, str):
-        reply = result
+        reply = "00000000" + result
       else:
         worker = result
-        reply = f"{self.pipe_dir}\\worker-{worker.pid}"
+        reply = f"{worker.pid:08x}"
     elif command == "PRELOAD":
       name, _, path = rest.partition(" ")
       reply = self.manager.preload(name, path) if name and path else "ERROR usage"
@@ -188,7 +190,7 @@ class Server:
     else:
       reply = "ERROR unknown request"
     try:
-      self._write(handle, (reply + "\n").encode("utf-8"))
+      self._write(handle, (reply if worker is not None else reply + "\n").encode("utf-8"))
     except OSError:
       if worker is not None:  # The client never learned of this worker.
         worker.kill()
@@ -234,7 +236,7 @@ class Server:
     handle : int
         Borrowed connected instance.
     payload : bytes
-        Reply line including its newline.
+        Reply line including its newline, or a GET PID frame without one.
     """
     count = W.DWORD()
     if not K.WriteFile(handle, payload, len(payload), C.byref(count), None) or \
@@ -256,7 +258,7 @@ def main():
   manager = preload_pool.Manager(directory, preload_pool.worker_environment(
     args.owner_pid, {"PRELOAD_WIN_DIR": args.pipe_dir}))
   address = args.pipe_dir + "\\request"
-  server = Server(address, args.pipe_dir, manager)
+  server = Server(address, manager)
   ready = directory / "ready.json"
   try:
     server.start()

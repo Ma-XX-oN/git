@@ -52,25 +52,25 @@ re-registers its preloaded commands. The manager is not a job of the shell, so
 a bare `wait` does not wait for it. Workers inherit the environment captured
 when the manager starts; arguments and cwd are supplied per call.
 
-Each call first obtains a worker from the manager:
+Each call first obtains a worker from the manager. On both platforms the GET
+reply is eight lowercase hexadecimal PID digits without a newline; a zero PID
+(`00000000`) introduces an `ERROR <reason>` line, preserving allocation
+diagnostics. The client reads the frame with `read -r -N 8 -u` and
+reconstructs the worker directory, `$PRELOAD_WIN_DIR\worker-<decimal-pid>` or
+`$PRELOAD_DIR/worker-<decimal-pid>`. Bash reads a line from a pipe one byte
+per `read()`, but a fixed-length frame in bulk.
 
 * Windows: the client opens a new duplex connection to
   `$PRELOAD_WIN_DIR\request` for every call, sends `GET <name>` plus newline and
-  reads the worker's pipe directory from the same connection. Each connection
-  is a private reply channel, so concurrent subshells never see each other's
-  replies.
+  reads the PID frame from the same connection. Each connection is a private
+  reply channel, so concurrent subshells never see each other's replies.
 * Linux/macOS: replies go through mailboxes, 32 FIFOs `slot.<n>` in the
   session directory. The client claims a free mailbox by creating
   `slot.<n>.lock` with Bash `noclobber` (an atomic exclusive create)
   containing its `$BASHPID`, opens `slot.<n>` for reading, writes
   `GET <name> <n>` plus newline to the `request` FIFO and blocks in `read` on
-  the mailbox. The manager writes eight lowercase hexadecimal PID digits
-  without a newline into the mailbox. The client uses `read -r -N 8 -u` and
-  reconstructs `$PRELOAD_DIR/worker-<decimal-pid>`. A zero PID (`00000000`)
-  introduces an `ERROR <reason>` line, preserving allocation diagnostics.
-  The fixed-width reply
-  wakes the client immediately: no polling, no CPU and no process while
-  waiting. The client then sends `FREE <n>`; the manager drains the mailbox
+  the mailbox. The manager writes the PID frame into the mailbox, which wakes
+  the client immediately: no polling, no CPU and no process while waiting. The client then sends `FREE <n>`; the manager drains the mailbox
   and deletes the lock. The manager holds both ends of every mailbox, so if
   it dies a waiting client's `read` returns end-of-file; a client checks the
   manager's PID before opening a mailbox, since that open would otherwise
