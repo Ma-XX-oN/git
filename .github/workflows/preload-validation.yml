@@ -303,6 +303,7 @@ jobs:
         run: |
           python -m unittest discover -s t/preload -p test_manager_dispatch.py -v
           python -m unittest discover -s t/preload -p test_pid_reply.py -v
+          python -m unittest discover -s t/preload -p test_preload_benchmark.py -v
           python t/preload/test_posix_worker.py "$PWD/git"
           python t/preload/test_transport.py "$PWD/t/helper/test-tool"
           python t/preload/test_manager_lifecycle.py

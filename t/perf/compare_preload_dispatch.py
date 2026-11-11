@@ -74,6 +74,8 @@ def measure(args, environment):
                                          os.name == "nt", workload=workload)
                 row["variant"] = name
                 report["rounds"].append(row)
+                (args.output / "matched.json").write_text(
+                    json.dumps(report, indent=2) + "\n", encoding="utf-8")
                 print("PRELOAD_DISPATCH_ROUND", workload, name, row["ipc"]["median_ms"], flush=True)
             medians = {name: statistics.median(
                 sample for row in report["rounds"]

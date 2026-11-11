@@ -19,6 +19,7 @@ from decimal import Decimal
 import json
 import math
 import os
+import signal
 from pathlib import Path
 import shutil
 import statistics
@@ -117,16 +118,22 @@ def run_case(bash, script, git_shell, environment, workers, round_index, windows
         [bash, "--noprofile", "--norc", "-c", shell,
          "pool-ab", str(workers), script, git_shell, direct_git or git_shell],
         env=environment, stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        start_new_session=not windows)
     try:
         out, err = process.communicate(timeout=180 if windows else 240)
     except subprocess.TimeoutExpired as exc:
         if windows:
             subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)],
                            capture_output=True, timeout=15, check=False)
-        if process.poll() is None:
+        if not windows:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        elif process.poll() is None:
             process.kill()
-        process.communicate()
+        process.communicate(timeout=15)
         stdout = (exc.stdout or b"").decode("utf-8", "replace")
         stderr = (exc.stderr or b"").decode("utf-8", "replace")
         complete = [row for row in stdout.splitlines() if row.startswith("PAIR ")]
