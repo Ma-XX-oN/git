@@ -85,11 +85,27 @@ class Mailbox:
     # a request to a waiting thread is much cheaper than starting one, and a
     # request waiting for a worker blocks only its own mailbox.
     self.tasks = queue.Queue()
+    self.dispatch_lock = threading.Lock()
+    self.outstanding = 0
     threading.Thread(target=self._serve, daemon=True).start()
 
-  def submit(self, task):
-    """Queue one callable for this mailbox's thread."""
-    self.tasks.put(task)
+  def submit(self, task, immediate=None):
+    """Run an idle mailbox's nonblocking attempt, or queue its task in order.
+
+    Parameters
+    ----------
+    task : callable
+        No-argument operation for the mailbox thread; its result is ignored.
+    immediate : callable, optional
+        No-argument nonblocking operation, called only with no outstanding
+        task. Return True if handled, False to queue task. The dispatch lock
+        prevents a queued or executing request from being overtaken.
+    """
+    with self.dispatch_lock:
+      if self.outstanding == 0 and immediate is not None and immediate():
+        return
+      self.outstanding += 1
+      self.tasks.put(task)
 
   def _serve(self):
     """Run this mailbox's requests until close() queues None."""
@@ -101,6 +117,9 @@ class Mailbox:
         task()
       except Exception as error:  # Keep serving later requests.
         log(f"MAILBOX_TASK_FAILED {self.path.name} {error!r}")
+      finally:
+        with self.dispatch_lock:
+          self.outstanding -= 1
 
   def owner(self):
     """Return the claiming client's PID, or None if unclaimed or unreadable."""
@@ -194,6 +213,9 @@ class Server:
   def handle(self, line):
     """Execute one request line; GET and PRELOAD run on the mailbox's thread.
 
+    An idle mailbox's GET first tries a nonblocking allocation here, avoiding
+    the thread handoff when a worker is READY. Shortages remain on its thread.
+
     Parameters
     ----------
     line : str
@@ -207,7 +229,8 @@ class Server:
         self.stopped.set()
     elif command == "GET" and len(words) == 3 and self.mailbox(words[2]):
       mailbox = self.mailbox(words[2])
-      mailbox.submit(functools.partial(self._get, words[1], mailbox, time.time()))
+      task = functools.partial(self._get, words[1], mailbox, time.time())
+      mailbox.submit(task, functools.partial(task, wait=False))
     elif command == "PRELOAD" and len(words) == 4 and self.mailbox(words[2]):
       mailbox = self.mailbox(words[2])
       mailbox.submit(functools.partial(self._preload, words[1], mailbox, words[3]))
@@ -221,7 +244,7 @@ class Server:
     else:
       log("INVALID_REQUEST " + repr(line))
 
-  def _get(self, name, mailbox, received):
+  def _get(self, name, mailbox, received, wait=True):
     """Allocate one worker for a caller.
 
     Parameters
@@ -232,9 +255,19 @@ class Server:
         Claimed reply mailbox.
     received : float
         Wall-clock time the request line was parsed, for PRELOAD_TIMING.
+    wait : bool, optional
+        Whether allocation may wait for a worker; False is the dispatch fast path.
+
+    Returns
+    -------
+    bool
+        True when handled, including an error reply; False when no worker was
+        READY in the nonblocking attempt, with no reply or replenishment.
     """
     started = time.time()
-    result = self.manager.allocate(name)
+    result = self.manager.allocate(name, wait=wait)
+    if result is None:
+      return False
     allocated = time.time()
     if isinstance(result, str):
       mailbox.deliver(result)
@@ -252,6 +285,7 @@ class Server:
     if preload_pool.TIMING:
       log(f"TIMING GET received={received:.6f} thread={started:.6f} "
           f"allocated={allocated:.6f} delivered={delivered:.6f}")
+    return True
 
   def _preload(self, name, mailbox, path):
     """Create a command's pool for a caller."""

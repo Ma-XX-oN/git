@@ -306,19 +306,22 @@ class Manager:
     log(f"POOL_READY {name} {executable}")
     return "OK"
 
-  def allocate(self, name):
+  def allocate(self, name, wait=True):
     """Return a READY worker for one command, waiting while the pool grows.
 
     Parameters
     ----------
     name : str
         Requested function name.
+    wait : bool, optional
+        If False, return immediately without growing an empty pool.
 
     Returns
     -------
-    subprocess.Popen or str
+    subprocess.Popen or str or None
         The allocated worker, or an ERROR reply line. After replying, the
         caller must call replenish(name) to start the worker's replacement.
+        None means no worker is READY and wait is False; ownership is unchanged.
     """
     with self.changed:
       pool = self.pools.get(name)
@@ -329,6 +332,8 @@ class Manager:
         p = pool.take()
         if p is not None:
           return p
+        if not wait:
+          return None
         if not grown:
           pool.grow()
           grown = True

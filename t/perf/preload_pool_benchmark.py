@@ -59,16 +59,17 @@ SHELL = r"""
       "$directbin" --version >/dev/null || exit 41
       b=$EPOCHREALTIME
       c=$EPOCHREALTIME
-      git --version >/dev/null || exit 42
+      __PRELOAD_TIMED_CALL__ || exit 42
       d=$EPOCHREALTIME
     else
       c=$EPOCHREALTIME
-      git --version >/dev/null || exit 43
+      __PRELOAD_TIMED_CALL__ || exit 43
       d=$EPOCHREALTIME
       a=$EPOCHREALTIME
       "$directbin" --version >/dev/null || exit 44
       b=$EPOCHREALTIME
     fi
+    [[ ${actual:-$expected} == "$expected" ]] || exit 45
     printf 'PAIR %s %s %s %s %s\n' "$i" "$a" "$b" "$c" "$d"
   done
   printf 'MANAGER_BEGIN\n'
@@ -98,15 +99,22 @@ def prepare(root, windows):
     return git, "native source-built Git from workflow checkout"
 
 def run_case(bash, script, git_shell, environment, workers, round_index, windows,
-             direct_git=None):
+             direct_git=None, workload="shell"):
     """Run and validate one serial paired direct and IPC benchmark round.
 
     direct_git selects the directly timed executable, for example unmodified
     upstream Git; it defaults to git_shell, the build serving IPC workers.
+    workload is "shell" for repeated calls in one shell, or "subshell" for
+    command substitutions that claim a mailbox per call. Output from command
+    substitution is checked outside the timed interval. Both modes return
+    raw samples in milliseconds, excluding manager startup.
     """
+    calls = {"shell": "git --version >/dev/null",
+             "subshell": "actual=$(git --version)"}
+    shell = SHELL.replace("__PRELOAD_TIMED_CALL__", calls[workload])
     started = time.perf_counter()
     process = subprocess.Popen(
-        [bash, "--noprofile", "--norc", "-c", SHELL,
+        [bash, "--noprofile", "--norc", "-c", shell,
          "pool-ab", str(workers), script, git_shell, direct_git or git_shell],
         env=environment, stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -159,6 +167,7 @@ def run_case(bash, script, git_shell, environment, workers, round_index, windows
         "worker allocation lacks corresponding READY event", allocated_by_pid, ready_by_pid)
     return {
         "workers": workers, "round": round_index,
+        "workload": workload,
         "direct_git": direct_git or git_shell,
         "direct": summarize(direct), "ipc": summarize(ipc),
         "allocated": len(allocations), "ready_events": len(ready),

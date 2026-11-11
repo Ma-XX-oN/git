@@ -492,3 +492,36 @@ ablation switches and obsolete dumps in a separate change. Preserve useful
 startup, marker, transport, owner-death, status-delivery and cleanup diagnostics
 through Git tracing. Rebuild and repeat acceptance and matched comparisons for
 that cleanup revision; append its results here before reporting completion.
+
+## READY dispatch with private mailboxes
+
+The Unix manager attempts allocation on its request-dispatch thread when the
+mailbox has no outstanding task. A READY worker is replied to through the same
+private FIFO before replenishment. An empty pool queues the existing blocking
+allocation on the mailbox thread. Queued and executing tasks prevent later
+requests on that mailbox from taking the immediate path.
+
+Six focused tests cover immediate reply/refill ordering, nonblocking allocation
+with and without a READY worker, shortage isolation, ordering behind PRELOAD
+and another GET, and cleanup when delivery fails. They pass locally, as do the
+existing manager lifecycle, Windows protocol/concurrency, and shell-environment
+checks. Native Linux/macOS acceptance and performance are pending CI.
+
+`t/perf/compare_preload_dispatch.py` compares the generic library from
+`346517302dfc305cf122f359714c0dc12e4b0884` with the candidate using one identical
+worker executable. Repeated shell calls and command substitutions are measured
+separately in ABBA rounds, with alternating direct/preloaded calls in each
+round. Tracing is disabled; startup is excluded. The report retains raw samples,
+source hashes, worker SHA-256, hardware and runtime identities. CI runs three
+ABBA repetitions per workload on each platform, alongside both build systems'
+worker validation and the existing matched production/upstream comparison.
+
+The local Windows control uses one ABBA repetition, 120 paired calls per round,
+on an AMD Ryzen 7 5700U (16 logical CPUs), Windows 11 build 26200, Python 3.13.1
+and MSYS Bash 5.2.37. Repeated shell calls measured 3.9735 ms baseline and
+3.8880 ms candidate (97.85% of baseline); command substitutions measured
+30.0300 ms baseline and 29.5650 ms candidate (98.45% of baseline). The Windows
+dispatch implementation is unchanged, so these small differences are control
+variation, not evidence of a Unix fast-path benefit or a C-manager benefit.
+Raw samples and identities are in
+[ready-dispatch-windows-control.json](evidence/ready-dispatch-windows-control.json).

@@ -76,6 +76,7 @@ jobs:
           fi
           "$py" t/preload/test_transport.py "$helper"
           "$py" t/preload/test_manager_lifecycle.py
+          "$py" -m unittest discover -s t/preload -p test_manager_dispatch.py -v
           "$py" t/preload/test_preload_manager.py --git "$gitbin" --output preload-results/manager
           "$py" t/preload/test_owner_death.py --git "$gitbin"
           "$py" t/preload/test_shell_environment.py --git "$gitbin" --output preload-results/environment
@@ -115,6 +116,26 @@ jobs:
           fi
           "$py" t/preload/test_existing_regressions.py --git "$gitbin" --output preload-results/meson-commands
           "$py" -m mesonbuild.mesonmain test -C build-preload --print-errorlogs t5790-preload
+      - name: Check out manager before READY dispatch optimization
+        uses: actions/checkout@v4
+        with:
+          ref: 346517302dfc305cf122f359714c0dc12e4b0884
+          path: dispatch-baseline
+          sparse-checkout: contrib/preload
+          persist-credentials: false
+      - name: Compare READY dispatch with the same worker binary
+        shell: bash
+        run: |
+          if [[ $RUNNER_OS == Windows ]]; then
+            . /etc/profile || exit 1
+            cd "$GITHUB_WORKSPACE"
+            py="$(cygpath -u "$pythonLocation")/python.exe"
+            gitbin="$(cygpath -w "$PWD/git.exe")"
+          else
+            py="$pythonLocation/bin/python3"
+            gitbin="$PWD/git"
+          fi
+          "$py" t/perf/compare_preload_dispatch.py --baseline-library dispatch-baseline/contrib/preload/preload-manager.sh --git "$gitbin" --output preload-dispatch-comparison
       - name: Check out preserved baseline
         uses: actions/checkout@v4
         with:
@@ -170,6 +191,7 @@ jobs:
             preload-results/
             preload-comparison/
             preload-stage-timing/
+            preload-dispatch-comparison/
             t/test-results/
             build-preload/meson-logs/
             preload-no-threads.*
