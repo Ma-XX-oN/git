@@ -848,3 +848,102 @@ not improve established-connection latency here. These are serial raw
 communication results; they exclude allocation, worker I/O, connection churn,
 authentication and contention. The 17 us median reduction is not a predicted
 full-command speedup, and this experiment makes no C-manager performance claim.
+
+## Fixed-width PID allocation replies
+
+Commit `774f78d500` changes successful Unix GET replies from a full
+worker-directory line to exactly eight ASCII hexadecimal PID digits. The shell
+reads them with `read -r -N 8` and rebuilds the worker directory from its known
+session prefix. A zero PID introduces the existing error-message line, so
+allocation failures keep their diagnostics. PRELOAD and STOP keep their line
+replies; Windows is unchanged.
+
+The workflow's `fixed-pid` job builds one worker binary and runs both the
+baseline client (`26501aaea0`, the last line-reply revision) and the candidate
+against it. It records three ABBA blocks of full calls (12 rounds per workload,
+three initial workers, startup excluded) for repeated shell calls and `$(...)`
+command substitutions. It then records paced stage timings of 300 calls in
+baseline, candidate, candidate, baseline order. Fixed-frame shell tests cover
+consecutive replies, an error followed by success, malformed frames and EOF
+mid-frame; both platforms also pass Makefile/Meson worker validation and the
+6000-command stress check.
+
+- [Run 43085205935](https://github.com/Ma-XX-oN/git/actions/runs/43085205935),
+  source `d97275f854`: Linux completed; macOS stalled in a baseline
+  command-substitution round and the run was cancelled. The stall exposed an
+  unbounded cleanup wait in the harness, fixed in `2ced40b1b1`, which also saves
+  each round as it completes. The macOS logs showed repeated shell calls at
+  2.840 ms baseline versus 2.757 ms candidate before the stall; no macOS raw
+  samples were saved, so that figure is log-only.
+  [Linux raw JSON ZIP](evidence/fixed-pid-d97275-linux.zip).
+- [Run 43087127296](https://github.com/Ma-XX-oN/git/actions/runs/43087127296),
+  source `2ced40b1b1`: both platforms completed;
+  [complete raw JSON ZIP](evidence/fixed-pid-2ced40.zip).
+
+### Stage results
+
+Paced stage medians in microseconds, one value per stage run:
+
+| Platform / run | Stage | Baseline | Candidate |
+|---|---|---:|---:|
+| Linux 43085205935 | client sent->replied | 146, 142 | 100, 97 |
+| Linux 43085205935 | manager allocated->delivered | 54, 54 | 34, 33 |
+| Linux 43085205935 | client total | 1000.5, 1001 | 949, 951 |
+| Linux 43087127296 | client sent->replied | 136, 143 | 97, 101.5 |
+| Linux 43087127296 | manager allocated->delivered | 57.5, 60 | 35, 36.5 |
+| Linux 43087127296 | client total | 998, 1001.5 | 961, 966 |
+| macOS 43087127296 | client sent->replied | 501, 517 | 388, 425.5 |
+| macOS 43087127296 | manager allocated->delivered | 149.5, 157.5 | 87, 86.5 |
+| macOS 43087127296 | client total | 2766, 2925 | 2629.5, 2719 |
+
+Every candidate stage run is below every baseline stage run for these three
+stages. The exchange saves 35-49 us on Linux and 75-129 us on macOS; about
+half of that on Linux and most of it on macOS is in manager reply construction
+and delivery, where pathname construction is gone. In run 43087127296 the reply transit stage also falls
+(Linux 32-33 to 18-19 us; macOS 104.5-114.5 to 81-93 us), consistent with the one-byte read
+loop being replaced by a fixed-length read.
+
+### Full-call results
+
+| Platform / run | Workload | Baseline ms | Candidate ms | Change |
+|---|---|---:|---:|---:|
+| Linux 43085205935 | shell | 1.131 | 1.093 | -3.4% |
+| Linux 43085205935 | `$(...)` | 2.022 | 1.998 | -1.2% |
+| Linux 43087127296 | shell | 1.140 | 1.118 | -1.9% |
+| Linux 43087127296 | `$(...)` | 1.991 | 1.987 | -0.2% |
+| macOS 43087127296 | shell | 2.333 | 2.563 | +9.9% |
+| macOS 43087127296 | `$(...)` | 3.259 | 3.275 | +0.5% |
+
+On Linux, every candidate repeated-shell round median in run 43085205935 is
+below every baseline round; in run 43087127296, five of six candidate rounds
+are below every baseline round (the exception is round 1, 1.148 ms). The
+`$(...)` rounds overlap in both runs, so that workload's change is within
+noise.
+
+The macOS full-call comparison is not usable as evidence either way. Its round
+medians drifted upward through the job regardless of variant: shell rounds rose
+from 1.892 ms (baseline, round 0) to 2.4-3.0 ms, and `$(...)` rounds from
+2.46 ms to 4.40 ms, a drift an order of magnitude larger than the 75-130 us
+stage effect. The ABBA order does not cancel drift of that size: the +9.9%
+shell result is driven by the two lowest rounds of the job (baseline rounds 0
+and 3, 1.892 and 2.044 ms), which ran before the drift set in. The stage runs, which are shorter and interleaved, show the
+candidate faster on macOS as well.
+
+Run 43085205935 used a four-CPU AMD EPYC 9V74 Linux runner; run 43087127296
+used a four-CPU AMD EPYC 7763 Linux runner (Linux 7.0.0-1019-azure, glibc 2.43,
+Python 3.13.18, Bash 5.3.9) and a three-CPU Apple M1 virtual macOS 26.7.2
+runner with Python 3.13.17 and Bash 5.3.20. Compare results only within a job.
+
+### Conclusion
+
+The fixed-width PID reply removes about 40 us (Linux) and 100 us (macOS) from
+the allocation exchange, as the stage timings show on every run. On Linux this
+is a 2-3.5% reduction for repeated shell calls; command substitutions, which
+add mailbox claiming and more descriptor work, show no resolvable change. The
+remaining per-call cost is dominated by worker-channel setup
+(`freed->channels`, `channels->request`) and output/status handling, which this
+change does not touch. Manager-side forwarding of cwd and arguments over a
+preconnected context channel targets that remaining cost and is the next
+experiment; measure it in two variants (forwarding with a channel opened at GET
+time, then with a channel prepared alongside the worker) to separate moving work
+out of Bash from removing connection setup.
