@@ -102,6 +102,40 @@ int main() {
     return 5;
   }
 
+  // Match the FILE_PIPE_COMPLETE_OPERATION mode selected by
+  // MSYS2 record_connection() and observe whether a zero-byte read
+  // genuinely remains pending on an empty connected message pipe.
+  DWORD nowait_mode = PIPE_READMODE_MESSAGE | PIPE_NOWAIT;
+  if (!SetNamedPipeHandleState(server, &nowait_mode, nullptr, nullptr))
+    return fail("SetNamedPipeHandleState NOWAIT");
+  HANDLE idle_evt = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  if (!idle_evt) return fail("CreateEventW nowait");
+  OVERLAPPED idle = {};
+  idle.hEvent = idle_evt;
+  DWORD empty_count = 99;
+  BOOL empty_immediate = ReadFile(server, &scratch, 0, &empty_count, &idle);
+  DWORD empty_status = empty_immediate ? ERROR_SUCCESS : GetLastError();
+  std::printf("NOWAIT_ZERO immediate=%u status=%lu bytes=%lu\\n",
+              static_cast<unsigned>(empty_immediate), empty_status,
+              empty_count);
+  if (!empty_immediate && empty_status == ERROR_IO_PENDING) {
+    DWORD waited = WaitForSingleObject(idle_evt, 20);
+    std::printf("NOWAIT_ZERO pending_wait=%lu\\n", waited);
+    if (waited != WAIT_TIMEOUT) {
+      std::fprintf(stderr, "FAIL unexpected empty-read completion=%lu\\n", waited);
+      return 6;
+    }
+    if (!CancelIoEx(server, &idle) && GetLastError() != ERROR_NOT_FOUND)
+      return fail("CancelIoEx nowait read");
+    if (WaitForSingleObject(idle_evt, 3000) != WAIT_OBJECT_0)
+      return fail("Nowait read cancellation timeout", WAIT_TIMEOUT);
+    DWORD ignored = 0;
+    BOOL settled = GetOverlappedResult(server, &idle, &ignored, FALSE);
+    std::printf("NOWAIT_ZERO canceled_completion=%lu\\n",
+                settled ? ERROR_SUCCESS : GetLastError());
+  }
+  CloseHandle(idle_evt);
+
   CloseHandle(data_evt);
   CloseHandle(ready);
   CloseHandle(client);
