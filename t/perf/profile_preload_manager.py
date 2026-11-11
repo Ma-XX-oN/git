@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Launch the unchanged Unix manager with diagnostic wall/CPU spans.
 
-Invoke as `python profile_preload_manager.py OUTPUT MANAGER [manager args]`.
+Invoke as `python profile_preload_manager.py OUTPUT FOCUS MANAGER [manager args]`.
+FOCUS is all, root, or an operation label such as os.write.
 Used as PRELOAD_PYTHON through a generated launcher. Records GET dispatch and
 queued allocation attempts, nested operation spans, native thread IDs and
 context switches. Writes OUTPUT at shutdown; no per-request profile file I/O.
@@ -81,6 +82,7 @@ class Profiler:
             stack.append(index)
             event["start_ns"] = time.perf_counter_ns()
             cpu = time.thread_time_ns()
+            event["start_cpu_ns"] = cpu
             try:
                 result = function(*args, **kwargs)
                 if name == "Server._get":
@@ -116,7 +118,7 @@ class Profiler:
         return result
 
 
-def install(profiler, manager):
+def install(profiler, manager, focus="all"):
     """Install diagnostic wrappers on manager operations and their callees.
 
     Parameters
@@ -125,6 +127,9 @@ def install(profiler, manager):
         Collector owned by this launcher.
     manager : module
         Imported production preload_manager_unix module; no source is rewritten.
+    focus : str
+        all for nested spans, root for request boundaries only, or one operation
+        label for a lighter probe of that boundary.
     """
     targets = [
         (manager.Server, "handle", lambda args: args[1].startswith("GET ")),
@@ -143,25 +148,28 @@ def install(profiler, manager):
     ]
     for owner, attribute, root_when in targets:
         label = (owner.__name__ if hasattr(owner, "__name__") else type(owner).__name__)
+        if root_when is None and focus not in ("all", label + "." + attribute):
+            continue
         setattr(owner, attribute, profiler.wrap(label + "." + attribute,
                                                 getattr(owner, attribute), root_when))
 
 
 def main():
     """Run the requested Unix manager and save raw spans even on failure."""
-    output, script = Path(sys.argv[1]), Path(sys.argv[2]).resolve(strict=True)
+    output, focus = Path(sys.argv[1]), sys.argv[2]
+    script = Path(sys.argv[3]).resolve(strict=True)
     if script.name != "preload_manager_unix.py":
         raise ValueError("this launcher profiles preload_manager_unix.py only")
     sys.path.insert(0, str(script.parent))
     import preload_manager_unix
     profiler = Profiler()
     calibration = profiler.calibrate()
-    install(profiler, preload_manager_unix)
-    sys.argv = [str(script), *sys.argv[3:]]
+    install(profiler, preload_manager_unix, focus)
+    sys.argv = [str(script), *sys.argv[4:]]
     try:
         return preload_manager_unix.main()
     finally:
-        output.write_text(json.dumps({"calibration": calibration,
+        output.write_text(json.dumps({"focus": focus, "calibration": calibration,
                                       "records": profiler.records}) + "\n", encoding="utf-8")
 
 

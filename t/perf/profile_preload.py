@@ -39,22 +39,24 @@ def run(command, output):
                               timeout=600, check=False).returncode
 
 
-def launcher(directory):
+def launcher(directory, focus="all"):
     """Create a manager interpreter launcher and return its executable path.
 
     Parameters
     ----------
     directory : Path
         Run directory, also receiving manager-profile.json at manager shutdown.
+    focus : str
+        all, root, or a single operation label for lighter boundary probing.
     """
     path = directory / "profile-python"
-    argv = [sys.executable, str(PROFILER), str(directory / "manager-profile.json")]
+    argv = [sys.executable, str(PROFILER), str(directory / "manager-profile.json"), focus]
     path.write_text("#!/bin/sh\nexec " + shlex.join(argv) + ' "$@"\n', encoding="utf-8")
     path.chmod(0o755)
     return path
 
 
-def stage_command(args, directory, workload, nested=False, count=None):
+def stage_command(args, directory, workload, nested=False, count=None, focus="all"):
     """Construct the real stage benchmark command; optionally profile its manager.
 
     Parameters
@@ -69,6 +71,8 @@ def stage_command(args, directory, workload, nested=False, count=None):
         Enable nested manager spans using a launcher interpreter.
     count : int, optional
         Override the sample count for intrusive kernel tracing.
+    focus : str
+        Operation label, all, or root; used only with nested=True.
 
     Returns
     -------
@@ -78,7 +82,7 @@ def stage_command(args, directory, workload, nested=False, count=None):
     command = [sys.executable, str(STAGES), "--git", str(args.git), "--count",
                str(count or args.count), "--workload", workload, "--output", str(directory)]
     if nested:
-        command += ["--manager-python", str(launcher(directory))]
+        command += ["--manager-python", str(launcher(directory, focus))]
     return command
 
 
@@ -155,9 +159,12 @@ def kernel_traces(args, output):
         directory = output / "scheduler"
         directory.mkdir()
         candidates = sorted(Path("/usr/lib/linux-tools").glob("*/perf"))
+        candidates += sorted(Path("/usr/lib").glob("linux-tools*/perf"))
+        if not candidates and shutil.which("perf"):
+            candidates = [Path(shutil.which("perf"))]
         if candidates:
             perf = str(candidates[-1])
-            command = stage_command(args, directory, "shell", nested=True, count=100)
+            command = stage_command(args, directory, "shell", nested=True, count=100, focus="os.write")
             prefix = ["sudo", "-n", perf, "record", "-a", "--clockid", "mono",
                       "-e", "sched:sched_switch", "-e", "sched:sched_wakeup",
                       "-o", str(directory / "sched.data"), "--"]
@@ -172,6 +179,36 @@ def kernel_traces(args, output):
                 results["scheduler"]["decode_status"] = decoded.returncode
         else:
             results["scheduler"] = {"status": "unavailable: no native perf binary"}
+    return results
+
+
+def focused_profiles(args, output, workload):
+    """Measure selected boundaries separately to reduce profiler perturbation.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Worker path and sample count.
+    output : Path
+        Parent output directory.
+    workload : str
+        shell or subshell.
+
+    Returns
+    -------
+    dict
+        Independent cohorts for each boundary, including stage-only comparisons.
+    """
+    results = {}
+    for focus in ("root", "Manager.allocate", "Mailbox.deliver", "Path.exists",
+                  "os.stat", "os.write", "Path.__truediv__", "Path.__str__"):
+        directory = output / (workload + "-focus-" + focus)
+        directory.mkdir()
+        command = stage_command(args, directory, workload, nested=True, focus=focus)
+        if run(command, directory / "run.log") != 0:
+            raise RuntimeError("focused profile failed: " + str(directory))
+        results[focus] = {"profile": summarize_profile(directory / "manager-profile.json"),
+                          "stages": json.loads((directory / "paced/stages.json").read_text())}
     return results
 
 
@@ -204,6 +241,7 @@ def main():
                 if results["profile"]["dispatches"] != args.count:
                     raise AssertionError("missing measured GET profiles")
         report["workloads"][workload] = results
+        results["focused"] = focused_profiles(args, args.output, workload)
     report["kernel_traces"] = kernel_traces(args, args.output)
     (args.output / "profile-summary.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print("PRELOAD_PROFILE_SUMMARY", json.dumps(report), flush=True)
