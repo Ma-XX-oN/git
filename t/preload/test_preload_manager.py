@@ -127,8 +127,7 @@ class Session:
     caller = os.getpid() if pid is None else pid
     self.sequence += 1
     token = f"{caller}.{self.sequence}"
-    with open(self.directory / "request", "w", encoding="utf-8") as fifo:
-      fifo.write(line.format(token=token) + "\n")
+    self.send(line.format(token=token))
     if caller != os.getpid():
       return None
     reply_file = self.directory / f"reply.{token}"
@@ -137,9 +136,25 @@ class Session:
       assert time.monotonic() < deadline, "no reply; log:\n" + self.read_log()
       time.sleep(.001)
     reply = reply_file.read_text(encoding="utf-8").rstrip("\n")
-    with open(self.directory / "request", "w", encoding="utf-8") as fifo:
-      fifo.write(f"ACK {token}\n")
+    if not line.startswith("STOP"):  # The exiting manager removes all replies.
+      self.send(f"ACK {token}")
     return reply
+
+  def send(self, line):
+    """Write one Unix request line without blocking on a missing reader.
+
+    Parameters
+    ----------
+    line : str
+        Request without newline.
+    """
+    # O_NONBLOCK makes a manager that has exited fail with ENXIO instead of
+    # blocking this open forever.
+    fd = os.open(self.directory / "request", os.O_WRONLY | os.O_NONBLOCK)
+    try:
+      os.write(fd, (line + "\n").encode("utf-8"))
+    finally:
+      os.close(fd)
 
   def stop(self):
     """Stop the manager and require a clean exit."""
