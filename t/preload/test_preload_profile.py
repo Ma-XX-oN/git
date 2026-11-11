@@ -10,6 +10,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "perf"))
 from profile_preload_manager import Profiler
 from profile_preload import summarize_profile
+from analyze_preload_profile import critical_reply, strace_calls, category, scheduler_intervals, scheduler_row
 
 
 class ProfileTests(unittest.TestCase):
@@ -69,6 +70,47 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(root["wall_us"]["median"], 10)
         self.assertEqual(root["self_wall_us"]["median"], 4)
         self.assertEqual(root["self_cpu_us"]["median"], 3)
+
+    def test_strace_reassembles_interleaved_calls(self):
+        """Read counts include completed calls split across another thread's event."""
+        lines = [
+            '10 1.000001 read(0</tmp/slot.0> <unfinished ...>\n',
+            '11 1.000002 write(6</tmp/slot.0>, "x", 1) = 1 <0.000001>\n',
+            '10 1.000003 <... read resumed>, "x", 1) = 1 <0.000002>\n',
+        ]
+        calls = list(strace_calls(lines))
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[1][0:2], (10, 1000001000))
+        self.assertEqual(category(calls[1][2]), "reply_read")
+        self.assertEqual(category('openat(0, "/tmp/slot.0.lock", O_EXCL) = 3 <0.1>'),
+                         "mailbox_claim")
+
+    def test_critical_reply_excludes_post_reply_refill(self):
+        """Service CPU/wall ends at the write return rather than callback completion."""
+        record = {"kind": "Server.handle", "events": [
+            {"name": "Server.handle", "start_ns": 0, "end_ns": 10000,
+             "start_cpu_ns": 0, "cpu_ns": 7000},
+            {"name": "os.write", "start_ns": 2000, "end_ns": 3000,
+             "start_cpu_ns": 1500, "cpu_ns": 500, "bytes": 42}]}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            (path / "manager-profile.json").write_text(
+                json.dumps({"records": [record] * 21}), encoding="utf-8")
+            result = critical_reply(path)
+        self.assertEqual(result["calls"], 1)
+        self.assertEqual(result["wall_us"]["median"], 3)
+        self.assertEqual(result["cpu_us"]["median"], 2)
+
+    def test_scheduler_separates_blocked_from_runnable(self):
+        """Wakeup marks runnable delay rather than the entire off-CPU interval."""
+        lines = [
+            "bash 1 [000] 1.000001000: sched:sched_switch: bash:1 [120] S ==> git:2 [120]",
+            "git 2 [000] 1.000003000: sched:sched_wakeup: bash:1 [120] CPU:000",
+            "git 2 [000] 1.000005000: sched:sched_switch: git:2 [120] R ==> bash:1 [120]",
+        ]
+        spans = scheduler_intervals(lines, {1})
+        row = scheduler_row(spans[1], 1000000000, 1000006000)
+        self.assertEqual(row, {"wall_us": 6, "on_cpu_us": 2, "runnable_us": 2, "blocked_us": 2})
 
 
 if __name__ == "__main__":

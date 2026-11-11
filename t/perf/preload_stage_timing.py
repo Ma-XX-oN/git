@@ -87,7 +87,7 @@ def main():
                       help="Optional manager interpreter or diagnostic launcher")
   parser.add_argument("--workload", choices=("shell", "subshell"), default="shell")
   parser.add_argument("--shell-tracer", choices=("dtruss",),
-                      help="Trace Bash directly on macOS, avoiding protected Python exec stubs")
+                      help="Trace Bash directly on macOS")
   args = parser.parse_args()
   output = (args.output / args.mode).resolve()
   output.mkdir(parents=True, exist_ok=True)

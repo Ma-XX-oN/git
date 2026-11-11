@@ -1,0 +1,350 @@
+{
+  "machine": {
+    "os": "macOS-26.7.2-arm64-arm-64bit-Mach-O",
+    "architecture": "arm64",
+    "processor": "arm",
+    "logical_cpus": 3,
+    "python": "3.13.17 (v3.13.17:64e080d3815, Oct 21 2026, 07:24:09) [Clang 21.0.0 (clang-2100.1.1.101)]",
+    "bash": "GNU bash, version 5.3.20(1)-release (aarch64-apple-darwin25.6.0)",
+    "ci_run": "43076253849",
+    "ci_job": "profile",
+    "processor_name": "Apple M1 (Virtual)"
+  },
+  "kernel_traces": {
+    "shell": {
+      "status": 1,
+      "workload_completed": false
+    },
+    "subshell": {
+      "status": 1,
+      "workload_completed": false
+    }
+  },
+  "scheduler": {
+    "status": "no scheduler trace"
+  },
+  "workloads": {
+    "shell": {
+      "stages_us": {
+        "client entry->claimed": 84.0,
+        "client claimed->opened": 1.0,
+        "client opened->sent": 38.0,
+        "client sent->replied": 459.5,
+        "client replied->freed": 10.0,
+        "client freed->channels": 522.5,
+        "client channels->request": 109.5,
+        "client request->output": 914.0,
+        "client output->status": 223.0,
+        "client total": 2466.0,
+        "manager received->thread": 14.0,
+        "manager thread->allocated": 61.0,
+        "manager allocated->delivered": 140.5,
+        "transit request (client sent->manager received)": 116.0,
+        "transit reply (manager delivered->client replied)": 111.5
+      },
+      "focused": {
+        "root": {
+          "wall_us": {
+            "median": 260.271,
+            "mean": 393.09084
+          },
+          "cpu_us": {
+            "median": 251.896,
+            "mean": 320.7706
+          },
+          "calls": {
+            "median": 1.0,
+            "mean": 1.0
+          },
+          "cohort_total_percent_of_stage_only": 97.7088402270884
+        },
+        "Manager.allocate": {
+          "wall_us": {
+            "median": 46.9165,
+            "mean": 54.68408
+          },
+          "cpu_us": {
+            "median": 46.2085,
+            "mean": 52.9948875
+          },
+          "calls": {
+            "median": 1.0,
+            "mean": 1.0
+          },
+          "cohort_total_percent_of_stage_only": 97.72911597729116
+        },
+        "Mailbox.deliver": {
+          "wall_us": {
+            "median": 63.9165,
+            "mean": 90.6365575
+          },
+          "cpu_us": {
+            "median": 62.896,
+            "mean": 85.97008
+          },
+          "calls": {
+            "median": 1.0,
+            "mean": 1.0
+          },
+          "cohort_total_percent_of_stage_only": 100.16220600162205
+        },
+        "Path.exists": {
+          "wall_us": {
+            "median": 22.1045,
+            "mean": 27.692002499999997
+          },
+          "cpu_us": {
+            "median": 21.1875,
+            "mean": 26.1094975
+          },
+          "calls": {
+            "median": 1.0,
+            "mean": 1.0
+          },
+          "cohort_total_percent_of_stage_only": 94.93106244931063
+        },
+        "os.stat": {
+          "wall_us": {
+            "median": 18.771,
+            "mean": 23.035712500000002
+          },
+          "cpu_us": {
+            "median": 17.792,
+            "mean": 21.4433075
+          },
+          "calls": {
+            "median": 1.0,
+            "mean": 1.0
+          },
+          "cohort_total_percent_of_stage_only": 96.63422546634226
+        },
+        "os.write": {
+          "wall_us": {
+            "median": 12.188,
+            "mean": 14.80511
+          },
+          "cpu_us": {
+            "median": 11.229,
+            "mean": 13.077879999999999
+          },
+          "calls": {
+            "median": 1.0,
+            "mean": 1.0
+          },
+          "cohort_total_percent_of_stage_only": 92.72100567721006
+        },
+        "Path.__truediv__": {
+          "wall_us": {
+            "median": 20.187,
+            "mean": 22.769585
+          },
+          "cpu_us": {
+            "median": 19.375,
+            "mean": 21.823147499999997
+          },
+          "calls": {
+            "median": 1.0,
+            "mean": 1.0
+          },
+          "cohort_total_percent_of_stage_only": 91.66666666666667
+        },
+        "Path.__str__": {
+          "wall_us": {
+            "median": 44.7705,
+            "mean": 52.517072500000005
+          },
+          "cpu_us": {
+            "median": 43.2505,
+            "mean": 50.1027025
+          },
+          "calls": {
+            "median": 2.0,
+            "mean": 2.0
+          },
+          "cohort_total_percent_of_stage_only": 99.69586374695864
+        }
+      },
+      "syscalls": {
+        "status": "no completed Linux syscall workload"
+      },
+      "critical_reply": {
+        "calls": 400,
+        "reply_bytes_median": 75.0,
+        "mean_cpu_percent_of_wall": 85.94167980632214,
+        "wall_us": {
+          "median": 168.02100000000002,
+          "mean": 223.0002025
+        },
+        "cpu_us": {
+          "median": 165.937,
+          "mean": 191.65012
+        },
+        "wall_minus_cpu_us": {
+          "median": 1.709,
+          "mean": 31.3500825
+        }
+      }
+    },
+    "subshell": {
+      "stages_us": {
+        "client entry->claimed": 346.5,
+        "client claimed->opened": 59.0,
+        "client opened->sent": 37.0,
+        "client sent->replied": 393.5,
+        "client replied->freed": 36.0,
+        "client freed->channels": 469.5,
+        "client channels->request": 100.0,
+        "client request->output": 809.5,
+        "client output->status": 225.0,
+        "client total": 2650.0,
+        "manager received->thread": 14.0,
+        "manager thread->allocated": 47.0,
+        "manager allocated->delivered": 99.0,
+        "transit request (client sent->manager received)": 97.0,
+        "transit reply (manager delivered->client replied)": 120.0
+      },
+      "focused": {
+        "root": {
+          "wall_us": {
+            "median": 215.7705,
+            "mean": 291.3184475
+          },
+          "cpu_us": {
+            "median": 211.729,
+            "mean": 251.7264475
+          },
+          "calls": {
+            "median": 1.0,
+            "mean": 1.0
+          },
+          "cohort_total_percent_of_stage_only": 110.73584905660377
+        },
+        "Manager.allocate": {
+          "wall_us": {
+            "median": 38.75,
+            "mean": 48.701375
+          },
+          "cpu_us": {
+            "median": 37.9795,
+            "mean": 47.0357325
+          },
+          "calls": {
+            "median": 1.0,
+            "mean": 1.0
+          },
+          "cohort_total_percent_of_stage_only": 100.49056603773585
+        },
+        "Mailbox.deliver": {
+          "wall_us": {
+            "median": 37.458,
+            "mean": 52.228294999999996
+          },
+          "cpu_us": {
+            "median": 36.0415,
+            "mean": 45.50168
+          },
+          "calls": {
+            "median": 1.0,
+            "mean": 1.0
+          },
+          "cohort_total_percent_of_stage_only": 111.30188679245283
+        },
+        "Path.exists": {
+          "wall_us": {
+            "median": 22.3335,
+            "mean": 29.759705
+          },
+          "cpu_us": {
+            "median": 21.438,
+            "mean": 27.7248175
+          },
+          "calls": {
+            "median": 1.0,
+            "mean": 1.0
+          },
+          "cohort_total_percent_of_stage_only": 109.79245283018868
+        },
+        "os.stat": {
+          "wall_us": {
+            "median": 18.771,
+            "mean": 25.1876075
+          },
+          "cpu_us": {
+            "median": 17.75,
+            "mean": 23.493655
+          },
+          "calls": {
+            "median": 1.0,
+            "mean": 1.0
+          },
+          "cohort_total_percent_of_stage_only": 104.20754716981132
+        },
+        "os.write": {
+          "wall_us": {
+            "median": 11.458,
+            "mean": 22.044587500000002
+          },
+          "cpu_us": {
+            "median": 10.396,
+            "mean": 20.379887500000002
+          },
+          "calls": {
+            "median": 1.0,
+            "mean": 1.0
+          },
+          "cohort_total_percent_of_stage_only": 100.66037735849056
+        },
+        "Path.__truediv__": {
+          "wall_us": {
+            "median": 20.917,
+            "mean": 23.60898
+          },
+          "cpu_us": {
+            "median": 19.8955,
+            "mean": 22.538525
+          },
+          "calls": {
+            "median": 1.0,
+            "mean": 1.0
+          },
+          "cohort_total_percent_of_stage_only": 101.60377358490567
+        },
+        "Path.__str__": {
+          "wall_us": {
+            "median": 40.458,
+            "mean": 45.95832
+          },
+          "cpu_us": {
+            "median": 39.208,
+            "mean": 44.182379999999995
+          },
+          "calls": {
+            "median": 2.0,
+            "mean": 2.0
+          },
+          "cohort_total_percent_of_stage_only": 100.69811320754717
+        }
+      },
+      "syscalls": {
+        "status": "no completed Linux syscall workload"
+      },
+      "critical_reply": {
+        "calls": 400,
+        "reply_bytes_median": 76.0,
+        "mean_cpu_percent_of_wall": 97.99510954385286,
+        "wall_us": {
+          "median": 173.188,
+          "mean": 214.1794075
+        },
+        "cpu_us": {
+          "median": 170.6045,
+          "mean": 209.885345
+        },
+        "wall_minus_cpu_us": {
+          "median": 1.875,
+          "mean": 4.2940625
+        }
+      }
+    }
+  }
+}

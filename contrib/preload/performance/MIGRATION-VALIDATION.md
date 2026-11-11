@@ -595,3 +595,157 @@ an existing `/usr/bin/dirname` symlink. Those C files and
 `ci/install-dependencies.sh` are byte-for-byte unchanged between the baseline
 and candidate commits. The preload acceptance results do not establish that
 the general Git CI matrix is green.
+
+## CPU, syscall and scheduler profiling for 4086b8177f
+
+[Profiling run 43076253849](https://github.com/Ma-XX-oN/git/actions/runs/43076253849)
+uses the unchanged production shell, Unix manager and pool sources from the
+READY-dispatch experiment. Only diagnostic launchers and the stage harness are
+changed. Each ordinary diagnostic cohort measures 400 `git --version` calls
+after 20 warmups, with a direct invocation between calls to allow replenishment.
+Shell calls and command substitutions are separate workloads. This profiles
+serial READY-pool behavior, not shortages, concurrent allocation or substantial
+Git command execution.
+
+The launcher measures nested operations with wall and per-thread CPU clocks,
+then measures selected boundaries in separate lighter cohorts. The raw spans
+retain parent indices, native thread IDs, monotonic/epoch anchors and absolute
+CPU timestamps. Dispatch-to-reply ends at the FIFO write return, excluding
+replacement startup and later callback work. The stage-only cohort still has
+the original stage timers enabled; none of these results is an uninstrumented
+speedup measurement.
+
+### Client stages and manager CPU
+
+Stage-only shell-call medians, in microseconds:
+
+| Stage | Linux | macOS |
+|---|---:|---:|
+| Whole generated command function | 816.0 | 2466.0 |
+| Allocation request sent to reply consumed | 122.0 | 459.5 |
+| Worker channels opened | 121.0 | 522.5 |
+| Request sent to output complete | 317.0 | 914.0 |
+| Output complete to exit status returned | 83.0 | 223.0 |
+
+The largest stage is command/output handling, followed by channel setup on
+macOS. Allocation is one contributor; treating the whole command latency as
+manager overhead would misidentify the optimization target. The medians above
+are not additive decompositions of the median whole call.
+
+Focused shell-call operation medians below show wall / thread CPU time in
+microseconds. Each row is a separate cohort; nested operations such as
+`Path.exists` and `os.stat` must not be added together.
+
+| Operation | Linux wall / CPU | macOS wall / CPU |
+|---|---:|---:|
+| Allocation | 17.7 / 16.5 | 46.9 / 46.2 |
+| Construct worker Path object | 6.5 / 5.3 | 20.2 / 19.4 |
+| Path string conversions, two per call | 16.9 / 14.6 | 44.8 / 43.3 |
+| Check mailbox lock file exists | 9.4 / 8.1 | 22.1 / 21.2 |
+| Underlying stat boundary | 8.9 / 7.6 | 18.8 / 17.8 |
+| Write reply FIFO | 8.5 / 7.2 | 12.2 / 11.2 |
+| Dispatch through reply write return | 65.6 / 63.7 | 168.0 / 165.9 |
+
+The existence check is not an exclusive-lock acquisition; it checks whether the
+client's claim file remains present. The FIFO write alone is much smaller than
+the original allocated-to-delivered timer, which also includes constructing and
+rendering the full worker pathname. Path manipulation is a visible CPU cost,
+especially on macOS. These boundaries include wrapper/clock overhead and the
+unwrapped Python/runtime work within each operation; they are not pure kernel
+syscall durations.
+
+The lighter `os.write` cohort's command median is 101.35% of the stage-only
+cohort on Linux and 92.72% on macOS. These sequential cohorts are not ABBA
+comparisons: macOS drift is larger than a simple instrumentation adjustment.
+The full nested profile adds further overhead, so its absolute durations are
+used for structure, not normal latency or a C rewrite forecast. Calibration
+and every cohort's raw samples are retained.
+
+### Linux kernel evidence
+
+The separate `strace -f -ttt -T -yy` passes complete 40 measured commands per
+workload. The analyzer reconstructs unfinished/resumed syscalls and matches
+client native TIDs to each command's stage window. Every shell call has:
+
+- one GET write and **42 one-byte reads** to consume its 42-byte pathname reply;
+- five worker-channel opens;
+- 78 descriptor setup/close syscalls;
+- 30 worker-output/status reads, 23 pselect calls, and five worker-request writes;
+- no mailbox claim or mailbox FIFO open after the warmup retained its mailbox.
+
+Command substitutions add one mailbox claim, one mailbox open, a liveness
+check, and FREE. Their median descriptor setup/close count is 122. These serial
+traces contain no claim retries, so mailbox contention does not explain their
+additional cost. Traced syscall elapsed times include ptrace overhead and are
+not substituted for the stage-only timings.
+
+A separate 100-call capture combines `perf` sched_switch/sched_wakeup events
+with the lighter write probe. Matching clocks and thread IDs distinguishes
+running, runnable and blocked states. For that capture, mean durations are:
+
+| Span | Wall us | Running us | Runnable us | Blocked us |
+|---|---:|---:|---:|---:|
+| Whole shell command function | 998.1 | 626.8 | 52.5 | 318.8 |
+| Shell waiting for/reading allocation reply | 163.3 | 63.6 | 3.2 | 96.4 |
+| Shell worker-channel setup | 166.9 | 120.1 | 15.0 | 31.8 |
+| Shell command/output handling | 385.4 | 167.5 | 27.3 | 190.6 |
+| Manager dispatch through reply write return | 81.0 | 78.8 | 2.1 | 0.0 |
+
+For the whole shell call, the state proportions are 62.8% running, 5.3% runnable
+and 31.9% blocked. The manager's reply span is overwhelmingly running in this
+capture; mutex/GIL blocking is not its observed dominant cost. Blocked shell
+time includes waiting on the manager and worker channels. These participant
+spans overlap, so manager time must not be added to shell wall time. The
+scheduler decode reports no lost events.
+
+### Scope, hardware and next experiment
+
+Linux uses an AMD EPYC 9V74 with four logical CPUs assigned, Linux
+7.0.0-1019-azure/glibc 2.43, Python 3.13.18 and Bash 5.3.9. macOS uses an Apple
+M1 virtual machine with three logical CPUs, macOS 26.7.2, Python 3.13.17 and
+Bash 5.3.20. Source and worker SHA-256 identities are in the archived summaries.
+The macOS runner differs from the earlier matched experiment's M2 Pro; these
+absolute timings cannot be compared as before/after results across those runs.
+
+macOS CPU/wall profiling completed, but two dtruss launch approaches captured
+startup rather than a completed benchmark. The final trace attempts explicitly
+record status 1 and `workload_completed: false`; no macOS kernel syscall-count
+or blocked/runnable claim is made. Its shell-call dispatch/reply mean CPU/wall
+ratio is 85.9%, with a 31.4 us mean wall-minus-CPU tail and a 1.7 us median gap.
+The exact cause of that tail remains unresolved. Its separate command-
+substitution cohort has a 98.0% mean CPU/wall ratio. Linux scheduler findings
+are not assumed to transfer to macOS.
+
+The next focused experiment is a PID-only allocation reply, with Bash building
+the worker directory from its known session prefix. This would remove generic
+Path construction/rendering on the manager's reply path and shorten the
+client's byte-at-a-time input. For the captured Linux five-digit PIDs, the
+reply would be six bytes rather than 42, reducing reply reads mechanically
+from 42 to six. A matched protocol experiment is still required to measure
+latency savings; the macOS one-byte-read behavior has not been verified by a
+kernel trace. A second small client experiment is using `read -u` directly
+where read currently redirects from another descriptor, preserving dynamic
+descriptor allocation while avoiding that redirection setup.
+
+A C manager can reduce manager-side CPU, but it leaves the measured Bash
+reply-reading and worker I/O setup costs in place. The evidence supports the
+short-reply/client-I/O experiments before committing to a language migration.
+Production code is unchanged by this profiling work.
+
+The tools use the documented
+[thread CPU clock](https://docs.python.org/3/library/time.html#time.thread_time_ns),
+[strace call records](https://man7.org/linux/man-pages/man1/strace.1.html) and
+[perf scheduler events](https://man7.org/linux/man-pages/man1/perf-sched.1.html).
+Seven local accounting/parser tests cover nesting, thread isolation, exception
+cleanup, self-time subtraction, syscall reassembly, reply-versus-refill boundaries
+and blocked-versus-runnable separation.
+
+Readable results: [Linux analysis](evidence/preload-profile-4086-Linux-analysis.json)
+and [macOS analysis](evidence/preload-profile-4086-macOS-analysis.json).
+Complete raw captures, including failed macOS trace logs, are archived as
+[Linux ZIP](evidence/preload-profile-4086-Linux.zip) and
+[macOS ZIP](evidence/preload-profile-4086-macOS.zip). Their SHA-256 digests are
+`a76cbdb0f011cddc98b8fceb141869c793c75cade4b6a5bd59b452003e44c43e`
+and `14d673a44530ab07c97afb582fab7413521a75a91886b75cd87e42ddb27e73ef`.
+After extraction, reproduce the analysis with
+`python t/perf/analyze_preload_profile.py DIRECTORY --output analysis.json`.
