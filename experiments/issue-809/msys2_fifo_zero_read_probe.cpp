@@ -11,7 +11,7 @@ static int fail(const char *step, DWORD err = GetLastError()) {
 int main() {
   const wchar_t *path = L"\\\\.\\pipe\\git809-fifo-zero-read-probe";
   HANDLE server = CreateNamedPipeW(path,
-    PIPE_ACCESS_INBOUND | FILE_FLAG_OVERLAPPED,
+    PIPE_ACCESS_INBOUND | FILE_FLAG_OVERLAPPED | FILE_WRITE_ATTRIBUTES,
     PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
     1, 4096, 4096, 0, nullptr);
   if (server == INVALID_HANDLE_VALUE) return fail("CreateNamedPipeW");
