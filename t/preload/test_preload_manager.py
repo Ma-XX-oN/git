@@ -136,8 +136,7 @@ class Session:
       assert time.monotonic() < deadline, "no reply; log:\n" + self.read_log()
       time.sleep(.001)
     reply = reply_file.read_text(encoding="utf-8").rstrip("\n")
-    if not line.startswith("STOP"):  # The exiting manager removes all replies.
-      self.send(f"ACK {token}")
+    self.send(f"ACK {token}")  # After STOP, the manager exits on this ACK.
     return reply
 
   def send(self, line):

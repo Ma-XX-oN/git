@@ -66,8 +66,10 @@ Each call first obtains a worker from the manager:
 
 The other requests are `PRELOAD <name> <path>` (Linux/macOS:
 `PRELOAD <name> <token> <path>`), which replies `OK` or `ERROR <reason>`, and
-`STOP` (`STOP <token>`). A worker whose reply cannot be delivered (the caller
-has exited) is killed.
+`STOP` (`STOP <token>`). On Linux/macOS `STOP` is acknowledged like any other
+request; the manager keeps the request FIFO open and its reply in place until
+that `ACK` arrives (at most five seconds), then cleans up and exits. A worker
+whose reply cannot be delivered (the caller has exited) is killed.
 
 == Modules and ownership
 

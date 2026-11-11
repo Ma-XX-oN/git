@@ -6,7 +6,8 @@ Clients write one line to the FIFO `<directory>/request`. `<token>` is
 
   PRELOAD <name> <token> <executable-path>  ->  OK | ERROR <reason>
   GET <name> <token>                        ->  <directory>/worker-<pid> | ERROR <reason>
-  STOP <token>                              ->  OK, then the manager exits
+  STOP <token>                              ->  OK; the manager exits after that
+                                                caller's ACK (at most 5 s later)
   ACK <token>                               ->  (no reply) delete reply.<token>
 
 A reply is written to a temporary file and renamed to `<directory>/reply.<token>`,
@@ -27,6 +28,7 @@ import re
 import select
 import sys
 import threading
+import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import preload_pool  # noqa: E402
@@ -54,6 +56,7 @@ def owner_alive(pid):
 
 
 TOKEN = re.compile(r"^([0-9]+)\.[0-9]+$")
+STOP_ACK_SECONDS = 5
 
 
 class Server:
@@ -71,6 +74,11 @@ class Server:
     self.directory = directory
     self.manager = manager
     self.stopped = threading.Event()
+    # After replying to STOP, keep serving until that caller's ACK arrives
+    # (or STOP_ACK_SECONDS pass, or the caller exits), so the reply is never
+    # deleted before it is read and the request FIFO stays open for the ACK.
+    self.stop_token = None
+    self.stop_deadline = None
 
   def reply(self, token, text):
     """Publish one reply atomically.
@@ -112,6 +120,8 @@ class Server:
     command = words[0]
     if command == "ACK" and len(words) == 2 and TOKEN.match(words[1]):
       (self.directory / ("reply." + words[1])).unlink(missing_ok=True)
+      if words[1] == self.stop_token:
+        self.stopped.set()
     elif command == "GET" and len(words) == 3 and TOKEN.match(words[2]):
       threading.Thread(target=self._get, args=(words[1], words[2]),
                        daemon=True).start()
@@ -119,9 +129,12 @@ class Server:
       threading.Thread(target=self._preload, daemon=True,
                        args=(words[1], words[2], words[3])).start()
     elif command == "STOP" and len(words) == 2 and TOKEN.match(words[1]):
-      self.reply(words[1], "OK")
       log("MANAGER_STOP_REQUEST")
-      self.stopped.set()
+      if self.reply(words[1], "OK"):
+        self.stop_token = words[1]
+        self.stop_deadline = time.monotonic() + STOP_ACK_SECONDS
+      else:
+        self.stopped.set()  # The caller is gone; nobody will ACK.
     else:
       log("INVALID_REQUEST " + repr(line))
 
@@ -177,6 +190,9 @@ def main():
     while not server.stopped.is_set():
       if not owner_alive(args.owner_pid):
         log(f"OWNER_EXIT {args.owner_pid}")
+        break
+      if server.stop_token and time.monotonic() >= server.stop_deadline:
+        log("STOP_ACK_TIMEOUT")
         break
       readable, _, _ = select.select([request_fd], [], [], 0.25)
       if not readable:

@@ -82,7 +82,7 @@ _preload_write_context() {
 # within a fraction of a millisecond and short sleeps are coarse on macOS;
 # after that it sleeps in read -t on the never-written bell FIFO (no CPU, no
 # process). Sets _PRELOAD_REPLY. Returns zero once the reply has been read
-# (and ACKed, except for STOP, after which the manager removes all replies).
+# and ACKed; after STOP the manager waits for this ACK before cleaning up.
 _preload_unix_exchange() {
   local reply=$PRELOAD_DIR/reply.$2 spin
   _PRELOAD_REPLY=
@@ -109,7 +109,7 @@ _preload_unix_exchange() {
     read -t 0.0001 -u "$_PRELOAD_BELL_FD" _
   done
   IFS= read -r _PRELOAD_REPLY <"$reply"
-  [[ $1 == STOP* ]] || printf 'ACK %s\n' "$2" >&"$_PRELOAD_REQ_FD"
+  printf 'ACK %s\n' "$2" >&"$_PRELOAD_REQ_FD"
 }
 
 # Send one request line to the manager and store its reply line.
