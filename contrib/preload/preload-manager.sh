@@ -71,13 +71,44 @@ _preload_write_context() {
   printf '\0end\0'
 }
 
+# Linux/macOS: send one request line and wait for its reply file.
+# Arguments: request line without newline, its call token ($BASHPID.<seq>).
+# The request writer and the bell reader stay open for the session (they are
+# reopened when PRELOAD_DIR changes, e.g. after a restart or in a child Bash
+# that inherited only the variables). Checks for the reply many times before
+# sleeping, because the manager usually answers within a fraction of a
+# millisecond and short sleeps are coarse on macOS; after that it sleeps in
+# read -t on the never-written bell FIFO (no CPU, no process).
+# Sets _PRELOAD_REPLY. Returns zero once the reply has been read and ACKed.
+_preload_unix_exchange() {
+  local reply=$PRELOAD_DIR/reply.$2 spin
+  _PRELOAD_REPLY=
+  if [[ ${_PRELOAD_FD_DIR:-} != "$PRELOAD_DIR" ]]; then
+    [[ -f $PRELOAD_DIR/ready.json ]] || return 1
+    exec {_PRELOAD_REQ_FD}>"$PRELOAD_DIR/request" || return 1
+    exec {_PRELOAD_BELL_FD}<"$PRELOAD_DIR/bell" || return 1
+    _PRELOAD_FD_DIR=$PRELOAD_DIR
+  fi
+  [[ -f $PRELOAD_DIR/ready.json ]] || return 1  # No reader: a write would raise SIGPIPE.
+  printf '%s\n' "$1" >&"$_PRELOAD_REQ_FD" || return 1
+  for (( spin = 0; spin < 200; spin++ )); do
+    [[ -f $reply ]] && break
+  done
+  until [[ -f $reply ]]; do
+    [[ -f $PRELOAD_DIR/ready.json ]] || return 1
+    read -t 0.0001 -u "$_PRELOAD_BELL_FD" _
+  done
+  IFS= read -r _PRELOAD_REPLY <"$reply"
+  printf 'ACK %s\n' "$2" >&"$_PRELOAD_REQ_FD"
+}
+
 # Send one request line to the manager and store its reply line.
 # Arguments: request command, then its words. On Linux/macOS the call token
 # ($BASHPID.<seq>) is inserted after the command's first word, e.g.
 # `_preload_request GET git` sends `GET git <token>`. Sets _PRELOAD_REPLY.
 # Returns zero if a reply arrived.
 _preload_request() {
-  local req bell token words
+  local req token words
   _PRELOAD_REPLY=
   if [[ $_PRELOAD_PLATFORM == windows ]]; then
     _preload_open req "$PRELOAD_WIN_DIR\\request" 40 || return 1
@@ -86,24 +117,12 @@ _preload_request() {
     exec {req}>&-
     return "$rc"
   fi
-  [[ -f $PRELOAD_DIR/ready.json ]] || return 1
   token=$BASHPID.$(( _PRELOAD_SEQ = ${_PRELOAD_SEQ:-0} + 1 ))
   case $1 in
     STOP) words="STOP $token" ;;
     *) words="$1 $2 $token${3:+ ${*:3}}" ;;
   esac
-  exec {bell}<"$PRELOAD_DIR/bell" || return 1
-  printf '%s\n' "$words" >"$PRELOAD_DIR/request" || { exec {bell}<&-; return 1; }
-  # The manager renames the complete reply into place; sleep between checks
-  # in read -t on the never-written bell FIFO (no CPU, no process).
-  until [[ -f $PRELOAD_DIR/reply.$token ]]; do
-    [[ -f $PRELOAD_DIR/ready.json ]] || { exec {bell}<&-; return 1; }
-    read -t 0.0002 -u "$bell" _
-  done
-  exec {bell}<&-
-  IFS= read -r _PRELOAD_REPLY <"$PRELOAD_DIR/reply.$token"
-  printf 'ACK %s\n' "$token" >"$PRELOAD_DIR/request"
-  return 0
+  _preload_unix_exchange "$words" "$token"
 }
 
 # Template for generated Windows command functions; __PRELOAD_NAME__ is
@@ -187,29 +206,16 @@ _preload_template_windows() {
 
 # Template for generated Linux/macOS command functions; see the Windows one.
 _preload_template_unix() {
-  local bell wdir rc count header chunk status out_open=1 err_open=1 token
+  local wdir rc count header chunk status out_open=1 err_open=1 token
   local fd_in fd_out fd_err fd_exit fd_ctl
   if (( $# > 31 )); then
     printf '__PRELOAD_NAME__: preload supports at most 31 arguments\n' >&2
     return 255
   fi
-  if [[ ! -f $PRELOAD_DIR/ready.json ]] || ! exec {bell}<"$PRELOAD_DIR/bell"; then
-    printf 'PRELOAD ERROR: the preload manager is not running\n' >&2
-    return 255
-  fi
   # A per-call token keeps a not-yet-deleted earlier reply from matching.
   token=$BASHPID.$(( _PRELOAD_SEQ = ${_PRELOAD_SEQ:-0} + 1 ))
-  printf 'GET __PRELOAD_NAME__ %s\n' "$token" >"$PRELOAD_DIR/request"
-  # Wait without CPU or a process: read -t on the never-written bell FIFO.
-  until [[ -f $PRELOAD_DIR/reply.$token ]]; do
-    [[ -f $PRELOAD_DIR/ready.json ]] || break
-    read -t 0.0002 -u "$bell" _
-  done
-  exec {bell}<&-
-  if [[ -f $PRELOAD_DIR/reply.$token ]]; then
-    IFS= read -r wdir <"$PRELOAD_DIR/reply.$token"
-    printf 'ACK %s\n' "$token" >"$PRELOAD_DIR/request"
-  fi
+  _preload_unix_exchange "GET __PRELOAD_NAME__ $token" "$token"
+  wdir=$_PRELOAD_REPLY
   if [[ $wdir != "$PRELOAD_DIR/worker-"* ]]; then
     printf 'PRELOAD ERROR: %s\n' "${wdir:-the preload manager stopped}" >&2
     return 255
@@ -361,6 +367,11 @@ _preload_start_session() {
   if [[ ${PRELOAD_PID:-} == "$owner" ]]; then
     _preload_stop || return 1  # Re-sourcing restarts with the current environment.
   fi
+  # Descriptors cached by _preload_unix_exchange belong to the old session.
+  if [[ -n ${_PRELOAD_FD_DIR:-} ]]; then
+    exec {_PRELOAD_REQ_FD}>&- {_PRELOAD_BELL_FD}<&-
+    unset _PRELOAD_FD_DIR
+  fi
   case $OSTYPE in
     linux*) base=${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}} ;;
     *) base=${TMPDIR:-/tmp} ;;
@@ -410,7 +421,7 @@ _preload_start_session() {
 }
 
 export -f _preload_sleep _preload_open _preload_open_marked _preload_write_context \
-  _preload_request
+  _preload_request _preload_unix_exchange
 if ! _preload_start_session; then
   return 1
 fi
