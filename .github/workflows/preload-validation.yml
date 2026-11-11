@@ -14,11 +14,16 @@ on:
         type: boolean
         required: false
         default: false
+      transport:
+        description: Compare Unix FIFO and TCP communication only
+        type: boolean
+        required: false
+        default: false
 permissions:
   contents: read
 jobs:
   native:
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.profile) }}
+    if: ${{ !(github.event_name == 'workflow_dispatch' && (inputs.profile || inputs.transport)) }}
     strategy:
       fail-fast: false
       matrix:
@@ -240,6 +245,34 @@ jobs:
         with:
           name: preload-profile-${{ runner.os }}-${{ github.sha }}
           path: preload-profile/
+
+  transport:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.transport }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Ensure modern Bash on macOS
+        if: runner.os == 'macOS'
+        run: |
+          brew list bash >/dev/null 2>&1 || brew install bash
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+      - name: Compare communication and framing
+        run: |
+          python -m unittest discover -s t/preload -p test_fifo_tcp.py -v
+          python t/perf/compare_fifo_tcp.py --output transport-results/results.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fifo-tcp-${{ runner.os }}
+          path: transport-results/
 
   regression:
     name: Final compatibility (${{ matrix.os }})
