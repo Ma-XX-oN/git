@@ -365,6 +365,53 @@ static int probe_native_nt_fifo() {
                  received, static_cast<unsigned>(got));
     return 5;
   }
+  // The proposed FIFO reader must cancel and settle every outstanding
+  // zero-byte I/O before handing off its native handle or freeing storage.
+  native_handle cancel_event;
+  cancel_event.value = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  if (!cancel_event.value) return fail("native cancellation CreateEvent");
+  OVERLAPPED cancel_read = {};
+  cancel_read.hEvent = cancel_event.value;
+  DWORD cancel_bytes = 0;
+  BOOL cancel_now = ReadFile(server.value, &scratch, 0,
+                             &cancel_bytes, &cancel_read);
+  DWORD cancel_issue = cancel_now ? ERROR_SUCCESS : GetLastError();
+  if (cancel_now || cancel_issue != ERROR_IO_PENDING)
+    return fail("native empty read for cancellation", cancel_issue);
+  if (!CancelIoEx(server.value, &cancel_read) &&
+      GetLastError() != ERROR_NOT_FOUND)
+    return fail("native CancelIoEx");
+  if (WaitForSingleObject(cancel_event.value, 3000) != WAIT_OBJECT_0)
+    return fail("native cancellation settlement timeout", WAIT_TIMEOUT);
+  DWORD settled_bytes = 99;
+  BOOL settled = GetOverlappedResult(server.value, &cancel_read,
+                                     &settled_bytes, FALSE);
+  DWORD cancel_result = settled ? ERROR_SUCCESS : GetLastError();
+  std::printf("NT_CANCEL settled=%u status=%lu bytes=%lu\n",
+              static_cast<unsigned>(settled), cancel_result, settled_bytes);
+  if (settled || cancel_result != ERROR_OPERATION_ABORTED)
+    return fail("native cancellation completion", cancel_result);
+
+  // MSYS2 duplicates connected client handles during reader ownership
+  // transfers. Verify a duplicate can set completion mode after the
+  // pending read has settled, and that the original sees that mode.
+  native_handle duplicate;
+  if (!DuplicateHandle(GetCurrentProcess(), server.value,
+                       GetCurrentProcess(), &duplicate.value, 0, FALSE,
+                       DUPLICATE_SAME_ACCESS))
+    return fail("native DuplicateHandle");
+  mode = PIPE_READMODE_MESSAGE | PIPE_NOWAIT;
+  if (!SetNamedPipeHandleState(duplicate.value, &mode, nullptr, nullptr))
+    return fail("native duplicate NOWAIT");
+  OVERLAPPED duplicate_check = {};
+  DWORD duplicate_bytes = 0;
+  BOOL duplicate_now = ReadFile(server.value, &scratch, 0,
+                                &duplicate_bytes, &duplicate_check);
+  DWORD duplicate_status = duplicate_now ? ERROR_SUCCESS : GetLastError();
+  std::printf("NT_DUPLICATE_MODE immediate=%u status=%lu\n",
+              static_cast<unsigned>(duplicate_now), duplicate_status);
+  if (duplicate_now || duplicate_status != ERROR_NO_DATA)
+    return fail("native duplicate mode not shared", duplicate_status);
   std::puts("PASS native NtCreateNamedPipeFile complete->queue"
             " zero-byte wake, no consumed data");
   return 0;
