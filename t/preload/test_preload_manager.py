@@ -3,12 +3,13 @@
 
 Windows: per-call duplex connections, including Git Bash's throwaway
 connection held open or closed without data. Linux/macOS: request FIFO,
-polled reply files, a program that hangs without READY, and a reply to a
+mailbox FIFOs, a program that hangs without READY, and a reply to a
 caller that has exited. Both: concurrent calls through the Bash library.
 """
 import argparse
 import json
 import os
+import select
 from pathlib import Path
 import shutil
 import subprocess
@@ -108,10 +109,12 @@ class Session:
     Parameters
     ----------
     line : str
-        Request without newline. On Linux/macOS, `{token}` is replaced by the
-        call token `<pid>.<seq>` (this process unless pid is given).
+        Request without newline. On Linux/macOS, `{slot}` is replaced by the
+        claimed mailbox number.
     pid : int, optional
-        Unix caller PID that receives the reply; no wait if it is not ours.
+        Unix caller PID written into the mailbox lock; if it is not this
+        process, the reply is not read and the mailbox is left for the
+        manager to reclaim.
 
     Returns
     -------
@@ -125,19 +128,48 @@ class Session:
       finally:
         K.CloseHandle(handle)
     caller = os.getpid() if pid is None else pid
-    self.sequence += 1
-    token = f"{caller}.{self.sequence}"
-    self.send(line.format(token=token))
-    if caller != os.getpid():
-      return None
-    reply_file = self.directory / f"reply.{token}"
-    deadline = time.monotonic() + 15
-    while not reply_file.exists():
-      assert time.monotonic() < deadline, "no reply; log:\n" + self.read_log()
-      time.sleep(.001)
-    reply = reply_file.read_text(encoding="utf-8").rstrip("\n")
-    self.send(f"ACK {token}")  # After STOP, the manager exits on this ACK.
-    return reply
+    slot = self.claim(caller)
+    # Non-blocking so the reply can be awaited with a deadline.
+    fd = os.open(self.directory / f"slot.{slot}", os.O_RDONLY | os.O_NONBLOCK)
+    try:
+      self.send(line.format(slot=slot))
+      if caller != os.getpid():
+        return None
+      reply = bytearray()
+      deadline = time.monotonic() + 15
+      while b"\n" not in reply:
+        left = deadline - time.monotonic()
+        assert left > 0, "no reply; log:\n" + self.read_log()
+        if select.select([fd], [], [], left)[0]:
+          reply.extend(os.read(fd, 4096))
+    finally:
+      os.close(fd)
+    self.send(f"FREE {slot}")  # After STOP, the manager exits on this FREE.
+    return reply[:reply.index(b"\n")].decode("utf-8")
+
+  def claim(self, pid):
+    """Claim a free mailbox the way the Bash client does.
+
+    Parameters
+    ----------
+    pid : int
+        PID written into the lock.
+
+    Returns
+    -------
+    int
+        Claimed mailbox number.
+    """
+    for slot in range(32):
+      try:
+        fd = os.open(self.directory / f"slot.{slot}.lock",
+                     os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+      except FileExistsError:
+        continue
+      os.write(fd, str(pid).encode("ascii"))
+      os.close(fd)
+      return slot
+    raise AssertionError("no free mailbox")
 
   def send(self, line):
     """Write one Unix request line without blocking on a missing reader.
@@ -157,7 +189,7 @@ class Session:
 
   def stop(self):
     """Stop the manager and require a clean exit."""
-    assert self.request("STOP" if WINDOWS else "STOP {token}") == "OK"
+    assert self.request("STOP" if WINDOWS else "STOP {slot}") == "OK"
     assert self.process.wait(timeout=15) == 0, self.read_log()
     assert not (self.directory / "ready.json").exists()
     self.log.close()
@@ -181,12 +213,12 @@ def check_protocol(git, work):
   directory = work / "protocol"
   directory.mkdir()
   session = Session(directory)
-  preload = "PRELOAD git " + (str(git) if WINDOWS else "{token} " + str(git))
+  preload = "PRELOAD git " + (str(git) if WINDOWS else "{slot} " + str(git))
   assert session.request(preload) == "OK", session.read_log()
-  reply = session.request("GET git" if WINDOWS else "GET git {token}")
+  reply = session.request("GET git" if WINDOWS else "GET git {slot}")
   assert "worker-" in reply, reply
   print("PRELOAD_MANAGER_PASS get", flush=True)
-  missing = session.request("GET nope" if WINDOWS else "GET nope {token}")
+  missing = session.request("GET nope" if WINDOWS else "GET nope {slot}")
   assert missing == "ERROR not preloaded: nope", missing
   print("PRELOAD_MANAGER_PASS unknown-command", flush=True)
   if WINDOWS:
@@ -212,7 +244,7 @@ def check_protocol(git, work):
     hang.write_text("#!/bin/sh\nexec sleep 30\n", encoding="utf-8")
     hang.chmod(0o755)
     started = time.monotonic()
-    unsupported = session.request("PRELOAD hang-tool {token} " + str(hang))
+    unsupported = session.request("PRELOAD hang-tool {slot} " + str(hang))
     elapsed = time.monotonic() - started
     assert unsupported == "ERROR hang-tool doesn't support --preload-worker", unsupported
     assert elapsed < 5, elapsed
@@ -220,7 +252,7 @@ def check_protocol(git, work):
     # A caller that exited before its reply: the worker must not leak.
     dead = subprocess.Popen(["true"])
     dead.wait()
-    session.request("GET git {token}", pid=dead.pid)
+    session.request("GET git {slot}", pid=dead.pid)
     deadline = time.monotonic() + 10
     allocated = None
     while time.monotonic() < deadline and allocated is None:

@@ -8,8 +8,8 @@ This file preserves the experimental protocol evidence.
 **Superseded parts.** The generic preload library
 (`contrib/preload/preload-manager.sh`) replaced the two persistent allocation
 channels described below with one request per call: a duplex connection per
-call on Windows, and a request FIFO plus a polled `reply.<pid>.<seq>` file on
-Linux/macOS. Worker channels are now named `params-cwd` (formerly
+call on Windows, and a request FIFO plus a claimed mailbox FIFO
+(`slot.<n>`) on Linux/macOS. Worker channels are now named `params-cwd` (formerly
 `param-env-cwd`) and, on Windows, `<PRELOAD_WIN_DIR>\worker-<pid>\<channel>`;
 the owner variable is `PRELOAD_PID` (formerly `GIT_PRELOAD_OWNER_PID`). The
 Windows probe connection's cause is now known:

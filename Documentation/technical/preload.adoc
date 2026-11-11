@@ -52,24 +52,28 @@ Each call first obtains a worker from the manager:
   reads the worker's pipe directory from the same connection. Each connection
   is a private reply channel, so concurrent subshells never see each other's
   replies.
-* Linux/macOS: the client writes `GET <name> <token>` plus newline to the
-  `request` FIFO, where the token is `$BASHPID.<seq>` (a per-call counter).
-  The manager writes the worker directory to a temporary file and renames it
-  to `reply.<token>`; the client checks for that file in a loop, sleeping
-  between checks in `read -t 0.0002` on the `bell` FIFO, which the manager
-  holds open without writing, so waiting uses no CPU and no process. The
-  client then sends `ACK <token>` and the manager deletes the file.
-  `$BASHPID` (not `$$`) keeps replies private to each subshell, and the
-  per-call counter keeps an earlier, not yet deleted reply from matching.
-  Signals cannot wake the client: Bash's `read` is not interrupted by a
-  trapped signal (only `wait` is).
+* Linux/macOS: replies go through mailboxes, 32 FIFOs `slot.<n>` in the
+  session directory. The client claims a free mailbox by creating
+  `slot.<n>.lock` with Bash `noclobber` (an atomic exclusive create)
+  containing its `$BASHPID`, opens `slot.<n>` for reading, writes
+  `GET <name> <n>` plus newline to the `request` FIFO and blocks in `read` on
+  the mailbox. The manager writes the worker directory into the mailbox,
+  which wakes the client immediately: no polling, no CPU and no process while
+  waiting. The client then sends `FREE <n>`; the manager drains the mailbox
+  and deletes the lock. The manager holds both ends of every mailbox, so if
+  it dies a waiting client's `read` returns end-of-file; a client checks the
+  manager's PID before opening a mailbox, since that open would otherwise
+  block without a writer. Locks whose `$BASHPID` has exited are reclaimed.
+  The client keeps a never-read reader on the request FIFO so a write after
+  the manager has exited cannot raise SIGPIPE. Signals cannot wake a client:
+  Bash's `read` is not interrupted by a trapped signal (only `wait` is).
 
 The other requests are `PRELOAD <name> <path>` (Linux/macOS:
-`PRELOAD <name> <token> <path>`), which replies `OK` or `ERROR <reason>`, and
-`STOP` (`STOP <token>`). On Linux/macOS `STOP` is acknowledged like any other
-request; the manager keeps the request FIFO open and its reply in place until
-that `ACK` arrives (at most five seconds), then cleans up and exits. A worker
-whose reply cannot be delivered (the caller has exited) is killed.
+`PRELOAD <name> <n> <path>`), which replies `OK` or `ERROR <reason>`, and
+`STOP` (`STOP <n>`). On Linux/macOS the manager keeps serving after replying
+to `STOP` until that caller's `FREE` arrives (at most five seconds), then
+cleans up and exits. A worker whose reply cannot be delivered (the caller has
+exited) is killed.
 
 == Modules and ownership
 

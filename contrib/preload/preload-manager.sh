@@ -71,54 +71,73 @@ _preload_write_context() {
   printf '\0end\0'
 }
 
-# Linux/macOS: send one request line and wait for its reply file.
-# Arguments: request line without newline, its call token ($BASHPID.<seq>).
-# The request writer, a never-read request reader and the bell reader stay
-# open for the session (reopened when PRELOAD_DIR changes, e.g. after a
-# restart or in a child Bash that inherited only the variables). The idle
-# reader guarantees the request FIFO always has a reader, so a write after
-# the manager has exited cannot raise SIGPIPE and kill this shell. Checks for
-# the reply many times before sleeping, because the manager usually answers
-# within a fraction of a millisecond and short sleeps are coarse on macOS;
-# after that it sleeps in read -t on the never-written bell FIFO (no CPU, no
-# process). Sets _PRELOAD_REPLY. Returns zero once the reply has been read
-# and ACKed; after STOP the manager waits for this ACK before cleaning up.
+# Linux/macOS: exchange one request and reply through a mailbox.
+# Arguments: request command (GET, PRELOAD or STOP), then for GET/PRELOAD the
+# command name, then for PRELOAD the executable path. The claimed mailbox
+# number is inserted after the name: `GET git <n>`, `PRELOAD git <n> <path>`,
+# `STOP <n>`.
+# A mailbox is claimed by creating slot.<n>.lock with noclobber (an atomic
+# exclusive create) holding $BASHPID. The client then blocks in read on the
+# mailbox FIFO slot.<n>; the manager's reply wakes it immediately. FREE <n>
+# releases the mailbox. If the manager dies, its ends of the mailbox close
+# and read returns end-of-file instead of hanging.
+# The request writer and a never-read request reader stay open for the
+# session (reopened when PRELOAD_DIR changes, e.g. after a restart or in a
+# child Bash that inherited only the variables). The idle reader guarantees
+# the request FIFO always has a reader, so a write after the manager has
+# exited cannot raise SIGPIPE and kill this shell.
+# Sets _PRELOAD_REPLY. Returns zero once a reply has been read.
 _preload_unix_exchange() {
-  local reply=$PRELOAD_DIR/reply.$2 spin
+  local slot i fd line rc noclobber=0
   _PRELOAD_REPLY=
   if [[ ${_PRELOAD_FD_DIR:-} != "$PRELOAD_DIR" ]]; then
     local ready
     IFS= read -r ready <"$PRELOAD_DIR/ready.json" 2>/dev/null || return 1
+    [[ $ready =~ \"slots\":\ *([0-9]+) ]] || return 1
+    _PRELOAD_SLOTS=${BASH_REMATCH[1]}
     [[ $ready =~ \"manager_pid\":\ *([0-9]+) ]] || return 1
     _PRELOAD_MANAGER_PID=${BASH_REMATCH[1]}
     # The manager holds a writer, so opening this reader does not block.
     exec {_PRELOAD_REQ_GUARD}<"$PRELOAD_DIR/request" || return 1
     exec {_PRELOAD_REQ_FD}>"$PRELOAD_DIR/request" || return 1
-    exec {_PRELOAD_BELL_FD}<"$PRELOAD_DIR/bell" || return 1
     _PRELOAD_FD_DIR=$PRELOAD_DIR
   fi
-  [[ -f $PRELOAD_DIR/ready.json ]] || return 1
-  printf '%s\n' "$1" >&"$_PRELOAD_REQ_FD" || return 1
-  for (( spin = 0; spin < 200; spin++ )); do
-    [[ -f $reply ]] && break
+  # Claim a free mailbox, starting at a PID-derived index to avoid collisions.
+  [[ $- == *C* ]] && noclobber=1
+  set -C
+  while :; do
+    [[ -f $PRELOAD_DIR/ready.json ]] || { (( noclobber )) || set +C; return 1; }
+    for (( i = 0; i < _PRELOAD_SLOTS; i++ )); do
+      slot=$(( (BASHPID + i) % _PRELOAD_SLOTS ))
+      { printf '%s' "$BASHPID" >"$PRELOAD_DIR/slot.$slot.lock"; } 2>/dev/null && break 2
+    done
+    _preload_sleep .001  # Every mailbox is busy; wait for a FREE.
   done
-  until [[ -f $reply ]]; do
-    # ready.json is removed on a clean exit; kill -0 also catches a crash.
-    [[ -f $PRELOAD_DIR/ready.json ]] && kill -0 "$_PRELOAD_MANAGER_PID" 2>/dev/null ||
-      return 1
-    read -t 0.0001 -u "$_PRELOAD_BELL_FD" _
-  done
-  IFS= read -r _PRELOAD_REPLY <"$reply"
-  printf 'ACK %s\n' "$2" >&"$_PRELOAD_REQ_FD"
+  (( noclobber )) || set +C
+  # Opening a FIFO for reading blocks until it has a writer; the manager holds
+  # the only one. A manager that crashed (leaving ready.json) would make the
+  # open hang, so check it is alive first. Once open, its death gives EOF.
+  if ! kill -0 "$_PRELOAD_MANAGER_PID" 2>/dev/null ||
+     ! exec {fd}<"$PRELOAD_DIR/slot.$slot"; then
+    printf 'FREE %s\n' "$slot" >&"$_PRELOAD_REQ_FD"
+    return 1
+  fi
+  case $1 in
+    STOP) line="STOP $slot" ;;
+    *) line="$1 $2 $slot${3:+ $3}" ;;
+  esac
+  printf '%s\n' "$line" >&"$_PRELOAD_REQ_FD" && IFS= read -r _PRELOAD_REPLY <&"$fd"
+  rc=$?
+  exec {fd}<&-
+  printf 'FREE %s\n' "$slot" >&"$_PRELOAD_REQ_FD"
+  return "$rc"
 }
 
-# Send one request line to the manager and store its reply line.
-# Arguments: request command, then its words. On Linux/macOS the call token
-# ($BASHPID.<seq>) is inserted after the command's first word, e.g.
-# `_preload_request GET git` sends `GET git <token>`. Sets _PRELOAD_REPLY.
-# Returns zero if a reply arrived.
+# Send one request to the manager and store its reply line.
+# Arguments: request command, then its words (GET <name>, PRELOAD <name>
+# <path>, or STOP). Sets _PRELOAD_REPLY. Returns zero if a reply arrived.
 _preload_request() {
-  local req token words
+  local req
   _PRELOAD_REPLY=
   if [[ $_PRELOAD_PLATFORM == windows ]]; then
     _preload_open req "$PRELOAD_WIN_DIR\\request" 40 || return 1
@@ -127,12 +146,7 @@ _preload_request() {
     exec {req}>&-
     return "$rc"
   fi
-  token=$BASHPID.$(( _PRELOAD_SEQ = ${_PRELOAD_SEQ:-0} + 1 ))
-  case $1 in
-    STOP) words="STOP $token" ;;
-    *) words="$1 $2 $token${3:+ ${*:3}}" ;;
-  esac
-  _preload_unix_exchange "$words" "$token"
+  _preload_unix_exchange "$@"
 }
 
 # Template for generated Windows command functions; __PRELOAD_NAME__ is
@@ -216,15 +230,13 @@ _preload_template_windows() {
 
 # Template for generated Linux/macOS command functions; see the Windows one.
 _preload_template_unix() {
-  local wdir rc count header chunk status out_open=1 err_open=1 token
+  local wdir rc count header chunk status out_open=1 err_open=1
   local fd_in fd_out fd_err fd_exit fd_ctl
   if (( $# > 31 )); then
     printf '__PRELOAD_NAME__: preload supports at most 31 arguments\n' >&2
     return 255
   fi
-  # A per-call token keeps a not-yet-deleted earlier reply from matching.
-  token=$BASHPID.$(( _PRELOAD_SEQ = ${_PRELOAD_SEQ:-0} + 1 ))
-  _preload_unix_exchange "GET __PRELOAD_NAME__ $token" "$token"
+  _preload_unix_exchange GET __PRELOAD_NAME__
   wdir=$_PRELOAD_REPLY
   if [[ $wdir != "$PRELOAD_DIR/worker-"* ]]; then
     printf 'PRELOAD ERROR: %s\n' "${wdir:-the preload manager stopped}" >&2
@@ -379,7 +391,7 @@ _preload_start_session() {
   fi
   # Descriptors cached by _preload_unix_exchange belong to the old session.
   if [[ -n ${_PRELOAD_FD_DIR:-} ]]; then
-    exec {_PRELOAD_REQ_FD}>&- {_PRELOAD_REQ_GUARD}<&- {_PRELOAD_BELL_FD}<&-
+    exec {_PRELOAD_REQ_FD}>&- {_PRELOAD_REQ_GUARD}<&-
     unset _PRELOAD_FD_DIR
   fi
   case $OSTYPE in

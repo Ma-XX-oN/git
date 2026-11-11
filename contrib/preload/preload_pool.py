@@ -297,18 +297,17 @@ def cleanup_session(directory):
   Parameters
   ----------
   directory : Path
-      Private session directory. Its worker-* directories, request/bell
-      FIFOs and reply files are removed; manager.log and the directory itself
-      remain for the sourcing shell, which owns them.
+      Private session directory. Its worker-* directories, request FIFO and
+      mailboxes (slot.<n> FIFOs and their locks) are removed; manager.log and
+      the directory itself remain for the sourcing shell, which owns them.
   """
   for worker in directory.glob("worker-*"):
     for entry in worker.iterdir():
       entry.unlink(missing_ok=True)
     worker.rmdir()
-  for name in ("request", "bell"):
-    (directory / name).unlink(missing_ok=True)
-  for reply in directory.glob("reply*.*"):  # reply.<token>, reply-tmp.<token>
-    reply.unlink(missing_ok=True)
+  (directory / "request").unlink(missing_ok=True)
+  for mailbox in directory.glob("slot.*"):  # slot.<n>, slot.<n>.lock
+    mailbox.unlink(missing_ok=True)
 
 
 def worker_environment(owner_pid, extra=None):
