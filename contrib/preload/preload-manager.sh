@@ -73,33 +73,43 @@ _preload_write_context() {
 
 # Linux/macOS: send one request line and wait for its reply file.
 # Arguments: request line without newline, its call token ($BASHPID.<seq>).
-# The request writer and the bell reader stay open for the session (they are
-# reopened when PRELOAD_DIR changes, e.g. after a restart or in a child Bash
-# that inherited only the variables). Checks for the reply many times before
-# sleeping, because the manager usually answers within a fraction of a
-# millisecond and short sleeps are coarse on macOS; after that it sleeps in
-# read -t on the never-written bell FIFO (no CPU, no process).
-# Sets _PRELOAD_REPLY. Returns zero once the reply has been read and ACKed.
+# The request writer, a never-read request reader and the bell reader stay
+# open for the session (reopened when PRELOAD_DIR changes, e.g. after a
+# restart or in a child Bash that inherited only the variables). The idle
+# reader guarantees the request FIFO always has a reader, so a write after
+# the manager has exited cannot raise SIGPIPE and kill this shell. Checks for
+# the reply many times before sleeping, because the manager usually answers
+# within a fraction of a millisecond and short sleeps are coarse on macOS;
+# after that it sleeps in read -t on the never-written bell FIFO (no CPU, no
+# process). Sets _PRELOAD_REPLY. Returns zero once the reply has been read
+# (and ACKed, except for STOP, after which the manager removes all replies).
 _preload_unix_exchange() {
   local reply=$PRELOAD_DIR/reply.$2 spin
   _PRELOAD_REPLY=
   if [[ ${_PRELOAD_FD_DIR:-} != "$PRELOAD_DIR" ]]; then
-    [[ -f $PRELOAD_DIR/ready.json ]] || return 1
+    local ready
+    IFS= read -r ready <"$PRELOAD_DIR/ready.json" 2>/dev/null || return 1
+    [[ $ready =~ \"manager_pid\":\ *([0-9]+) ]] || return 1
+    _PRELOAD_MANAGER_PID=${BASH_REMATCH[1]}
+    # The manager holds a writer, so opening this reader does not block.
+    exec {_PRELOAD_REQ_GUARD}<"$PRELOAD_DIR/request" || return 1
     exec {_PRELOAD_REQ_FD}>"$PRELOAD_DIR/request" || return 1
     exec {_PRELOAD_BELL_FD}<"$PRELOAD_DIR/bell" || return 1
     _PRELOAD_FD_DIR=$PRELOAD_DIR
   fi
-  [[ -f $PRELOAD_DIR/ready.json ]] || return 1  # No reader: a write would raise SIGPIPE.
+  [[ -f $PRELOAD_DIR/ready.json ]] || return 1
   printf '%s\n' "$1" >&"$_PRELOAD_REQ_FD" || return 1
   for (( spin = 0; spin < 200; spin++ )); do
     [[ -f $reply ]] && break
   done
   until [[ -f $reply ]]; do
-    [[ -f $PRELOAD_DIR/ready.json ]] || return 1
+    # ready.json is removed on a clean exit; kill -0 also catches a crash.
+    [[ -f $PRELOAD_DIR/ready.json ]] && kill -0 "$_PRELOAD_MANAGER_PID" 2>/dev/null ||
+      return 1
     read -t 0.0001 -u "$_PRELOAD_BELL_FD" _
   done
   IFS= read -r _PRELOAD_REPLY <"$reply"
-  printf 'ACK %s\n' "$2" >&"$_PRELOAD_REQ_FD"
+  [[ $1 == STOP* ]] || printf 'ACK %s\n' "$2" >&"$_PRELOAD_REQ_FD"
 }
 
 # Send one request line to the manager and store its reply line.
@@ -369,7 +379,7 @@ _preload_start_session() {
   fi
   # Descriptors cached by _preload_unix_exchange belong to the old session.
   if [[ -n ${_PRELOAD_FD_DIR:-} ]]; then
-    exec {_PRELOAD_REQ_FD}>&- {_PRELOAD_BELL_FD}<&-
+    exec {_PRELOAD_REQ_FD}>&- {_PRELOAD_REQ_GUARD}<&- {_PRELOAD_BELL_FD}<&-
     unset _PRELOAD_FD_DIR
   fi
   case $OSTYPE in
