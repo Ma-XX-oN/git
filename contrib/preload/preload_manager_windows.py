@@ -193,6 +193,10 @@ class Server:
       if worker is not None:  # The client never learned of this worker.
         worker.kill()
       raise
+    finally:
+      # Start the replacement only now, so it cannot delay the reply.
+      if worker is not None:
+        self.manager.replenish(rest)
     if command == "GET" and preload_pool.TIMING:
       log(f"TIMING GET received={received:.6f} allocated={allocated:.6f} "
           f"delivered={time.time():.6f}")

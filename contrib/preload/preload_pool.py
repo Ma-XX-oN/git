@@ -19,6 +19,7 @@ INITIAL_WORKERS = 3
 MAX_WORKERS = 32
 SUPPORT_TIMEOUT = 1.0
 REPLACEMENT_TIMEOUT = 10.0
+SPAWNER_THREADS = 4
 
 
 def log(message):
@@ -30,6 +31,37 @@ def log(message):
       Single-line event text.
   """
   print(message, flush=True)
+
+
+class Spawner:
+  """Long-lived threads that run worker startups from a queue.
+
+  Replacements are started here, after the reply that allocated a worker,
+  so starting a thread and a process never delays a reply.
+
+  Parameters
+  ----------
+  threads : int
+      Number of startups that may run at once.
+  """
+
+  def __init__(self, threads=SPAWNER_THREADS):
+    self.queue = queue.Queue()
+    for _ in range(threads):
+      threading.Thread(target=self._run, daemon=True).start()
+
+  def submit(self, task):
+    """Queue one callable to run on a spawner thread."""
+    self.queue.put(task)
+
+  def _run(self):
+    """Run queued startups until the process exits."""
+    while True:
+      task = self.queue.get()
+      try:
+        task()
+      except Exception as error:  # Keep the thread serving later startups.
+        log("SPAWNER_TASK_FAILED " + repr(error))
 
 
 class Pool:
@@ -49,12 +81,13 @@ class Pool:
       Called without arguments whenever a worker becomes READY or fails.
   """
 
-  def __init__(self, name, executable, directory, environment, notify):
+  def __init__(self, name, executable, directory, environment, notify, spawner=None):
     self.name = name
     self.executable = executable
     self.directory = directory
     self.environment = environment
     self.notify = notify
+    self.spawner = spawner or Spawner()
     self.ready = queue.Queue()
     self.children = []
     self.lock = threading.Lock()
@@ -85,7 +118,7 @@ class Pool:
     return False
 
   def spawn(self, timeout=REPLACEMENT_TIMEOUT):
-    """Start one worker and publish it once it reports READY.
+    """Start one worker on this thread and publish it once it reports READY.
 
     Parameters
     ----------
@@ -97,8 +130,25 @@ class Pool:
       if self.closing.is_set():
         return
       self.spawning += 1
+    self._spawn_counted(timeout)
+
+  def request_spawn(self):
+    """Queue one worker startup on the spawner threads, without waiting.
+
+    The startup counts as in progress from now on, so a request waiting for
+    a worker does not report failure while the spawn waits for a thread.
+    """
+    with self.spawn_done:
+      if self.closing.is_set():
+        return
+      self.spawning += 1
+    self.spawner.submit(self._spawn_counted)
+
+  def _spawn_counted(self, timeout=REPLACEMENT_TIMEOUT):
+    """Run one counted startup; see spawn()."""
     try:
-      self._spawn_worker(timeout)
+      if not self.closing.is_set():
+        self._spawn_worker(timeout)
     finally:
       with self.spawn_done:
         self.spawning -= 1
@@ -153,8 +203,8 @@ class Pool:
     -------
     subprocess.Popen or None
         The allocated worker, now owned by the client, or None if none is
-        READY. Each allocation starts one replacement, keeping the pool at
-        its target size.
+        READY. The caller starts its replacement with request_spawn() after
+        replying, so startup does not compete with the reply.
     """
     while True:
       try:
@@ -163,10 +213,10 @@ class Pool:
         return None
       with self.lock:
         self.children.remove(p)
-      threading.Thread(target=self.spawn, daemon=True).start()
       if p.poll() is None:
         log(f"ALLOCATED {self.name} {p.pid}")
         return p
+      self.request_spawn()  # It died while idle; replace it.
 
   def grow(self):
     """Add one worker to the pool's target size, up to MAX_WORKERS.
@@ -179,7 +229,7 @@ class Pool:
         return
       self.target += 1
     log(f"POOL_GROW {self.name} target={self.target}")
-    threading.Thread(target=self.spawn, daemon=True).start()
+    self.request_spawn()
 
   def close(self):
     """Kill workers still owned by the pool and wait for pending startups."""
@@ -219,6 +269,7 @@ class Manager:
     self.lock = threading.Lock()
     self.changed = threading.Condition(self.lock)
     self.closing = threading.Event()
+    self.spawner = Spawner()
 
   def _notify(self):
     """Wake requests waiting for a READY worker."""
@@ -243,7 +294,8 @@ class Manager:
     path = Path(executable)
     if not path.is_file():
       return "ERROR executable not found: " + executable
-    pool = Pool(name, path, self.directory, self.environment, self._notify)
+    pool = Pool(name, path, self.directory, self.environment, self._notify,
+                self.spawner)
     if not pool.start():
       return f"ERROR {name} doesn't support --preload-worker"
     with self.lock:
@@ -265,7 +317,8 @@ class Manager:
     Returns
     -------
     subprocess.Popen or str
-        The allocated worker, or an ERROR reply line.
+        The allocated worker, or an ERROR reply line. After replying, the
+        caller must call replenish(name) to start the worker's replacement.
     """
     with self.changed:
       pool = self.pools.get(name)
@@ -283,6 +336,19 @@ class Manager:
           return "ERROR workers failing for " + name + ": " + pool.errors[-1]
         self.changed.wait(0.5)
     return "ERROR manager stopping"
+
+  def replenish(self, name):
+    """Queue the replacement for a worker allocated from one pool.
+
+    Parameters
+    ----------
+    name : str
+        Command whose worker was allocated; called after the reply is sent.
+    """
+    with self.lock:
+      pool = self.pools.get(name)
+    if pool is not None:
+      pool.request_spawn()
 
   def close(self):
     """Stop every pool."""

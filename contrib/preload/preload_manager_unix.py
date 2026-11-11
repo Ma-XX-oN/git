@@ -21,8 +21,10 @@ removes its lock; a lock whose $BASHPID has exited is reclaimed the same way.
 from __future__ import annotations
 import argparse
 import errno
+import functools
 import json
 import os
+import queue
 from pathlib import Path
 import select
 import sys
@@ -76,6 +78,26 @@ class Mailbox:
     # from ever lacking a reader; it is only used to drain stale replies.
     self.reader = os.open(self.path, os.O_RDONLY | os.O_NONBLOCK)
     self.writer = os.open(self.path, os.O_WRONLY | os.O_NONBLOCK)
+    # One long-lived thread per mailbox serves its requests in order: handing
+    # a request to a waiting thread is much cheaper than starting one, and a
+    # request waiting for a worker blocks only its own mailbox.
+    self.tasks = queue.Queue()
+    threading.Thread(target=self._serve, daemon=True).start()
+
+  def submit(self, task):
+    """Queue one callable for this mailbox's thread."""
+    self.tasks.put(task)
+
+  def _serve(self):
+    """Run this mailbox's requests until close() queues None."""
+    while True:
+      task = self.tasks.get()
+      if task is None:
+        return
+      try:
+        task()
+      except Exception as error:  # Keep serving later requests.
+        log(f"MAILBOX_TASK_FAILED {self.path.name} {error!r}")
 
   def owner(self):
     """Return the claiming client's PID, or None if unclaimed or unreadable."""
@@ -115,7 +137,8 @@ class Mailbox:
     self.lock.unlink(missing_ok=True)
 
   def close(self):
-    """Close both ends."""
+    """Stop the mailbox thread and close both ends."""
+    self.tasks.put(None)
     os.close(self.writer)
     os.close(self.reader)
 
@@ -149,7 +172,7 @@ class Server:
     return None
 
   def handle(self, line):
-    """Execute one request line; slow requests run on their own thread.
+    """Execute one request line; GET and PRELOAD run on the mailbox's thread.
 
     Parameters
     ----------
@@ -163,11 +186,11 @@ class Server:
       if words[1] == self.stop_slot:
         self.stopped.set()
     elif command == "GET" and len(words) == 3 and self.mailbox(words[2]):
-      threading.Thread(target=self._get, daemon=True,
-                       args=(words[1], self.mailbox(words[2]), time.time())).start()
+      mailbox = self.mailbox(words[2])
+      mailbox.submit(functools.partial(self._get, words[1], mailbox, time.time()))
     elif command == "PRELOAD" and len(words) == 4 and self.mailbox(words[2]):
-      threading.Thread(target=self._preload, daemon=True,
-                       args=(words[1], self.mailbox(words[2]), words[3])).start()
+      mailbox = self.mailbox(words[2])
+      mailbox.submit(functools.partial(self._preload, words[1], mailbox, words[3]))
     elif command == "STOP" and len(words) == 2 and self.mailbox(words[1]):
       log("MANAGER_STOP_REQUEST")
       if self.mailbox(words[1]).deliver("OK"):
@@ -195,14 +218,19 @@ class Server:
     allocated = time.time()
     if isinstance(result, str):
       mailbox.deliver(result)
-    elif not mailbox.deliver(str(self.directory / ("worker-" + str(result.pid)))):
-      # The caller exited and never learned of this worker; reap it too, so
-      # it does not remain as a zombie.
-      result.kill()
-      result.wait(timeout=5)
+      delivered = time.time()
+    else:
+      if not mailbox.deliver(str(self.directory / ("worker-" + str(result.pid)))):
+        # The caller exited and never learned of this worker; reap it too, so
+        # it does not remain as a zombie.
+        result.kill()
+        result.wait(timeout=5)
+      delivered = time.time()
+      # Start the replacement only now, so it cannot delay the reply.
+      self.manager.replenish(name)
     if preload_pool.TIMING:
       log(f"TIMING GET received={received:.6f} thread={started:.6f} "
-          f"allocated={allocated:.6f} delivered={time.time():.6f}")
+          f"allocated={allocated:.6f} delivered={delivered:.6f}")
 
   def _preload(self, name, mailbox, path):
     """Create a command's pool for a caller."""
