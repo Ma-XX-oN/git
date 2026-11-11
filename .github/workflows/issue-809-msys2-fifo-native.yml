@@ -1,0 +1,94 @@
+name: RWF 809 isolated MSYS2 FIFO WFMO candidate
+on:
+  push:
+    branches: [experiment-809-msys2-fifo-wfmo-main]
+    paths:
+      - experiments/issue-809/msys2_fifo_wfmo.patch.zlib.b64
+      - .github/workflows/issue-809-msys2-fifo-native.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-native:
+    runs-on: windows-latest
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MSYS
+          update: true
+          install: msys2-devel base-devel autotools cocom diffutils gcc gettext-devel libiconv-devel make mingw-w64-cross-crt mingw-w64-cross-gcc mingw-w64-cross-zlib perl python zlib-devel xmlto docbook-xsl libzstd-devel
+      - name: Fetch pinned MSYS2 3.6.12 source and verify experimental patch
+        shell: msys2 {0}
+        run: |
+          set -euxo pipefail
+          git init runtime
+          git -C runtime remote add origin https://github.com/msys2/msys2-runtime.git
+          git -C runtime fetch --depth=1 origin 50c44b7c03c8a3298dc838b8768973e2020b9ed6
+          git -C runtime checkout --detach FETCH_HEAD
+          test "$(git -C runtime rev-parse HEAD)" = 50c44b7c03c8a3298dc838b8768973e2020b9ed6
+          test "$(git -C runtime hash-object winsup/cygwin/fhandler/fifo.cc)" = 15117db6eb359eabd7b49913cb2cebb6af85c275
+          python3 - <<'PY'
+          import base64, hashlib, zlib
+          from pathlib import Path
+          encoded = Path("experiments/issue-809/msys2_fifo_wfmo.patch.zlib.b64").read_text().strip()
+          patch = zlib.decompress(base64.b64decode(encoded, validate=True))
+          actual = hashlib.sha256(patch).hexdigest()
+          expected = "f6083949acc4e5a0c8f90de16430f336e00560b6da671976d0e663070c158bd6"
+          assert actual == expected, (actual, expected)
+          Path("experiments/issue-809/msys2_fifo_wfmo.generated.patch").write_bytes(patch)
+          print("PATCH_SHA256=" + actual)
+          PY
+          git -C runtime apply --check ../experiments/issue-809/msys2_fifo_wfmo.generated.patch
+          git -C runtime apply ../experiments/issue-809/msys2_fifo_wfmo.generated.patch
+          git -C runtime diff --check
+          git -C runtime diff -- winsup/cygwin/fhandler/fifo.cc
+      - name: Build isolated MSYS2 runtime using native upstream build recipe
+        shell: msys2 {0}
+        run: |
+          set -euxo pipefail
+          cd runtime
+          (cd winsup && ./autogen.sh)
+          ./configure --disable-dependency-tracking --with-msys2-runtime-commit=50c44b7c03c8a3298dc838b8768973e2020b9ed6
+          make -j8
+          test -s x86_64-pc-cygwin/winsup/cygwin/new-msys-2.0.dll
+          sha256sum x86_64-pc-cygwin/winsup/cygwin/new-msys-2.0.dll
+      - name: Same-runner stock versus patched FIFO wake and CPU benchmarks
+        shell: msys2 {0}
+        run: |
+          set -euxo pipefail
+          root="$PWD"
+          isolated=experiments/issue-809/isolated-rwf809
+          mkdir -p "$isolated"
+          cp /usr/bin/bash.exe /usr/bin/msys-*.dll "$isolated/"
+          cp runtime/x86_64-pc-cygwin/winsup/cygwin/new-msys-2.0.dll "$isolated/msys-2.0.dll"
+          sha256sum /usr/bin/msys-2.0.dll "$isolated/msys-2.0.dll"
+          cmp -s /usr/bin/msys-2.0.dll "$isolated/msys-2.0.dll" && exit 40 || test "$?" -eq 1
+          "$isolated/bash.exe" --noprofile --norc -c 'printf "PATCHED_BASH_OK\n"'
+          cp experiments/issue-809/msys2_fifo_unmodified_baseline.c experiments/issue-809/rwf809-compare.c
+          sed -i 's/MAX_WRITERS = 48/MAX_WRITERS = 96/' experiments/issue-809/rwf809-compare.c
+          grep -q 'MAX_WRITERS = 96' experiments/issue-809/rwf809-compare.c
+          gcc -std=gnu11 -O2 -Wall -Wextra -Werror -pthread experiments/issue-809/rwf809-compare.c -o experiments/issue-809/rwf809-compare.exe
+          cp experiments/issue-809/rwf809-compare.exe "$isolated/rwf809-compare.exe"
+          : >experiments/issue-809/windows-fifo-comparison.txt
+          for mode in stock patched; do
+            if test "$mode" = stock; then exe="$root/experiments/issue-809/rwf809-compare.exe"; else exe="$root/$isolated/rwf809-compare.exe"; fi
+            for writers in 1 2 3 16 32 63 64 65; do
+              for repetition in 1 2; do
+                echo "MODE=$mode REP=$repetition" | tee -a experiments/issue-809/windows-fifo-comparison.txt
+                "$exe" "$writers" 401 100 | tee -a experiments/issue-809/windows-fifo-comparison.txt
+              done
+            done
+          done
+      - name: Upload diagnostics and same-runner measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-809-isolated-fifo-native-evidence
+          if-no-files-found: warn
+          path: |
+            experiments/issue-809/windows-fifo-comparison.txt
+            experiments/issue-809/msys2_fifo_wfmo.generated.patch
