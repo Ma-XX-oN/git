@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
 """Generic preload manager for Linux and macOS.
 
-Clients write one line to the FIFO `<directory>/request`; `<pid>` is the
-caller's $BASHPID:
+Clients write one line to the FIFO `<directory>/request`. `<token>` is
+`<pid>.<seq>`: the caller's $BASHPID and a per-call counter.
 
-  PRELOAD <name> <pid> <executable-path>   ->  OK | ERROR <reason>
-  GET <name> <pid>                         ->  <directory>/worker-<pid> | ERROR <reason>
-  STOP <pid>                               ->  OK, then the manager exits
-  ACK <pid>                                ->  (no reply) delete reply.<pid>
+  PRELOAD <name> <token> <executable-path>  ->  OK | ERROR <reason>
+  GET <name> <token>                        ->  <directory>/worker-<pid> | ERROR <reason>
+  STOP <token>                              ->  OK, then the manager exits
+  ACK <token>                               ->  (no reply) delete reply.<token>
 
-A reply is written to the regular file `<directory>/reply.<pid>`, after which
-the caller is sent SIGUSR1. The manager holds the write end of the FIFO
-`<directory>/bell` open without ever writing to it, so a caller can block in
-`read -t` on it until the signal arrives.
+A reply is written to a temporary file and renamed to `<directory>/reply.<token>`,
+so a caller that polls for it never reads a partial reply. The per-call token
+keeps an earlier reply that has not been deleted yet from matching. The
+manager holds the write end of the FIFO `<directory>/bell` open without ever
+writing to it, so a caller can sleep in `read -t` on it between checks.
+(Bash's `read` is not interrupted by a trapped signal, so signals cannot be
+used to wake it.)
 """
 from __future__ import annotations
 import argparse
@@ -20,8 +23,8 @@ import errno
 import json
 import os
 from pathlib import Path
+import re
 import select
-import signal
 import sys
 import threading
 
@@ -50,8 +53,11 @@ def owner_alive(pid):
     return False
 
 
+TOKEN = re.compile(r"^([0-9]+)\.[0-9]+$")
+
+
 class Server:
-  """Dispatch request lines and deliver replies through files and signals.
+  """Dispatch request lines and deliver replies through files.
 
   Parameters
   ----------
@@ -66,32 +72,32 @@ class Server:
     self.manager = manager
     self.stopped = threading.Event()
 
-  def reply(self, pid, text):
-    """Publish one reply and wake its caller.
+  def reply(self, token, text):
+    """Publish one reply atomically.
 
     Parameters
     ----------
-    pid : int
-        Caller's $BASHPID.
+    token : str
+        Caller's `<pid>.<seq>` call token.
     text : str
         Reply line without newline.
 
     Returns
     -------
     bool
-        False if the caller no longer exists; the reply file is removed.
+        False if the caller no longer exists; no reply file is left.
     """
-    path = self.directory / ("reply." + str(pid))
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    pid = int(TOKEN.match(token).group(1))
+    if not owner_alive(pid):
+      return False
+    path = self.directory / ("reply." + token)
+    temporary = self.directory / ("reply-tmp." + token)
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
       os.write(fd, (text + "\n").encode("utf-8"))
     finally:
       os.close(fd)
-    try:
-      os.kill(pid, signal.SIGUSR1)
-    except ProcessLookupError:
-      path.unlink(missing_ok=True)
-      return False
+    os.replace(temporary, path)
     return True
 
   def handle(self, line):
@@ -104,35 +110,35 @@ class Server:
     """
     words = line.split(" ", 3)  # The executable path may contain spaces.
     command = words[0]
-    if command == "ACK" and len(words) == 2 and words[1].isdigit():
+    if command == "ACK" and len(words) == 2 and TOKEN.match(words[1]):
       (self.directory / ("reply." + words[1])).unlink(missing_ok=True)
-    elif command == "GET" and len(words) == 3 and words[2].isdigit():
-      threading.Thread(target=self._get, args=(words[1], int(words[2])),
+    elif command == "GET" and len(words) == 3 and TOKEN.match(words[2]):
+      threading.Thread(target=self._get, args=(words[1], words[2]),
                        daemon=True).start()
-    elif command == "PRELOAD" and len(words) == 4 and words[2].isdigit():
+    elif command == "PRELOAD" and len(words) == 4 and TOKEN.match(words[2]):
       threading.Thread(target=self._preload, daemon=True,
-                       args=(words[1], int(words[2]), words[3])).start()
-    elif command == "STOP" and len(words) == 2 and words[1].isdigit():
-      self.reply(int(words[1]), "OK")
+                       args=(words[1], words[2], words[3])).start()
+    elif command == "STOP" and len(words) == 2 and TOKEN.match(words[1]):
+      self.reply(words[1], "OK")
       log("MANAGER_STOP_REQUEST")
       self.stopped.set()
     else:
       log("INVALID_REQUEST " + repr(line))
 
-  def _get(self, name, pid):
+  def _get(self, name, token):
     """Allocate one worker for a caller."""
     result = self.manager.allocate(name)
     if isinstance(result, str):
-      self.reply(pid, result)
-    elif not self.reply(pid, str(self.directory / ("worker-" + str(result.pid)))):
+      self.reply(token, result)
+    elif not self.reply(token, str(self.directory / ("worker-" + str(result.pid)))):
       # The caller exited and never learned of this worker; reap it too, so
       # it does not remain as a zombie.
       result.kill()
       result.wait(timeout=5)
 
-  def _preload(self, name, pid, path):
+  def _preload(self, name, token, path):
     """Create a command's pool for a caller."""
-    self.reply(pid, self.manager.preload(name, path))
+    self.reply(token, self.manager.preload(name, path))
 
 
 def main():

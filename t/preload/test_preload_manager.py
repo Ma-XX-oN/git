@@ -3,7 +3,7 @@
 
 Windows: per-call duplex connections, including Git Bash's throwaway
 connection held open or closed without data. Linux/macOS: request FIFO,
-reply files and SIGUSR1, a program that hangs without READY, and a reply to a
+polled reply files, a program that hangs without READY, and a reply to a
 caller that has exited. Both: concurrent calls through the Bash library.
 """
 import argparse
@@ -11,7 +11,6 @@ import json
 import os
 from pathlib import Path
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
@@ -68,9 +67,7 @@ class Session:
       assert self.process.poll() is None, self.read_log()
       assert time.monotonic() < deadline, "manager did not become ready"
       time.sleep(.02)
-    self.woken = threading.Event()
-    if not WINDOWS:
-      signal.signal(signal.SIGUSR1, lambda signum, frame: self.woken.set())
+    self.sequence = 0
 
   def read_log(self):
     """Return the manager log text."""
@@ -111,8 +108,8 @@ class Session:
     Parameters
     ----------
     line : str
-        Request without newline. On Linux/macOS, `{pid}` is replaced by the
-        caller PID (this process unless pid is given).
+        Request without newline. On Linux/macOS, `{token}` is replaced by the
+        call token `<pid>.<seq>` (this process unless pid is given).
     pid : int, optional
         Unix caller PID that receives the reply; no wait if it is not ours.
 
@@ -128,20 +125,25 @@ class Session:
       finally:
         K.CloseHandle(handle)
     caller = os.getpid() if pid is None else pid
-    self.woken.clear()
+    self.sequence += 1
+    token = f"{caller}.{self.sequence}"
     with open(self.directory / "request", "w", encoding="utf-8") as fifo:
-      fifo.write(line.format(pid=caller) + "\n")
+      fifo.write(line.format(token=token) + "\n")
     if caller != os.getpid():
       return None
-    assert self.woken.wait(15), "no reply signal; log:\n" + self.read_log()
-    reply = (self.directory / f"reply.{caller}").read_text(encoding="utf-8").rstrip("\n")
+    reply_file = self.directory / f"reply.{token}"
+    deadline = time.monotonic() + 15
+    while not reply_file.exists():
+      assert time.monotonic() < deadline, "no reply; log:\n" + self.read_log()
+      time.sleep(.001)
+    reply = reply_file.read_text(encoding="utf-8").rstrip("\n")
     with open(self.directory / "request", "w", encoding="utf-8") as fifo:
-      fifo.write(f"ACK {caller}\n")
+      fifo.write(f"ACK {token}\n")
     return reply
 
   def stop(self):
     """Stop the manager and require a clean exit."""
-    assert self.request("STOP" if WINDOWS else "STOP {pid}") == "OK"
+    assert self.request("STOP" if WINDOWS else "STOP {token}") == "OK"
     assert self.process.wait(timeout=15) == 0, self.read_log()
     assert not (self.directory / "ready.json").exists()
     self.log.close()
@@ -165,12 +167,12 @@ def check_protocol(git, work):
   directory = work / "protocol"
   directory.mkdir()
   session = Session(directory)
-  preload = "PRELOAD git " + (str(git) if WINDOWS else "{pid} " + str(git))
+  preload = "PRELOAD git " + (str(git) if WINDOWS else "{token} " + str(git))
   assert session.request(preload) == "OK", session.read_log()
-  reply = session.request("GET git" if WINDOWS else "GET git {pid}")
+  reply = session.request("GET git" if WINDOWS else "GET git {token}")
   assert "worker-" in reply, reply
   print("PRELOAD_MANAGER_PASS get", flush=True)
-  missing = session.request("GET nope" if WINDOWS else "GET nope {pid}")
+  missing = session.request("GET nope" if WINDOWS else "GET nope {token}")
   assert missing == "ERROR not preloaded: nope", missing
   print("PRELOAD_MANAGER_PASS unknown-command", flush=True)
   if WINDOWS:
@@ -196,7 +198,7 @@ def check_protocol(git, work):
     hang.write_text("#!/bin/sh\nexec sleep 30\n", encoding="utf-8")
     hang.chmod(0o755)
     started = time.monotonic()
-    unsupported = session.request("PRELOAD hang-tool {pid} " + str(hang))
+    unsupported = session.request("PRELOAD hang-tool {token} " + str(hang))
     elapsed = time.monotonic() - started
     assert unsupported == "ERROR hang-tool doesn't support --preload-worker", unsupported
     assert elapsed < 5, elapsed
@@ -204,7 +206,7 @@ def check_protocol(git, work):
     # A caller that exited before its reply: the worker must not leak.
     dead = subprocess.Popen(["true"])
     dead.wait()
-    session.request("GET git {pid}", pid=dead.pid)
+    session.request("GET git {token}", pid=dead.pid)
     deadline = time.monotonic() + 10
     allocated = None
     while time.monotonic() < deadline and allocated is None:

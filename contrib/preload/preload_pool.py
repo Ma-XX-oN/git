@@ -307,7 +307,7 @@ def cleanup_session(directory):
     worker.rmdir()
   for name in ("request", "bell"):
     (directory / name).unlink(missing_ok=True)
-  for reply in directory.glob("reply.*"):
+  for reply in directory.glob("reply*.*"):  # reply.<token>, reply-tmp.<token>
     reply.unlink(missing_ok=True)
 
 

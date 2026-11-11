@@ -52,16 +52,22 @@ Each call first obtains a worker from the manager:
   reads the worker's pipe directory from the same connection. Each connection
   is a private reply channel, so concurrent subshells never see each other's
   replies.
-* Linux/macOS: the client writes `GET <name> $BASHPID` plus newline to the
-  `request` FIFO and waits for SIGUSR1, blocking in `read -t` on the `bell`
-  FIFO, which the manager holds open without writing. The manager writes the
-  worker directory to `reply.<pid>`, signals the caller, and deletes the file
-  when the caller sends `ACK <pid>`. `$BASHPID` (not `$$`) keeps replies
-  private to each subshell.
+* Linux/macOS: the client writes `GET <name> <token>` plus newline to the
+  `request` FIFO, where the token is `$BASHPID.<seq>` (a per-call counter).
+  The manager writes the worker directory to a temporary file and renames it
+  to `reply.<token>`; the client checks for that file in a loop, sleeping
+  between checks in `read -t 0.0002` on the `bell` FIFO, which the manager
+  holds open without writing, so waiting uses no CPU and no process. The
+  client then sends `ACK <token>` and the manager deletes the file.
+  `$BASHPID` (not `$$`) keeps replies private to each subshell, and the
+  per-call counter keeps an earlier, not yet deleted reply from matching.
+  Signals cannot wake the client: Bash's `read` is not interrupted by a
+  trapped signal (only `wait` is).
 
 The other requests are `PRELOAD <name> <path>` (Linux/macOS:
-`PRELOAD <name> <pid> <path>`), which replies `OK` or `ERROR <reason>`, and
-`STOP` (`STOP <pid>`). A worker whose reply cannot be delivered is killed.
+`PRELOAD <name> <token> <path>`), which replies `OK` or `ERROR <reason>`, and
+`STOP` (`STOP <token>`). A worker whose reply cannot be delivered (the caller
+has exited) is killed.
 
 == Modules and ownership
 
@@ -156,8 +162,6 @@ builtins; its process startup would undermine the speedup. A stream-copy builtin
 is a proposed follow-up to enable forwarding without that startup cost.
 Workers receive EOF on stdin. Bash variables cannot preserve embedded NUL
 output, so arbitrary binary streams need a client that transfers bytes directly.
-While a Linux/macOS call waits for its reply, the library sets a SIGUSR1 trap
-and resets it to the default afterwards.
 
 The Windows Bash client can hang when stderr fills its pipe buffer while the
 client is waiting for stdout EOF. This includes large stderr-only responses and

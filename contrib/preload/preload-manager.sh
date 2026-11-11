@@ -72,32 +72,37 @@ _preload_write_context() {
 }
 
 # Send one request line to the manager and store its reply line.
-# Argument: request line without newline (Unix requests already carry the
-# caller's $BASHPID). Sets _PRELOAD_REPLY. Returns zero if a reply arrived.
+# Arguments: request command, then its words. On Linux/macOS the call token
+# ($BASHPID.<seq>) is inserted after the command's first word, e.g.
+# `_preload_request GET git` sends `GET git <token>`. Sets _PRELOAD_REPLY.
+# Returns zero if a reply arrived.
 _preload_request() {
-  local req bell
+  local req bell token words
   _PRELOAD_REPLY=
   if [[ $_PRELOAD_PLATFORM == windows ]]; then
     _preload_open req "$PRELOAD_WIN_DIR\\request" 40 || return 1
-    printf '%s\n' "$1" >&"$req" && IFS= read -r _PRELOAD_REPLY <&"$req"
+    printf '%s\n' "$*" >&"$req" && IFS= read -r _PRELOAD_REPLY <&"$req"
     local rc=$?
     exec {req}>&-
     return "$rc"
   fi
   [[ -f $PRELOAD_DIR/ready.json ]] || return 1
-  _PRELOAD_READY=0
-  trap '_PRELOAD_READY=1' USR1
-  exec {bell}<"$PRELOAD_DIR/bell" || { trap - USR1; return 1; }
-  printf '%s\n' "$1" >"$PRELOAD_DIR/request" || { exec {bell}<&-; trap - USR1; return 1; }
-  until (( _PRELOAD_READY )); do
-    read -t 0.05 -u "$bell" _
-    [[ -f $PRELOAD_DIR/ready.json ]] || break
+  token=$BASHPID.$(( _PRELOAD_SEQ = ${_PRELOAD_SEQ:-0} + 1 ))
+  case $1 in
+    STOP) words="STOP $token" ;;
+    *) words="$1 $2 $token${3:+ ${*:3}}" ;;
+  esac
+  exec {bell}<"$PRELOAD_DIR/bell" || return 1
+  printf '%s\n' "$words" >"$PRELOAD_DIR/request" || { exec {bell}<&-; return 1; }
+  # The manager renames the complete reply into place; sleep between checks
+  # in read -t on the never-written bell FIFO (no CPU, no process).
+  until [[ -f $PRELOAD_DIR/reply.$token ]]; do
+    [[ -f $PRELOAD_DIR/ready.json ]] || { exec {bell}<&-; return 1; }
+    read -t 0.0002 -u "$bell" _
   done
   exec {bell}<&-
-  trap - USR1
-  (( _PRELOAD_READY )) || return 1
-  IFS= read -r _PRELOAD_REPLY <"$PRELOAD_DIR/reply.$BASHPID"
-  printf 'ACK %s\n' "$BASHPID" >"$PRELOAD_DIR/request"
+  IFS= read -r _PRELOAD_REPLY <"$PRELOAD_DIR/reply.$token"
+  printf 'ACK %s\n' "$token" >"$PRELOAD_DIR/request"
   return 0
 }
 
@@ -182,7 +187,7 @@ _preload_template_windows() {
 
 # Template for generated Linux/macOS command functions; see the Windows one.
 _preload_template_unix() {
-  local bell wdir rc count header chunk status out_open=1 err_open=1
+  local bell wdir rc count header chunk status out_open=1 err_open=1 token
   local fd_in fd_out fd_err fd_exit fd_ctl
   if (( $# > 31 )); then
     printf '__PRELOAD_NAME__: preload supports at most 31 arguments\n' >&2
@@ -192,18 +197,18 @@ _preload_template_unix() {
     printf 'PRELOAD ERROR: the preload manager is not running\n' >&2
     return 255
   fi
-  _PRELOAD_READY=0
-  trap '_PRELOAD_READY=1' USR1
-  printf 'GET __PRELOAD_NAME__ %s\n' "$BASHPID" >"$PRELOAD_DIR/request"
-  until (( _PRELOAD_READY )); do
-    read -t 0.05 -u "$bell" _
+  # A per-call token keeps a not-yet-deleted earlier reply from matching.
+  token=$BASHPID.$(( _PRELOAD_SEQ = ${_PRELOAD_SEQ:-0} + 1 ))
+  printf 'GET __PRELOAD_NAME__ %s\n' "$token" >"$PRELOAD_DIR/request"
+  # Wait without CPU or a process: read -t on the never-written bell FIFO.
+  until [[ -f $PRELOAD_DIR/reply.$token ]]; do
     [[ -f $PRELOAD_DIR/ready.json ]] || break
+    read -t 0.0002 -u "$bell" _
   done
   exec {bell}<&-
-  trap - USR1
-  if (( _PRELOAD_READY )); then
-    IFS= read -r wdir <"$PRELOAD_DIR/reply.$BASHPID"
-    printf 'ACK %s\n' "$BASHPID" >"$PRELOAD_DIR/request"
+  if [[ -f $PRELOAD_DIR/reply.$token ]]; then
+    IFS= read -r wdir <"$PRELOAD_DIR/reply.$token"
+    printf 'ACK %s\n' "$token" >"$PRELOAD_DIR/request"
   fi
   if [[ $wdir != "$PRELOAD_DIR/worker-"* ]]; then
     printf 'PRELOAD ERROR: %s\n' "${wdir:-the preload manager stopped}" >&2
@@ -303,10 +308,10 @@ preload() {
   fi
   if [[ $_PRELOAD_PLATFORM == windows ]]; then
     native=$(cygpath -w -- "$path") || return 1
-    _preload_request "PRELOAD $name $native"
   else
-    _preload_request "PRELOAD $name $BASHPID $path"
+    native=$path
   fi
+  _preload_request PRELOAD "$name" "$native"
   if [[ $_PRELOAD_REPLY != OK ]]; then
     printf 'preload: %s\n' "${_PRELOAD_REPLY#ERROR }" >&2
     return 1
@@ -320,11 +325,7 @@ preload() {
 _preload_stop() {
   local i
   if [[ -n ${_PRELOAD_MANAGER_JOB:-} ]] && kill -0 "$_PRELOAD_MANAGER_JOB" 2>/dev/null; then
-    if [[ $_PRELOAD_PLATFORM == windows ]]; then
-      _preload_request STOP
-    else
-      _preload_request "STOP $BASHPID"
-    fi
+    _preload_request STOP
     for (( i = 0; i < 400; i++ )); do
       kill -0 "$_PRELOAD_MANAGER_JOB" 2>/dev/null || break
       _preload_sleep .025

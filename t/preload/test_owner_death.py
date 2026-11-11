@@ -14,11 +14,10 @@ SHELL = r'''
 source "$1" || exit 1
 preload "$GIT_PRELOAD_WORKER_GIT" || exit 1
 # Allocate a worker without running a command, so the client owns it idle.
+_preload_request GET git || exit 2
 if [[ ${OSTYPE:-} == msys* || ${OSTYPE:-} == cygwin* ]]; then
-  _preload_request 'GET git' || exit 2
   allocated=${_PRELOAD_REPLY##*\\worker-}   # Native worker PID.
 else
-  _preload_request "GET git $BASHPID" || exit 2
   allocated=$_PRELOAD_REPLY                 # Worker FIFO directory.
 fi
 [[ $_PRELOAD_REPLY == *worker-* ]] || exit 3
