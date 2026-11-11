@@ -85,12 +85,25 @@ Each row is an untraced ABBA comparison with three workers, 240 samples per
 variant and matching compiler flags. The baseline snapshots environment per
 call; the final worker inherits manager startup environment. The workload
 keeps that environment unchanged. Native OS/Bash/Python versions, full flags,
-source revisions, binary digests and raw samples accompany the
-[final graphs](final-comparison/report.md). The
+source revisions, binary digests and raw samples accompany each raw report. The
 [checkpoint graphs](migration-checkpoints/report.md) retain all 12 preceding
 rows and add the three fast-gate CI pairs and four final comparisons.
 Separate jobs establish within-pair improvements; changes between checkpoints
 do not isolate the effect of a single cleanup edit.
+
+The [final graphs](final-comparison/report.md) compare the migrated build,
+preloaded, with unmodified upstream Git `750f5de7df` launched directly, each
+built and timed within one job ([run 42893906943](https://github.com/Ma-XX-oN/git/actions/runs/42893906943)
+and a local laptop run). Error bars and the superscript/subscript values give
+the distances to the bounds of the 95% bootstrap confidence interval of the
+median.
+
+| Platform | Hardware / logical CPUs | Unmodified Git ms (95% CI) | Migrated preloaded ms (95% CI) | % of unmodified (95% CI) | Change % |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Windows CI | AMD EPYC 9V74 / 4 | 16.94<sup>+0.29</sup><sub>-0.41</sub> | 2.893<sup>+0.014</sup><sub>-0.018</sub> | 17.08%<sup>+0.44</sup><sub>-0.30</sub> | -82.92% |
+| Linux CI | AMD EPYC 7763 / 4 | 1.421<sup>+0.017</sup><sub>-0.028</sub> | 1.0790<sup>+0.0050</sup><sub>-0.0070</sub> | 75.9%<sup>+1.6</sup><sub>-1.0</sub> | -24.1% |
+| macOS CI | Apple M1 (Virtual) / 3 | 7.13<sup>+0.21</sup><sub>-0.37</sub> | 2.381<sup>+0.093</sup><sub>-0.064</sub> | 33.4%<sup>+2.1</sup><sub>-1.2</sub> | -66.6% |
+| Windows 11 laptop | AMD Ryzen 7 5700U / 16 | 55.20<sup>+1.03</sup><sub>-0.36</sub> | 4.181<sup>+0.049</sup><sub>-0.053</sub> | 7.575%<sup>+0.097</sup><sub>-0.175</sub> | -92.425% |
 
 The adopted performance paths remain implemented: two blocking connectors
 with peer rendezvous, persistent serial allocator channels, reply-before-refill,
@@ -210,6 +223,14 @@ machines. Each row uses its own host/job baseline at 100%; results are not poole
 across hardware. The JSON companion preserves machine/runtime metadata, raw
 samples, compiler flags, source revisions and source-report digests.
 
+Measure against unmodified Git with
+`t/perf/compare_preload_upstream.py --upstream <built upstream tree>
+--output <directory>` from a built migrated tree; the
+`preload-upstream-timing.yml` workflow does this on `workbench/` branches. Plot
+the resulting `upstream.json` reports with
+`t/perf/plot_preload_upstream.py --input <upstream.json> --label <machine>
+--output <directory>`.
+
 ## Windows Bash environment conversion
 
 ### Startup-environment contract
@@ -314,7 +335,20 @@ on macOS (-39.37%). Each comparison is independent; do not pool machines or
 subtract another run's baseline. Raw samples and hardware/runtime identities are
 in `evidence/migration-3b0bdb-*-matched.json`.
 
-### Historical shadow checkpoint
+### Abandoned shadow checkpoint
+
+This checkpoint (`20a957982a`) tried to keep per-command environment transfer
+working on Windows by sending native-converted copies ("shadows") of the
+standard path variables alongside the MSYS `export -p` snapshot. It was a
+mistake: the shadows came from the manager's environment, which the workers
+already inherit, so they duplicated values the worker already had while adding
+per-command checks that slowed every call (+11.33% on the laptop). Converting
+genuinely changed paths per command was not reliable, because MSYS mappings go
+beyond drive prefixes. The next commit, `ba16959609`, dropped per-command
+environment changes: workers use the manager's startup environment, and
+re-sourcing `git-manager.sh` refreshes it. No shadow code remains. See the
+[performance journal](../PERFORMANCE-JOURNAL.md#abandoned-path-shadow-checkpoint).
+The original record follows.
 
 A new client-level output/status test reproduces a pre-existing failure with a
 small shell alias: `export -p` sends a colon-separated MSYS PATH, native shell
@@ -364,7 +398,7 @@ No installed Bash binary was modified.
 
 An earlier requirement to observe exported changes on each call led to the
 shadow checkpoint above. It is superseded by the startup-environment contract:
-changes require re-sourcing. Removing harmless shadow metadata was not required.
+changes require re-sourcing, and the shadow code was removed in `ba16959609`.
 A drive-prefix-only translation is insufficient for runtime mount mappings and
 path lists. The client uses each platform's installed Bash; builtin work is
 explicitly deferred.

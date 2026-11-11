@@ -51,9 +51,35 @@ pair and tracing disabled. Raw CI samples are in
 [Windows](performance/evidence/migration-5300cc-windows-matched.json),
 [Linux](performance/evidence/migration-5300cc-linux-matched.json) and
 [macOS](performance/evidence/migration-5300cc-macos-matched.json).
-The [final graphs](performance/final-comparison/report.md) show milliseconds
-and dimensionless baseline percentages. The [19-checkpoint history](performance/migration-checkpoints/report.md)
+The [19-checkpoint history](performance/migration-checkpoints/report.md)
 preserves earlier gains, regressions, workload policies and machine metadata.
+
+### Final timings against unmodified Git
+
+The [final graphs](performance/final-comparison/report.md) compare the
+migrated build, preloaded, with unmodified upstream Git `750f5de7df` launched
+directly. That is the upstream commit this branch starts from, built in the
+same job with identical compiler flags. Each round interleaves 120 direct and
+120 preloaded `git --version` calls; ABBA rounds alternate the directly timed
+binary between upstream and migrated Git. CI ran in
+[run 42893906943](https://github.com/Ma-XX-oN/git/actions/runs/42893906943);
+the laptop ran locally. Superscript and subscript values are the distances to
+the upper and lower bounds of the 95% bootstrap confidence interval of the
+median.
+
+| Machine | Unmodified Git ms (95% CI) | Migrated preloaded ms (95% CI) | % of unmodified (95% CI) | Change % |
+| --- | ---: | ---: | ---: | ---: |
+| Windows CI, EPYC 9V74 / 4 | 16.94<sup>+0.29</sup><sub>-0.41</sub> | 2.893<sup>+0.014</sup><sub>-0.018</sub> | 17.08%<sup>+0.44</sup><sub>-0.30</sub> | -82.92% |
+| Linux CI, EPYC 7763 / 4 | 1.421<sup>+0.017</sup><sub>-0.028</sub> | 1.0790<sup>+0.0050</sup><sub>-0.0070</sub> | 75.9%<sup>+1.6</sup><sub>-1.0</sub> | -24.1% |
+| macOS CI, M1 Virtual / 3 | 7.13<sup>+0.21</sup><sub>-0.37</sub> | 2.381<sup>+0.093</sup><sub>-0.064</sub> | 33.4%<sup>+2.1</sup><sub>-1.2</sub> | -66.6% |
+| Laptop, Ryzen 7 5700U / 16 | 55.20<sup>+1.03</sup><sub>-0.36</sub> | 4.181<sup>+0.049</sup><sub>-0.053</sub> | 7.575%<sup>+0.097</sup><sub>-0.175</sub> | -92.425% |
+
+The migrated build launched directly measured -4.2% (Linux), -2.9% (Windows),
+-11.1% (macOS) and +2.4% (laptop) against unmodified Git. These point estimates
+alone do not establish statistical equivalence or rule out ordinary-path
+overhead. Absolute times differ
+from earlier runs on other runner instances; only same-job values are compared.
+Raw samples are in `performance/evidence/upstream-750f5d-*.json`.
 
 ### Environment policy
 
@@ -149,7 +175,35 @@ this comparison does not isolate the removal's effect or establish its cause.
 The unchanged-environment workload and per-variant capture policies are retained
 in [migration-2ac970-windows-laptop-matched.json](performance/evidence/migration-2ac970-windows-laptop-matched.json).
 
-## Historical path-shadow correction checkpoint
+## Abandoned path-shadow checkpoint
+
+**What it was meant to do.** At this checkpoint each command sent the caller's
+complete `export -p` environment to the worker, so that a per-command change
+such as `VAR=3 git ...` reached Git. On Windows the standard path variables
+(`PATH`, `HOME`, `TMP` and others) arrive in MSYS form, such as a
+colon-separated POSIX `PATH`, which native Git cannot use: a small shell alias
+failed because native shell lookup found nothing. The shell would convert those
+variables with its own `cygpath -w` and export the native values as
+`__git_env_NAME` copies ("shadows") for the worker to use.
+
+**Why it was a mistake.** The shadows were redundant. The workers already
+inherit the manager's startup environment, with its native values, and the
+shadows were created from that same environment; in the normal case of an
+environment unchanged since startup they carried exactly what the worker
+already had. They did nothing useful, yet the implementation added per-command
+work: cache comparisons in the client on every call and shadow selection and
+removal in the worker. That work contributed to the checkpoint's measured
++11.33% (+0.6245 ms) regression on the laptop; isolation runs attributed
+0.4165 ms to the per-call
+cache checks alone. Honouring genuinely changed path variables per command was
+not practical either: drive prefixes are not the only MSYS mapping (`/usr/bin`,
+`/home`, `/tmp`, mount points and path lists also differ, and Git Bash and MSYS2
+place `/home` under different roots), so a cheap drive-prefix translation in
+the worker would be wrong. Per-command environment changes were therefore
+dropped. The next commit, `ba16959609`, makes workers use the manager's startup
+environment; re-sourcing `git-manager.sh` replaces the manager and its workers
+to pick up changes. All shadow code was removed; none remains in the final
+source. The original record follows as a negative result.
 
 The Windows shell caches converted values for the runtime's eight standard
 path variables through its own `/usr/bin/cygpath`. Exported `__git_env_NAME`

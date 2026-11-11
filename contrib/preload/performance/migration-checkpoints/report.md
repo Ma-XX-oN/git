@@ -9,7 +9,7 @@ Each row compares revisions on one host/job. Lower latency is better.
 | macOS CI / shared worker | 4.4125 | 4.0810 | -0.3315 | 92.49% | -7.51% |
 | Laptop / initial extraction | 5.0670 | 5.1705 | +0.1035 | 102.04% | +2.04% |
 | Laptop / reviewed worker | 4.8295 | 4.8730 | +0.0435 | 100.90% | +0.90% |
-| Laptop / path shadows | 5.5095 | 6.1340 | +0.6245 | 111.33% | +11.33% |
+| Laptop / path shadows (abandoned) | 5.5095 | 6.1340 | +0.6245 | 111.33% | +11.33% |
 | Laptop / startup environment | 4.6580 | 4.0860 | -0.5720 | 87.72% | -12.28% |
 | Linux CI / startup environment | 1.7755 | 1.0550 | -0.7205 | 59.42% | -40.58% |
 | Windows CI / pre-cleanup | 4.3145 | 3.2590 | -1.0555 | 75.54% | -24.46% |
