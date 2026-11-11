@@ -185,9 +185,11 @@ def main():
                 tcp_nodelay="server only; Bash client uses default socket options",
                 results=[])
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    for framing in ("line", "fixed8", "fixed9"):
-        for tcp in ("tcp", "tcp-nodelay"):
-            for round_number in range(args.rounds):
+    frames = ("line", "fixed8", "fixed9")
+    for round_number in range(args.rounds):
+        offset = round_number % len(frames)
+        for framing in frames[offset:] + frames[:offset]:
+            for tcp in ("tcp", "tcp-nodelay"):
                 for transport in ("fifo", tcp, tcp, "fifo"):
                     row = measure(transport, framing, args.count, 30, bash)
                     row.update(round=round_number, comparison=tcp)
