@@ -35,6 +35,9 @@ jobs:
           sed 's/MAX_WRITERS = 48/MAX_WRITERS = 96/' experiments/issue-809/msys2_fifo_unmodified_baseline.c >experiments/issue-809/rwf809_compare.c
           grep -q 'MAX_WRITERS = 96' experiments/issue-809/rwf809_compare.c
           gcc -std=gnu11 -O2 -Wall -Wextra -Werror -pthread experiments/issue-809/rwf809_compare.c -o experiments/issue-809/rwf809_compare.exe
+          sed 's/MAX_WRITERS = 48/MAX_WRITERS = 96/' experiments/issue-809/msys2_fifo_native_writer_baseline.c >experiments/issue-809/rwf809_native_write.c
+          grep -q 'MAX_WRITERS = 96' experiments/issue-809/rwf809_native_write.c
+          gcc -std=gnu11 -O2 -Wall -Wextra -Werror -pthread experiments/issue-809/rwf809_native_write.c -o experiments/issue-809/rwf809_native_write.exe
       - name: Compare stock and patched in separate native Windows process trees
         shell: pwsh
         run: |
@@ -54,6 +57,7 @@ jobs:
             Copy-Item (Join-Path $sdk 'msys-*.dll') $bin
             Copy-Item (Join-Path $sdk 'bash.exe') $bin
             Copy-Item $compare (Join-Path $bin 'rwf809_compare.exe')
+            Copy-Item (Join-Path $env:GITHUB_WORKSPACE 'experiments\issue-809\rwf809_native_write.exe') (Join-Path $bin 'rwf809_native_write.exe')
           }
           Copy-Item $prior (Join-Path $patch 'usr\bin\msys-2.0.dll') -Force
           $stockHash = (Get-FileHash (Join-Path $stock 'usr\bin\msys-2.0.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -98,6 +102,22 @@ jobs:
                 $tag | Add-Content $results
                 $out = RunNative $exe @("$writers",'201','100') 30000
                 if ($out -notmatch "BASELINE_FIFO writers=$writers ") { throw "Missing expected data: $tag" }
+                $out | Add-Content $results
+              }
+            }
+          }
+
+          # Direct Win32 writes bypass MSYS2's release_select_sem() notification.
+          # These are independent measurements from the POSIX-writer control.
+          foreach ($item in @(@('stock',$stock),@('patched',$patch))) {
+            $exe = Join-Path $item[1] 'usr\bin\rwf809_native_write.exe'
+            foreach ($writers in @(1,2,3,16,32,63,64,65)) {
+              foreach ($repeat in @(1,2)) {
+                $tag = "WRITE_PATH=WIN32_DIRECT MODE=$($item[0]) REP=$repeat WRITERS=$writers"
+                Write-Host $tag
+                $tag | Add-Content $results
+                $out = RunNative $exe @("$writers",'201','100') 30000
+                if ($out -notmatch "BASELINE_FIFO writers=$writers ") { throw "Missing direct-write sample: $tag" }
                 $out | Add-Content $results
               }
             }
