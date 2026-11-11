@@ -59,14 +59,15 @@ jobs:
           $stockHash = (Get-FileHash (Join-Path $stock 'usr\bin\msys-2.0.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($stockHash -eq $hash) { throw 'Control DLL matches candidate' }
           "STOCK_DLL_SHA256=$stockHash" | Add-Content $results
-          function RunNative([string]$exe,[string[]]$args,[int]$limit) {
+          function RunNative([string]$exe,[string[]]$arguments,[int]$limit) {
             $psi = [System.Diagnostics.ProcessStartInfo]::new()
             $psi.FileName = $exe
             $psi.UseShellExecute = $false
             $psi.CreateNoWindow = $true
             $psi.RedirectStandardOutput = $true
             $psi.RedirectStandardError = $true
-            foreach ($arg in $args) { [void]$psi.ArgumentList.Add($arg) }
+            if ($arguments.Count -lt 1) { throw "Missing native command arguments: $exe" }
+            foreach ($arg in $arguments) { [void]$psi.ArgumentList.Add($arg) }
             $p = [System.Diagnostics.Process]::Start($psi)
             if ($null -eq $p) { throw "Failed to launch $exe" }
             try {
