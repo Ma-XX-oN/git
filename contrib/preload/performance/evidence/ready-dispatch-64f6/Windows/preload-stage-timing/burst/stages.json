@@ -1,0 +1,68 @@
+{
+  "platform": "win32",
+  "mode": "burst",
+  "calls": 500,
+  "client_record": "W",
+  "stages": {
+    "client entry->connected": {
+      "median_us": 265.0,
+      "p90_us": 304.0,
+      "n": 500
+    },
+    "client connected->sent": {
+      "median_us": 52.0,
+      "p90_us": 56.0,
+      "n": 500
+    },
+    "client sent->replied": {
+      "median_us": 149.0,
+      "p90_us": 184.0,
+      "n": 500
+    },
+    "client replied->channels": {
+      "median_us": 1350.0,
+      "p90_us": 1617.0,
+      "n": 500
+    },
+    "client channels->request": {
+      "median_us": 190.0,
+      "p90_us": 245.0,
+      "n": 500
+    },
+    "client request->output": {
+      "median_us": 2183.0,
+      "p90_us": 5547.0,
+      "n": 500
+    },
+    "client output->status": {
+      "median_us": 154.0,
+      "p90_us": 168.0,
+      "n": 500
+    },
+    "client total": {
+      "median_us": 4397.0,
+      "p90_us": 7702.0,
+      "n": 500
+    },
+    "manager received->allocated": {
+      "median_us": 43.0,
+      "p90_us": 52.0,
+      "n": 500
+    },
+    "manager allocated->delivered": {
+      "median_us": 51.0,
+      "p90_us": 58.0,
+      "n": 500
+    },
+    "transit request (client sent->manager received)": {
+      "median_us": 14.0,
+      "p90_us": 29.0,
+      "n": 500
+    },
+    "transit reply (manager delivered->client replied)": {
+      "median_us": 37.0,
+      "p90_us": 56.0,
+      "n": 500
+    }
+  }
+}

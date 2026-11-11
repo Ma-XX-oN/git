@@ -1,0 +1,83 @@
+{
+  "platform": "darwin",
+  "mode": "paced",
+  "calls": 500,
+  "client_record": "U",
+  "stages": {
+    "client entry->claimed": {
+      "median_us": 71.5,
+      "p90_us": 87.0,
+      "n": 500
+    },
+    "client claimed->opened": {
+      "median_us": 1.0,
+      "p90_us": 1.0,
+      "n": 500
+    },
+    "client opened->sent": {
+      "median_us": 31.0,
+      "p90_us": 37.0,
+      "n": 500
+    },
+    "client sent->replied": {
+      "median_us": 286.5,
+      "p90_us": 445.0,
+      "n": 500
+    },
+    "client replied->freed": {
+      "median_us": 8.0,
+      "p90_us": 24.0,
+      "n": 500
+    },
+    "client freed->channels": {
+      "median_us": 350.0,
+      "p90_us": 479.0,
+      "n": 500
+    },
+    "client channels->request": {
+      "median_us": 89.0,
+      "p90_us": 173.0,
+      "n": 500
+    },
+    "client request->output": {
+      "median_us": 555.5,
+      "p90_us": 754.0,
+      "n": 500
+    },
+    "client output->status": {
+      "median_us": 134.0,
+      "p90_us": 222.0,
+      "n": 500
+    },
+    "client total": {
+      "median_us": 1546.0,
+      "p90_us": 2025.0,
+      "n": 500
+    },
+    "manager received->thread": {
+      "median_us": 9.0,
+      "p90_us": 16.0,
+      "n": 500
+    },
+    "manager thread->allocated": {
+      "median_us": 34.0,
+      "p90_us": 77.0,
+      "n": 500
+    },
+    "manager allocated->delivered": {
+      "median_us": 111.0,
+      "p90_us": 184.0,
+      "n": 500
+    },
+    "transit request (client sent->manager received)": {
+      "median_us": 73.0,
+      "p90_us": 121.0,
+      "n": 500
+    },
+    "transit reply (manager delivered->client replied)": {
+      "median_us": 48.0,
+      "p90_us": 107.0,
+      "n": 500
+    }
+  }
+}

@@ -1,0 +1,2 @@
+# Preserve native Windows artifact bytes while checking ordinary whitespace.
+Windows/** whitespace=trail,space,cr-at-eol

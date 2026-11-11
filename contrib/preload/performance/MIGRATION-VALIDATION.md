@@ -505,7 +505,7 @@ Six focused tests cover immediate reply/refill ordering, nonblocking allocation
 with and without a READY worker, shortage isolation, ordering behind PRELOAD
 and another GET, and cleanup when delivery fails. They pass locally, as do the
 existing manager lifecycle, Windows protocol/concurrency, and shell-environment
-checks. Native Linux/macOS acceptance and performance are pending CI.
+checks. Native CI acceptance and performance results are recorded below.
 
 `t/perf/compare_preload_dispatch.py` compares the generic library from
 `346517302dfc305cf122f359714c0dc12e4b0884` with the candidate using one identical
@@ -525,3 +525,73 @@ dispatch implementation is unchanged, so these small differences are control
 variation, not evidence of a Unix fast-path benefit or a C-manager benefit.
 Raw samples and identities are in
 [ready-dispatch-windows-control.json](evidence/ready-dispatch-windows-control.json).
+
+### CI measurements for 64f6b0ac25
+
+[Run 43068465402](https://github.com/Ma-XX-oN/git/actions/runs/43068465402)
+measures candidate `64f6b0ac25fd5c14db510982dc145502845a8afe` against generic
+library baseline `346517302dfc305cf122f359714c0dc12e4b0884`. Each workload has
+three ABBA repetitions, six rounds and 720 samples per variant. Each row below
+compares variants on one runner using one worker binary; values are pooled
+sample medians. These cohorts must not be compared as before/after measurements
+against earlier CI runs on different hardware.
+
+| Platform | Workload | Baseline ms | Candidate ms | Candidate / baseline | Reduction ms |
+|---|---|---:|---:|---:|---:|
+| Linux | Repeated shell calls | 0.9040 | 0.8720 | 96.46% | 0.0320 |
+| Linux | Command substitution | 1.6035 | 1.5575 | 97.13% | 0.0460 |
+| macOS | Repeated shell calls | 1.9255 | 1.8560 | 96.39% | 0.0695 |
+| macOS | Command substitution | 3.0725 | 3.0420 | 99.01% | 0.0305 |
+| Windows | Repeated shell calls (control) | 4.1660 | 4.2350 | 101.66% | -0.0690 |
+| Windows | Command substitution (control) | 14.2500 | 14.3720 | 100.86% | -0.1220 |
+
+Linux candidate round medians are below every baseline round median for each
+workload. macOS round variation is larger: the command-substitution ABBA groups
+vary in direction, so its pooled 1% reduction is inconclusive. The shell-call
+result is a modest observed reduction, not a general speedup guarantee.
+The Windows dispatch path is unchanged; its small increases do not measure
+the Unix fast path, and their repeatability is not established.
+
+| Runner | Hardware | OS / architecture | Python | Bash |
+|---|---|---|---|---|
+| Linux | AMD EPYC 9V74, 4 logical CPUs assigned | Linux 7.0.0-1019-azure, x86_64, glibc 2.43 | 3.13.18 | 5.3.9 |
+| macOS | Apple M2 Pro (Virtual), 5 logical CPUs assigned | macOS 26.7.2, arm64 | 3.13.17 | 5.3.20 |
+| Windows | Intel Xeon Platinum 8370C, 4 logical CPUs assigned | Windows Server 2025 build 26100, AMD64 | 3.13.17 | 5.3.20 (Cygwin) |
+
+Both Unix jobs pass Makefile and Meson worker validation, the six dispatch
+tests, manager protocol/concurrency and lifecycle checks, owner death,
+environment/output checks, supported command regressions, 6,000-command stress,
+and the no-pthread build check. Their additional same-job comparison against
+the pre-migration client measures 0.8210 versus 0.8720 ms on Linux and 1.5410
+versus 1.8110 ms on macOS. That is a different baseline from the table above.
+The Windows job also passes Makefile/Meson worker validation, the dispatch,
+protocol/concurrency, lifecycle, owner-death, environment/output, supported
+regression and 6,000-command checks. Its production/upstream comparison measures
+4.1160 ms for the pre-migration client, 3.8665 ms for the candidate and 22.0240 ms
+for direct upstream Git. All three native jobs succeed; the optional full
+ordinary-Git compatibility jobs are skipped, as required for this development
+stage.
+
+Separate diagnostic cohorts with stage timers enabled measure request-to-reply
+median at 109 us on Linux and 286 us on macOS. Allocation and reply-delivery
+stage medians are 15/42 us and 34/111 us respectively. Their sum is not a
+measured C-manager saving: these wall-clock stages include Python work, system
+calls and scheduling. A C manager remains a reasonable same-protocol experiment
+for the remaining overhead; no native-manager performance gain is established.
+
+Raw comparisons and stage samples are preserved under
+[Linux evidence](evidence/ready-dispatch-64f6/Linux/preload-dispatch-comparison/matched.json)
+and [macOS evidence](evidence/ready-dispatch-64f6/macOS/preload-dispatch-comparison/matched.json),
+plus the [Windows control](evidence/ready-dispatch-64f6/Windows/preload-dispatch-comparison/matched.json).
+Each platform directory also contains `preload-comparison/matched.json` and
+`preload-stage-timing/{paced,burst}/`, including raw client timestamps and
+manager logs as well as the stage summaries.
+
+The separate [general Git CI run](https://github.com/Ma-XX-oN/git/actions/runs/43068465407)
+has failures outside this change: representative Linux/macOS/Windows builds
+reject signedness comparisons in `preload-worker.c`, `preload-worker-posix.c`
+and `preload-transport-win32.c` under `-Werror`; dependency setup also encounters
+an existing `/usr/bin/dirname` symlink. Those C files and
+`ci/install-dependencies.sh` are byte-for-byte unchanged between the baseline
+and candidate commits. The preload acceptance results do not establish that
+the general Git CI matrix is green.
