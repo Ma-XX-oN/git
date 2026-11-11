@@ -20,73 +20,68 @@ report_exit() {
 }
 phase=startup
 trap report_exit EXIT
-# Capture the sourcing owner's discovery paths after each replacement.
-# No arguments; session and ready receive borrowed shell path values.
-session_paths() {
-  case $OSTYPE in
-    msys*|cygwin*) ready=$_GIT_PRELOAD_MANAGER_READY; session=${ready%/*} ;;
-    *) session=$_GIT_PRELOAD_UNIX_DIRECTORY; ready=$session/ready.json ;;
-  esac
-}
-# Argument 1: retired session directory. Fail if readiness or worker paths remain.
-check_retired_session() {
-  local entry
-  [[ ! -f $1/ready.json ]] || return 1
-  for entry in "$1"/worker-*; do
-    [[ ! -d $entry ]] || return 1
-  done
+# Argument 1: the replaced manager's job PID. Fail if it is still running.
+# The session directory is reused and recreated, so it only holds the new
+# manager's files.
+check_retired_manager() {
+  ! kill -0 "$1" 2>/dev/null
 }
 # A noninteractive runner may have no default editor after GIT_EDITOR is unset.
 export EDITOR='fallback editor'
 export GIT_EDITOR='initial editor'
-source "$1" 2 || exit 10
-session_paths
-cp "$ready" "$2/first.json" || exit 11
-first_session=$session
+source "$1" || exit 10
+preload "$GIT_PRELOAD_WORKER_GIT" || exit 10
+cp "$PRELOAD_DIR/ready.json" "$2/first.json" || exit 11
+first_job=$_PRELOAD_MANAGER_JOB
 phase=initial-value
-actual=$(git-ipc var GIT_EDITOR) || exit 12
+actual=$(git var GIT_EDITOR) || exit 12
 [[ $actual == 'initial editor' ]] || exit 13
 export GIT_EDITOR='refreshed editor'
 phase=frozen-value
-actual=$(git-ipc var GIT_EDITOR) || exit 14
+actual=$(git var GIT_EDITOR) || exit 14
 [[ $actual == 'initial editor' ]] || exit 15
 phase=restart
-source "$1" 4 || exit 16
-check_retired_session "$first_session" || exit 17
-session_paths
-cp "$ready" "$2/second.json" || exit 18
-second_session=$session
+source "$1" || exit 16
+check_retired_manager "$first_job" || exit 17
+cp "$PRELOAD_DIR/ready.json" "$2/second.json" || exit 18
+second_job=$_PRELOAD_MANAGER_JOB
 phase=refreshed-value
-actual=$(git-ipc var GIT_EDITOR) || exit 19
+actual=$(git var GIT_EDITOR) || exit 19
 [[ $actual == 'refreshed editor' ]] || exit 20
 unset GIT_EDITOR
 phase=unset-reference
 expected=$("$GIT_PRELOAD_WORKER_GIT" var GIT_EDITOR) || exit 21
 phase=unset-restart
-source "$1" 3 || exit 22
-check_retired_session "$second_session" || exit 23
-actual=$(git-ipc var GIT_EDITOR) || exit 24
+source "$1" || exit 22
+check_retired_manager "$second_job" || exit 23
+actual=$(git var GIT_EDITOR) || exit 24
 [[ $actual == "$expected" ]] || exit 25
 phase=subshell
 (
   export GIT_EDITOR='subshell editor'
-  source "$1" 1 || exit 26
-  actual=$(git-ipc var GIT_EDITOR) || exit 27
+  source "$1" || exit 26
+  actual=$(git var GIT_EDITOR) || exit 27
   [[ $actual == 'subshell editor' ]] || exit 28
 ) || exit 29
 phase=parent-after-subshell
-actual=$(git-ipc var GIT_EDITOR) || exit 30
+actual=$(git var GIT_EDITOR) || exit 30
 [[ $actual == "$expected" ]] || exit 31
-phase=invalid-resize
-if source "$1" 0 >/dev/null 2>&1; then exit 32; fi
-actual=$(git-ipc var GIT_EDITOR) || exit 33
+phase=child-process
+# A separate Bash process reuses this session through the exported function.
+bash --noprofile --norc -c '
+  [[ $(type -t git) == function ]] || exit 1
+  actual=$(git var GIT_EDITOR) || exit 2
+  [[ $actual == "$1" ]] || exit 3' child "$expected" || exit 35
+phase=invalid-preload
+if preload "$2/no-such-command" 2>/dev/null; then exit 32; fi
+actual=$(git var GIT_EDITOR) || exit 33
 [[ $actual == "$expected" ]] || exit 34
 printf 'ENVIRONMENT_RESTART_PASS\n'
 '''
 
 
 def main():
-    """Validate frozen session values, refresh, cleanup, resize and owner isolation.
+    """Validate frozen session values, refresh, cleanup, child reuse and owner isolation.
 
     Returns
     -------
@@ -103,9 +98,9 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env["GIT_PRELOAD_WORKER_GIT"] = str(args.git.resolve())
-    env["GIT_PRELOAD_MANAGER_PYTHON"] = sys.executable
+    env["PRELOAD_PYTHON"] = sys.executable
     command = [shutil.which("bash"), "--noprofile", "--norc", "-c", SHELL,
-               "environment-restart", shell_path(root / "contrib/preload/git-manager.sh"),
+               "environment-restart", shell_path(root / "contrib/preload/preload-manager.sh"),
                shell_path(output)]
     process = subprocess.Popen(command, env=env, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE, start_new_session=os.name != "nt")
@@ -118,7 +113,7 @@ def main():
     (output / "stderr.log").write_bytes(err)
     assert process.returncode == 0, (process.returncode, out, err)
     assert out == b"ENVIRONMENT_RESTART_PASS\n", out
-    print("PRELOAD_SHELL_ENVIRONMENT_PASS startup restart unset resize subshell cleanup", flush=True)
+    print("PRELOAD_SHELL_ENVIRONMENT_PASS startup restart unset subshell child invalid cleanup", flush=True)
 
 
 if __name__ == "__main__":

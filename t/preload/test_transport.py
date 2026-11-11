@@ -14,14 +14,15 @@ def main():
     if os.name == "nt":
         from test_windows_worker_lifecycle import K, INVALID, write, read_to_eof
         for winners in ((0, 0), (0, 1), (1, 0), (1, 1)):
-            stem = r"\\.\pipe\git-preload-helper-" + uuid.uuid4().hex
+            # A pipe "directory"; the transport names channels <stem>\<channel>.
+            stem = r"\\.\pipe\preload-helper-" + uuid.uuid4().hex
             process = subprocess.Popen([helper, "preload", "transport", stem], stdout=subprocess.PIPE)
             handles = []
             try:
                 assert process.stdout.readline() == b"READY\n"
                 accepted = []
                 for channel, winner in zip(("request", "reply"), winners):
-                    pair = [K.CreateFileW(stem + "-" + channel, 0xc0000000, 0, None, 3, 0, None)
+                    pair = [K.CreateFileW(stem + "\\" + channel, 0xc0000000, 0, None, 3, 0, None)
                             for _ in range(2)]
                     assert INVALID not in pair
                     handles.extend(pair)

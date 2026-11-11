@@ -11,15 +11,17 @@ import time
 from acceptance import shell_path
 
 SHELL = r'''
-source "$1" 3 || exit 1
+source "$1" || exit 1
+preload "$GIT_PRELOAD_WORKER_GIT" || exit 1
+# Allocate a worker without running a command, so the client owns it idle.
 if [[ ${OSTYPE:-} == msys* || ${OSTYPE:-} == cygwin* ]]; then
-  printf 'GET\n' >&8 || exit 2
-  IFS= read -r allocated <&9 || exit 3
+  _preload_request 'GET git' || exit 2
+  allocated=${_PRELOAD_REPLY##*\\worker-}   # Native worker PID.
 else
-  printf 'GET\n' >"$_GIT_PRELOAD_UNIX_DIRECTORY/allocate-req" || exit 2
-  IFS= read -r allocated <&"$_GIT_PRELOAD_UNIX_REPLY_FD" || exit 3
-  allocated=$_GIT_PRELOAD_UNIX_DIRECTORY/worker-$allocated
+  _preload_request "GET git $BASHPID" || exit 2
+  allocated=$_PRELOAD_REPLY                 # Worker FIFO directory.
 fi
+[[ $_PRELOAD_REPLY == *worker-* ]] || exit 3
 printf '%s\n' "$allocated"
 while :; do sleep 1; done
 '''
@@ -33,9 +35,9 @@ def main():
     root = Path(__file__).resolve().parents[2]
     environment = os.environ.copy()
     environment["GIT_PRELOAD_WORKER_GIT"] = str(args.git.resolve())
-    environment["GIT_PRELOAD_MANAGER_PYTHON"] = sys.executable
+    environment["PRELOAD_PYTHON"] = sys.executable
     child = subprocess.Popen([shutil.which("bash"), "--noprofile", "--norc", "-c", SHELL,
-                              "owner-death", shell_path(root / "contrib/preload/git-manager.sh")],
+                              "owner-death", shell_path(root / "contrib/preload/preload-manager.sh")],
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment)
     handle = None
     try:

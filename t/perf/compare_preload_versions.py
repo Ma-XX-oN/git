@@ -72,39 +72,53 @@ def main():
     """Retain ABBA raw timings, binary identities and matching build flags."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--baseline", required=True, type=Path)
+    parser.add_argument("--baseline-ref", default="production/preload",
+                        help="Name recorded for the baseline revision.")
     parser.add_argument("--candidate", type=Path, default=Path.cwd())
     parser.add_argument("--output", type=Path, default=Path("preload-comparison"))
+    parser.add_argument("--rounds", type=int, default=2,
+                        help="ABBA repetitions; each adds two rounds per variant.")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     windows = os.name == "nt"
-    report = {"baseline": "working-version-two", "workers": 3,
+    report = {"baseline": args.baseline_ref, "workers": 3,
               "host": os.environ.get("COMPUTERNAME", os.uname().nodename if not windows else ""),
               "platform": sys.platform, "tracing": False,
               "workload": "git --version; environment unchanged after manager startup",
               "environment_policy": {
-                  "baseline": "complete environment snapshot per command",
+                  "baseline": "environment inherited from manager startup",
                   "candidate": "environment inherited from manager startup"},
               "machine": machine_metadata(),
-              "order": ["baseline", "candidate", "candidate", "baseline"], "rounds": [],
-              "variants": {}}
+              "order": ["baseline", "candidate", "candidate", "baseline"] * args.rounds,
+              "rounds": [], "variants": {}, "layouts": {}}
     variants = {}
     for name, root in (("baseline", args.baseline.resolve()), ("candidate", args.candidate.resolve())):
-        old = name == "baseline"
-        directory = root / ("experiments/issue-809" if old else "contrib/preload")
-        benchfile = directory / "pool_size_ab_benchmark.py" if old else root / "t/perf/preload_pool_benchmark.py"
-        bench = load_benchmark(benchfile, "benchmark_" + name)
-        bench.OUT = args.output
         git = root / ("git.exe" if windows else "git")
         environment = os.environ.copy()
         for key in list(environment):
-            if key.startswith(("GIT809_", "GIT_PRELOAD_", "GIT_TRACE")):
+            if key.startswith(("GIT809_", "GIT_PRELOAD_", "GIT_TRACE", "PRELOAD_")):
                 environment.pop(key)
-        prefix = "GIT809" if old else "GIT_PRELOAD"
-        environment[prefix + "_PLATFORM"] = "windows" if windows else "unix"
-        environment[prefix + "_MANAGER_PYTHON"] = sys.executable
-        environment[prefix + "_WORKER_GIT"] = str(git)
+        if (root / "contrib/preload/preload-manager.sh").exists():
+            # Generic library: one manager, per-call request/reply handshake.
+            report["layouts"][name] = "generic preload-manager.sh"
+            client = root / "contrib/preload/preload-manager.sh"
+            benchfile = root / "t/perf/preload_pool_benchmark.py"
+            environment["PRELOAD_PYTHON"] = sys.executable
+        else:
+            old = not (root / "contrib/preload/git-manager.sh").exists()
+            report["layouts"][name] = ("experiments/issue-809" if old
+                                       else "git-manager.sh persistent allocator")
+            directory = root / ("experiments/issue-809" if old else "contrib/preload")
+            client = directory / "git-manager.sh"
+            benchfile = (directory / "pool_size_ab_benchmark.py" if old
+                         else root / "t/perf/preload_pool_benchmark.py")
+            prefix = "GIT809" if old else "GIT_PRELOAD"
+            environment[prefix + "_PLATFORM"] = "windows" if windows else "unix"
+            environment[prefix + "_MANAGER_PYTHON"] = sys.executable
+            environment[prefix + "_WORKER_GIT"] = str(git)
+        bench = load_benchmark(benchfile, "benchmark_" + name)
+        bench.OUT = args.output
         environment["MSYS2_ARG_CONV_EXCL"] = "*"
-        client = directory / "git-manager.sh"
         variants[name] = (bench, str(client), str(git), environment)
         report["variants"][name] = {
             "git": str(git), "binary_sha256": hashlib.sha256(git.read_bytes()).hexdigest(),
@@ -122,6 +136,10 @@ def main():
         report["medians_ms"] = {
             name: statistics.median(sample for row in report["rounds"] if row["variant"] == name
                                     for sample in row["ipc"]["samples_ms"])
+            for name in variants}
+        report["direct_medians_ms"] = {
+            name: statistics.median(sample for row in report["rounds"] if row["variant"] == name
+                                    for sample in row["direct"]["samples_ms"])
             for name in variants}
         report["reduction_ms"] = report["medians_ms"]["baseline"] - report["medians_ms"]["candidate"]
         report["candidate_percent_of_baseline"] = (

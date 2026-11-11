@@ -14,8 +14,9 @@ CASES = {"small-mixed": (4096, 4096), "stdout-large": (1048576, 0),
          "err-first": (1048576, 1048576)}
 
 SHELL = r'''
-source "$1" 3 || exit 100
-printf '%s\n' "${_GIT_PRELOAD_MANAGER_LOG:-${_GIT_PRELOAD_UNIX_MANAGER_LOG:-}}" >"$2/manager-path.txt"
+source "$1" || exit 100
+preload "$GIT_PRELOAD_WORKER_GIT" || exit 100
+printf '%s\n' "$PRELOAD_DIR/manager.log" >"$2/manager-path.txt"
 for order in "${@:3}"; do
   case $order in
     small-mixed) output_alias='!printf "%04096d" 0; printf "%04096d" 0 >&2; exit 7' ;;
@@ -25,7 +26,7 @@ for order in "${@:3}"; do
     err-first) output_alias='!printf "%01048576d" 0 >&2; printf "%01048576d" 0; exit 7' ;;
     *) exit 2 ;;
   esac
-  git-ipc -c "alias.preload-output=$output_alias" preload-output \
+  git -c "alias.preload-output=$output_alias" preload-output \
     >"$2/$order.stdout" 2>"$2/$order.stderr"
   [[ $? == 7 ]] || exit 32
 done
@@ -74,10 +75,10 @@ def main():
     root = Path(__file__).resolve().parents[2]
     env = os.environ.copy()
     env["GIT_PRELOAD_WORKER_GIT"] = str(args.git.resolve())
-    env["GIT_PRELOAD_MANAGER_PYTHON"] = sys.executable
+    env["PRELOAD_PYTHON"] = sys.executable
     cases = args.case or (list(CASES) if os.name != "nt" else ["small-mixed", "stdout-large"])
     command = [shutil.which("bash"), "--noprofile", "--norc", "-c", SHELL,
-               "preload-output", shell_path(root / "contrib/preload/git-manager.sh"),
+               "preload-output", shell_path(root / "contrib/preload/preload-manager.sh"),
                shell_path(output)] + cases
     process = subprocess.Popen(command, env=env, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE, start_new_session=os.name != "nt")

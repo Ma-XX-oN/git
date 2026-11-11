@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Matched-runner comparison: 1, 2, 3, 4 and 5 preloaded workers.
+"""Paired direct versus preloaded --version latency through preload-manager.sh.
 
-This changes only the configured number of preinitialized workers. Every
-configuration runs 120 sequential paired direct and IPC --version commands.
+Each round sources the library, preloads the checked-out Git (3 initial
+workers, growing on demand) and runs 120 sequential paired direct and
+preloaded --version commands, alternating which runs first.
 The actual Git executable is built from the checked-out source; no historical
 source-injection build script or retired worker startup flag is used.
-Round order 1,2,3,4,5,4,3,2,1 reduces time-order bias. Each OS uses one Git build and one native CI runner.
+Each OS uses one Git build and one native CI runner.
 Startup, manager creation and initial worker preparation are excluded from
 per-command timings but reported separately.
 Tracing is controlled by caller-supplied environment variables. Leave tracing
@@ -26,7 +27,7 @@ import sys
 import time
 
 N = 120
-RUN_ORDER = (1, 2, 3, 4, 5, 4, 3, 2, 1)
+RUN_ORDER = (3, 3, 3, 3, 3)
 OUT = Path("git-preload-bash-pipe-results")
 
 SHELL = r"""
@@ -36,30 +37,19 @@ SHELL = r"""
   gitbin=$3
   # Directly timed binary; defaults to the worker build, may be unmodified Git.
   directbin=${4:-$gitbin}
-  source "$manager_script" "$count" || exit 31
+  source "$manager_script" || exit 31
+  preload "$gitbin" || exit 31
+  manager_log=$PRELOAD_DIR/manager.log
   _pool_ab_diagnostics() {
     local exit_code=$?
     if (( exit_code != 0 )); then
       printf 'POOL_AB_FAILURE workers=%s rc=%s bash_pid=%s\\n' "$count" "$exit_code" "$BASHPID" >&2
-      if [[ $GIT_PRELOAD_PLATFORM == windows ]]; then
-        [[ -n ${_GIT_PRELOAD_MANAGER_LOG:-} && -f $_GIT_PRELOAD_MANAGER_LOG ]] && cat "$_GIT_PRELOAD_MANAGER_LOG" >&2
-      else
-        [[ -n ${_GIT_PRELOAD_UNIX_MANAGER_LOG:-} && -f $_GIT_PRELOAD_UNIX_MANAGER_LOG ]] && cat "$_GIT_PRELOAD_UNIX_MANAGER_LOG" >&2
-        [[ -n ${_GIT_PRELOAD_UNIX_MANAGER_PID:-} ]] &&
-          kill -0 "$_GIT_PRELOAD_UNIX_MANAGER_PID" 2>/dev/null &&
-          printf 'POOL_AB_MANAGER_ALIVE pid=%s\\n' "$_GIT_PRELOAD_UNIX_MANAGER_PID" >&2
-      fi
+      [[ -f $manager_log ]] && cat "$manager_log" >&2
     fi
   }
   trap _pool_ab_diagnostics EXIT
-  if [[ $GIT_PRELOAD_PLATFORM == windows ]]; then
-    [[ ${_GIT_PRELOAD_MANAGER_WORKERS:-} == "$count" ]] || exit 32
-    manager_log=$_GIT_PRELOAD_MANAGER_LOG
-  else
-    manager_log=$_GIT_PRELOAD_UNIX_MANAGER_LOG
-  fi
   expected=$("$gitbin" --version) || exit 33
-  actual=$(git-ipc --version) || exit 34
+  actual=$(git --version) || exit 34
   [[ $actual == "$expected" ]] || exit 35
   "$directbin" --version >/dev/null || exit 36
   printf 'READY_CHECK %s\n' "$count"
@@ -69,11 +59,11 @@ SHELL = r"""
       "$directbin" --version >/dev/null || exit 41
       b=$EPOCHREALTIME
       c=$EPOCHREALTIME
-      git-ipc --version >/dev/null || exit 42
+      git --version >/dev/null || exit 42
       d=$EPOCHREALTIME
     else
       c=$EPOCHREALTIME
-      git-ipc --version >/dev/null || exit 43
+      git --version >/dev/null || exit 43
       d=$EPOCHREALTIME
       a=$EPOCHREALTIME
       "$directbin" --version >/dev/null || exit 44
@@ -193,16 +183,14 @@ def main():
             ["cygpath", "-u", native], check=True,
             capture_output=True, text=True, encoding="utf-8").stdout.strip()
         script = subprocess.run(
-            ["cygpath", "-u", str(root / "contrib/preload/git-manager.sh")],
+            ["cygpath", "-u", str(root / "contrib/preload/preload-manager.sh")],
             check=True, capture_output=True, text=True,
             encoding="utf-8").stdout.strip()
     else:
         git_shell = native
-        script = str(root / "contrib/preload/git-manager-unix.sh")
+        script = str(root / "contrib/preload/preload-manager.sh")
     env = os.environ.copy()
-    env["GIT_PRELOAD_PLATFORM"] = "windows" if windows else "unix"
-    env["GIT_PRELOAD_WORKER_GIT"] = native
-    env["GIT_PRELOAD_MANAGER_PYTHON"] = env.get("GIT_PRELOAD_MANAGER_PYTHON") or sys.executable
+    env["PRELOAD_PYTHON"] = env.get("PRELOAD_PYTHON") or sys.executable
     report = {
         "sha": env.get("GITHUB_SHA"),
         "os": env.get("RUNNER_OS", sys.platform),
@@ -213,11 +201,11 @@ def main():
         "reader_timeout_ms": 100,
         "workload": "120 paired direct/IPC --version operations per round",
         "source_injection": False,
-        "pool_sizes": (1, 2, 3, 4, 5),
+        "initial_pool_size": 3,
         "manager_present_in_both_configurations": True,
         "results": [],
     }
-    output_path = OUT / ("pool-size-matched-1to5-" + report["os"].lower() + ".json")
+    output_path = OUT / ("preload-paired-" + report["os"].lower() + ".json")
     try:
         for round_index, workers in enumerate(RUN_ORDER, 1):
             result = run_case(bash, script, git_shell, env, workers, round_index, windows)

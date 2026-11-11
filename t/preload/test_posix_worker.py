@@ -32,7 +32,7 @@ def run_case(git, name, payload, status, output, hold_request=False):
     """Send one FIFO request and require output EOF before status consumption."""
     with tempfile.TemporaryDirectory(prefix="preload-worker-") as directory:
         environment = os.environ.copy()
-        environment["GIT_PRELOAD_OWNER_PID"] = str(os.getpid())
+        environment["PRELOAD_PID"] = str(os.getpid())
         environment["GIT_EDITOR"] = "preload-worker-inherited-editor"
         worker = subprocess.Popen([git, "--preload-worker", directory], env=environment,
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -43,7 +43,7 @@ def run_case(git, name, payload, status, output, hold_request=False):
         try:
             assert worker.stdout.readline() == f"READY {worker.pid}\n".encode()
             for channel, mode in (("stdout", "rb"), ("stderr", "rb"), ("exit-code", "rb"),
-                                  ("stdin", "wb"), ("param-env-cwd", "wb")):
+                                  ("stdin", "wb"), ("params-cwd", "wb")):
                 streams.append(open(worker_directory / channel, mode, buffering=0))
             streams[3].close()
             streams[4].write(payload)

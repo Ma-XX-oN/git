@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 
 if os.name != "nt":
     raise RuntimeError("Windows native worker test only")
@@ -69,7 +70,8 @@ def run_case(git, name, arguments, expected_status, expected_output,
              expected_errors=b"", context=b""):
     """Run a worker with stdin held open while output and status are drained."""
     env = os.environ.copy()
-    env["GIT_PRELOAD_OWNER_PID"] = str(os.getpid())
+    env["PRELOAD_PID"] = str(os.getpid())
+    pipe_dir = env["PRELOAD_WIN_DIR"] = rf"\\.\pipe\preload-test-{uuid.uuid4().hex}"
     env["GIT_EDITOR"] = "preload-worker-inherited-editor"
     directory = tempfile.TemporaryDirectory(prefix="preload-worker-")
     worker = subprocess.Popen([git, "--preload-worker", directory.name], env=env,
@@ -79,8 +81,8 @@ def run_case(git, name, arguments, expected_status, expected_output,
     try:
         assert worker.stdout.readline() == f"READY {worker.pid}\n".encode()
         worker.stdout.close()
-        for index, channel in enumerate(("stdout", "stderr", "exit-code", "stdin", "param-env-cwd")):
-            address = rf"\\.\pipe\git-preload-{worker.pid}-{channel}"
+        for index, channel in enumerate(("stdout", "stderr", "exit-code", "stdin", "params-cwd")):
+            address = rf"{pipe_dir}\worker-{worker.pid}\{channel}"
             if abandoned_probes or held_probes or marker_order is not None:
                 probe = K.CreateFileW(address, 0xc0000000, 0, None, 3, 0, None)
                 assert probe != INVALID
@@ -100,13 +102,13 @@ def run_case(git, name, arguments, expected_status, expected_output,
                 break
         if duplicate_control:
             # Hold the preceding channel so both markers precede selection.
-            address = rf"\\.\pipe\git-preload-{worker.pid}-param-env-cwd"
+            address = rf"{pipe_dir}\worker-{worker.pid}\params-cwd"
             duplicate = K.CreateFileW(address, 0xc0000000, 0, None, 3, 0, None)
             assert duplicate != INVALID
             handles["duplicate-control"] = duplicate
             write(duplicate, b"1")
             write(handles["stdin"], b"1")
-        elif "param-env-cwd" in handles:
+        elif "params-cwd" in handles:
             frame = struct.pack("<I", len(arguments) + 1) + b"git\0"
             frame += b"".join((arg.encode() if isinstance(arg, str) else arg) + b"\0"
                               for arg in arguments) + context + b"end\0"
@@ -114,18 +116,18 @@ def run_case(git, name, arguments, expected_status, expected_output,
             if missing_end:
                 payload = payload[:-4]
             if delayed_request:
-                write(handles["param-env-cwd"], payload[:4])
-                assert K.FlushFileBuffers(handles["param-env-cwd"])
+                write(handles["params-cwd"], payload[:4])
+                assert K.FlushFileBuffers(handles["params-cwd"])
                 time.sleep(.05)
-                write(handles["param-env-cwd"], payload[4:])
+                write(handles["params-cwd"], payload[4:])
             elif fragmented:
                 for byte in payload:
-                    write(handles["param-env-cwd"], bytes([byte]))
+                    write(handles["params-cwd"], bytes([byte]))
             else:
-                write(handles["param-env-cwd"], payload)
+                write(handles["params-cwd"], payload)
             if malformed or missing_end:
-                assert K.FlushFileBuffers(handles["param-env-cwd"])
-                K.CloseHandle(handles.pop("param-env-cwd"))
+                assert K.FlushFileBuffers(handles["params-cwd"])
+                K.CloseHandle(handles.pop("params-cwd"))
         if delayed_output:
             time.sleep(.1)
         if status_after_output:
@@ -168,7 +170,8 @@ def run_case(git, name, arguments, expected_status, expected_output,
 def test_marker_timeout(git):
     """A missing marker must cancel both connection threads and exit promptly."""
     env = os.environ.copy()
-    env["GIT_PRELOAD_OWNER_PID"] = str(os.getpid())
+    env["PRELOAD_PID"] = str(os.getpid())
+    env["PRELOAD_WIN_DIR"] = rf"\\.\pipe\preload-test-{uuid.uuid4().hex}"
     directory = tempfile.TemporaryDirectory(prefix="preload-worker-")
     worker = subprocess.Popen([git, "--preload-worker", directory.name], env=env,
                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -185,9 +188,24 @@ def test_marker_timeout(git):
         directory.cleanup()
 
 
+def test_missing_pipe_dir(git):
+    """Without PRELOAD_WIN_DIR the worker must fail before READY."""
+    env = os.environ.copy()
+    env["PRELOAD_PID"] = str(os.getpid())
+    env.pop("PRELOAD_WIN_DIR", None)
+    with tempfile.TemporaryDirectory(prefix="preload-worker-") as directory:
+        result = subprocess.run([git, "--preload-worker", directory], env=env,
+                                stdin=subprocess.DEVNULL, capture_output=True, timeout=10)
+    assert result.returncode == 136, result.returncode
+    assert b"READY" not in result.stdout, result.stdout
+    assert b"PRELOAD_WIN_DIR" in result.stderr, result.stderr
+    print("GIT_PRELOAD_WORKER_LIFECYCLE_PASS missing-pipe-dir", flush=True)
+
+
 if __name__ == "__main__":
     git = str(Path(sys.argv[1] if len(sys.argv) > 1 else
                    os.environ["GIT_PRELOAD_WORKER_GIT"]).resolve())
+    test_missing_pipe_dir(git)
     version = subprocess.check_output([git, "--version"])
     run_case(git, "stdin-held-open", ["--version"], 0, version)
     run_case(git, "output-flush-precedes-status", ["--version"], 0, version,

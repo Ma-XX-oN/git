@@ -3,7 +3,7 @@
 
 Both builds run on one native runner within one job. Each round times 120
 interleaved pairs: a direct ``--version`` call and a preloaded
-``git-ipc --version`` call served by the migrated build. Rounds alternate the
+``git --version`` call served by the migrated build. Rounds alternate the
 directly timed binary in ABBA order (upstream, migrated, migrated, upstream),
 so the upstream reference, the migrated direct path and the preloaded path
 share one machine and one time window.
@@ -85,12 +85,9 @@ def main():
     bench = load_benchmark(candidate / "t/perf/preload_pool_benchmark.py", "benchmark_migrated")
     bench.OUT = args.output
     environment = {key: value for key, value in os.environ.items()
-                   if not key.startswith(("GIT809_", "GIT_PRELOAD_", "GIT_TRACE"))}
-    environment.update({"GIT_PRELOAD_PLATFORM": "windows" if windows else "unix",
-                        "GIT_PRELOAD_MANAGER_PYTHON": sys.executable,
-                        "GIT_PRELOAD_WORKER_GIT": builds["migrated"]["git"],
-                        "MSYS2_ARG_CONV_EXCL": "*"})
-    client = str(candidate / "contrib/preload/git-manager.sh")
+                   if not key.startswith(("GIT809_", "GIT_PRELOAD_", "GIT_TRACE", "PRELOAD_"))}
+    environment.update({"PRELOAD_PYTHON": sys.executable, "MSYS2_ARG_CONV_EXCL": "*"})
+    client = str(candidate / "contrib/preload/preload-manager.sh")
     report = {"reference": "unmodified upstream Git, direct", "workers": 3,
               "host": os.environ.get("COMPUTERNAME", "" if windows else os.uname().nodename),
               "platform": sys.platform, "tracing": False,

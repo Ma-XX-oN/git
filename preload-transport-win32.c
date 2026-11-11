@@ -478,7 +478,8 @@ static int create_pipe_instances(struct preload_transport *transport,
 	for (i = 0; i < transport->config.nr; i++) {
 		struct strbuf name = STRBUF_INIT;
 
-		strbuf_addf(&name, "%s-%s", transport->config.location,
+		/* The location is a pipe-name "directory"; channels are its entries. */
+		strbuf_addf(&name, "%s\\%s", transport->config.location,
 			    transport->config.channels[i].name);
 		for (j = 0; j < 2; j++) {
 			DWORD mode = PIPE_ACCESS_DUPLEX |

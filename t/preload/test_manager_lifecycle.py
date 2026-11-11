@@ -2,7 +2,6 @@
 """Exercise real pool shutdown while worker startup has not registered its child."""
 import importlib.util
 import io
-import os
 from pathlib import Path
 import tempfile
 import threading
@@ -10,142 +9,161 @@ from unittest.mock import patch
 
 
 class Worker:
-    """Minimal subprocess fixture owned by the pool under test."""
+  """Minimal subprocess fixture owned by the pool under test."""
 
-    def __init__(self):
-        """Start alive with the same READY stream shape as a native worker."""
-        self.pid = 987654
-        self.returncode = None
-        self.stdout = io.BytesIO(f"READY {self.pid}\n".encode())
+  def __init__(self):
+    """Start alive with the same READY stream shape as a native worker."""
+    self.pid = 987654
+    self.returncode = None
+    self.stdout = io.BytesIO(f"READY {self.pid}\n".encode())
 
-    def poll(self):
-        """Return the fixture's process status, or None while alive."""
-        return self.returncode
+  def poll(self):
+    """Return the fixture's process status, or None while alive."""
+    return self.returncode
 
-    def kill(self):
-        """Record pool-initiated process termination."""
-        self.returncode = -1
+  def kill(self):
+    """Record pool-initiated process termination."""
+    self.returncode = -1
 
-    def wait(self, timeout=None):
-        """Return the terminated status without performing operating-system waits.
-
-        Parameters
-        ----------
-        timeout : float, optional
-            Pool-supplied deadline in seconds; fixture termination is immediate.
-
-        Returns
-        -------
-        int
-            Terminated status; an alive process indicates missing pool cleanup.
-        """
-        assert self.returncode is not None, "pool waited without terminating worker"
-        return self.returncode
-
-
-def check_close_during_spawn(manager, windows):
-    """Hold process startup across the shutdown snapshot and check ownership.
+  def wait(self, timeout=None):
+    """Return the terminated status without performing operating-system waits.
 
     Parameters
     ----------
-    manager : module
-        Production pool implementation, loaded without starting its server.
-    windows : bool
-        Whether this module uses the Windows pool constructor.
+    timeout : float, optional
+        Pool-supplied deadline in seconds; fixture termination is immediate.
+
+    Returns
+    -------
+    int
+        Terminated status; an alive process indicates missing pool cleanup.
     """
-    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    assert self.returncode is not None, "pool waited without terminating worker"
+    return self.returncode
+
+
+def check_close_during_spawn(pools):
+  """Hold process startup across the shutdown snapshot and check ownership.
+
+  Parameters
+  ----------
+  pools : module
+      Production preload_pool module, loaded without starting a manager.
+  """
+  entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+  worker = Worker()
+  failures = []
+
+  def popen(*args, **kwargs):
+    """Hold the supplied subprocess arguments until the test releases startup."""
+    entered.set()
+    assert release.wait(5), "fixture startup was not released"
+    return worker
+
+  with tempfile.TemporaryDirectory(prefix="preload-manager-lifecycle-") as directory:
+    pool = pools.Pool("git", Path("unused"), Path(directory), {}, lambda: None)
+
+    def close():
+      """Record shutdown completion or its exception for the main test thread."""
+      try:
+        pool.close()
+      except Exception as error:
+        failures.append(error)
+      finally:
+        finished.set()
+
+    with patch.object(pools.subprocess, "Popen", side_effect=popen):
+      starter = threading.Thread(target=pool.spawn)
+      closer = threading.Thread(target=close)
+      starter.start()
+      try:
+        assert entered.wait(5), "pool did not enter process startup"
+        closer.start()
+        assert not finished.wait(.05), "pool closed before in-flight startup completed"
+      finally:
+        release.set()
+        starter.join(5)
+        if closer.ident is not None:
+          closer.join(5)
+      assert not starter.is_alive() and not closer.is_alive(), "pool shutdown stuck"
+      assert not failures, failures
+      assert worker.poll() is not None, "pool leaked a late-starting worker"
+      assert worker.stdout.closed, "pool retained the startup stream"
+  print("PRELOAD_MANAGER_LIFECYCLE_PASS close-during-spawn", flush=True)
+
+
+class GatedStream:
+  """READY stream that is withheld until the test opens its gate."""
+
+  def __init__(self, line, gate):
+    """Hold one READY line behind gate (a threading.Event)."""
+    self.line = line
+    self.gate = gate
+    self.closed = False
+
+  def readline(self):
+    """Return the READY line once the gate opens."""
+    assert self.gate.wait(10), "gate never opened"
+    return self.line
+
+  def close(self):
+    """Record that the pool released the startup stream."""
+    self.closed = True
+
+
+def check_growth_on_shortage(pools):
+  """A request that finds no READY worker grows the pool by one.
+
+  Parameters
+  ----------
+  pools : module
+      Production preload_pool module.
+  """
+  started = []
+  gate = threading.Event()
+  gate.set()  # The initial workers report READY at once.
+
+  def popen(*args, **kwargs):
+    """Start a fixture worker whose READY line waits for the gate."""
     worker = Worker()
-    failures = []
+    worker.pid = 1000 + len(started)
+    worker.stdout = GatedStream(f"READY {worker.pid}\n".encode(), gate)
+    started.append(worker)
+    return worker
 
-    def popen(*args, **kwargs):
-        """Hold the supplied subprocess arguments until the test releases startup."""
-        entered.set()
-        assert release.wait(5), "fixture startup was not released"
-        return worker
-
-    with tempfile.TemporaryDirectory(prefix="preload-manager-lifecycle-") as directory:
-        if windows:
-            pool = manager.Pool(Path("unused"), 1, Path(directory))
-            pool.owner_pid = os.getpid()
-        else:
-            pool = manager.Pool(Path("unused"), Path(directory), 1, os.getpid())
-
-        def close():
-            """Record shutdown completion or its exception for the main test thread."""
-            try:
-                pool.close()
-            except Exception as error:
-                failures.append(error)
-            finally:
-                finished.set()
-
-        with patch.object(manager.subprocess, "Popen", side_effect=popen):
-            starter = threading.Thread(target=pool.spawn)
-            closer = threading.Thread(target=close)
-            starter.start()
-            try:
-                assert entered.wait(5), "pool did not enter process startup"
-                closer.start()
-                assert not finished.wait(.05), "pool closed before in-flight startup completed"
-            finally:
-                release.set()
-                starter.join(5)
-                if closer.ident is not None:
-                    closer.join(5)
-            assert not starter.is_alive() and not closer.is_alive(), "pool shutdown stuck"
-            assert not failures, failures
-            assert worker.poll() is not None, "pool leaked a late-starting worker"
-            assert worker.stdout.closed, "pool retained the startup stream"
-    print("PRELOAD_MANAGER_LIFECYCLE_PASS", "windows" if windows else "posix", flush=True)
-
-
-def check_unpublished_allocation(manager, windows):
-    """Keep worker ownership until its allocation reply has been published.
-
-    Parameters
-    ----------
-    manager : module
-        Production pool backend under test.
-    windows : bool
-        Whether this backend uses Windows process entries and alloc().
-    """
-    worker = Worker()
-    with tempfile.TemporaryDirectory(prefix="preload-unpublished-allocation-") as directory:
-        if windows:
-            pool = manager.Pool(Path("unused"), 1, Path(directory))
-            pool.owner_pid = os.getpid()
-            entry = worker
-        else:
-            pool = manager.Pool(Path("unused"), Path(directory), 1, os.getpid())
-            entry = (worker, Path(directory) / f"worker-{worker.pid}")
-        pool.children.append(entry)
-        pool.ready.put(entry)
-        try:
-            answer = pool.alloc() if windows else pool.allocate()
-            assert answer.strip() == str(worker.pid), answer
-            # Simulate reply failure: the client has not received this PID.
-            pool.close()
-            assert worker.poll() is not None, "pool abandoned an unpublished allocation"
-            assert worker.stdout.closed, "pool retained an unpublished worker's stream"
-        finally:
-            worker.kill()
-            worker.stdout.close()
-    print("PRELOAD_UNPUBLISHED_ALLOCATION_PASS", "windows" if windows else "posix", flush=True)
+  with tempfile.TemporaryDirectory(prefix="preload-manager-growth-") as directory:
+    manager = pools.Manager(Path(directory), {})
+    with patch.object(pools.subprocess, "Popen", side_effect=popen), \
+         patch.object(pools.Path, "is_file", return_value=True):
+      assert manager.preload("git", "unused") == "OK"
+      pool = manager.pools["git"]
+      gate.clear()  # Replacements now stay unREADY: the next request is short.
+      taken = [manager.allocate("git") for _ in range(pools.INITIAL_WORKERS)]
+      assert all(not isinstance(worker, str) for worker in taken), taken
+      result = []
+      waiter = threading.Thread(target=lambda: result.append(manager.allocate("git")))
+      waiter.start()
+      for _ in range(500):
+        if pool.target > pools.INITIAL_WORKERS:
+          break
+        threading.Event().wait(.01)
+      gate.set()
+      waiter.join(10)
+      assert result and not isinstance(result[0], str), result
+      assert pool.target == pools.INITIAL_WORKERS + 1, pool.target
+      manager.close()
+  print("PRELOAD_MANAGER_LIFECYCLE_PASS growth target=" + str(pool.target), flush=True)
 
 
 def main():
-    """Run the startup/shutdown race against each locally importable backend."""
-    root = Path(__file__).resolve().parents[2] / "contrib/preload"
-    for backend in (("unix", False), ("windows", True)):
-        name, windows = backend
-        if windows and os.name != "nt":
-            continue
-        spec = importlib.util.spec_from_file_location(name + "_pool", root / (name + "_git_ipc_pool.py"))
-        manager = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(manager)
-        check_close_during_spawn(manager, windows)
-        check_unpublished_allocation(manager, windows)
+  """Run the lifecycle checks against the shared pool implementation."""
+  root = Path(__file__).resolve().parents[2] / "contrib/preload"
+  spec = importlib.util.spec_from_file_location("preload_pool", root / "preload_pool.py")
+  pools = importlib.util.module_from_spec(spec)
+  spec.loader.exec_module(pools)
+  check_close_during_spawn(pools)
+  check_growth_on_shortage(pools)
 
 
 if __name__ == "__main__":
-    main()
+  main()

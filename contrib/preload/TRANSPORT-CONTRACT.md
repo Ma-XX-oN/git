@@ -5,12 +5,22 @@ Historical experimental design. The maintained production contract is
 the startup environment, re-sourcing behavior and Windows stderr limitation.
 This file preserves the experimental protocol evidence.
 
+**Superseded parts.** The generic preload library
+(`contrib/preload/preload-manager.sh`) replaced the two persistent allocation
+channels described below with one request per call: a duplex connection per
+call on Windows, and a request FIFO plus `reply.<pid>` file and SIGUSR1 on
+Linux/macOS. Worker channels are now named `params-cwd` (formerly
+`param-env-cwd`) and, on Windows, `<PRELOAD_WIN_DIR>\worker-<pid>\<channel>`;
+the owner variable is `PRELOAD_PID` (formerly `GIT_PRELOAD_OWNER_PID`). The
+Windows probe connection's cause is now known:
+https://github.com/Ma-XX-oN/git/issues/7.
+
 Status: approved design; implementation and native acceptance must be verified separately.
 
 ## Terminology and ownership
 
-- **git-manager** is the shell-owned process that maintains a configured number of READY Git workers, allocates one ready worker to `git-ipc`, and asynchronously starts its replacement.
-- **git-ipc** is the Git Bash client function. It requests an allocated worker ID and exchanges command arguments, cwd, environment, standard streams, and exit status directly with that worker.
+- **git-manager** is the shell-owned process that maintains a configured number of READY Git workers, allocates one ready worker to the git client, and asynchronously starts its replacement.
+- **git client** is the Git Bash `git` shell function (formerly `git-ipc`). It requests an allocated worker ID and exchanges command arguments, cwd, environment, standard streams, and exit status directly with that worker.
 - An allocated Git worker is no longer owned or retained by git-manager. It watches its original Bash owner for termination.
 - A *logical channel* has one direction of application data. Windows pipe instances required by Git Bash's opening behaviour are not additional logical channels.
 
@@ -25,10 +35,10 @@ Every logical FIFO or named-pipe channel is treated as **unidirectional** on Lin
 
 Allocation uses two distinct logical channels on **all** platforms:
 
-1. `allocate-req`: git-ipc -> git-manager, carrying `GET\n`.
-2. `allocate-reply`: git-manager -> git-ipc, carrying one worker identifier followed by newline (or a defined error).
+1. `allocate-req`: git client -> git-manager, carrying `GET\n`.
+2. `allocate-reply`: git-manager -> git client, carrying one worker identifier followed by newline (or a defined error).
 
-The allocated worker has **five distinct logical channels**: `stdin` and `param-env-cwd` (git-ipc -> worker); `stdout`, `stderr`, and `exit-code` (worker -> git-ipc). Arguments, cwd and environment are carried exclusively by `param-env-cwd`; stdin is a separate stream. Windows sends and consumes the call-specific decimal digit in place of `T` on each channel, including stdin. No handshake byte enters application data.
+The allocated worker has **five distinct logical channels**: `stdin` and `param-env-cwd` (git client -> worker); `stdout`, `stderr`, and `exit-code` (worker -> git client). Arguments, cwd and environment are carried exclusively by `param-env-cwd`; stdin is a separate stream. Windows sends and consumes the call-specific decimal digit in place of `T` on each channel, including stdin. No handshake byte enters application data.
 
 Linux/macOS use ordinary unidirectional FIFOs, with **no** `T` marker.
 
@@ -63,9 +73,9 @@ has not established that mechanism.
 
 **Why Windows needs the marker:** In this Git Bash/MSYS2 named-pipe redirection path, tests observed an additional connection that does not carry the application's transport bytes (the *probe*), alongside the actual transport connection. The earlier allocator tried to identify the real connection by assuming the probe closed first. That assumption failed in native stress testing: two instances reached the same closing state, and allocation timed out. The `T` marker identifies the connection explicitly instead of guessing from connection order or disconnection state. This is a documented Git Bash/MSYS2 interoperability defect in our experimental transport; the evidence does **not** establish an upstream Git Bash bug or its root cause. Linux and macOS do not require this Windows-specific workaround.
 
-For every logical channel, the Windows server/receiving endpoint creates a pair of named-pipe instances for the same pipe name. The instances are created using duplex capability **only so git-ipc can write a connection marker even on normal server-to-client channels** (including stdout, stderr, and exit-code). This capability must not be used for reverse-direction application traffic.
+For every logical channel, the Windows server/receiving endpoint creates a pair of named-pipe instances for the same pipe name. The instances are created using duplex capability **only so the git client can write a connection marker even on normal server-to-client channels** (including stdout, stderr, and exit-code). This capability must not be used for reverse-direction application traffic.
 
-1. git-ipc opens the actual transport instance and immediately sends the single byte ASCII `T` on that instance, **including when its subsequent role is only to read**.
+1. The git client opens the actual transport instance and immediately sends the single byte ASCII `T` on that instance, **including when its subsequent role is only to read**.
 2. The endpoint reads and validates exactly one `T` before forwarding or reading any application bytes. The marker is consumed; it must not enter stdin, stdout, stderr, status, parameter, environment, or cwd payloads.
 3. The instance receiving `T` is selected as that logical channel's transport. Close the unused probe instance of **that pair only**, not other clients' independent connections.
 4. No marker within the connection establishment deadline (initially two seconds) is a connection-establishment failure. A valid marker must be processed immediately, without waiting for the deadline.

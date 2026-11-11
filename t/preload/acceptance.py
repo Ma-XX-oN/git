@@ -15,26 +15,23 @@ import time
 
 SHELL = r'''
 set -u
-source "$1" 3 || exit 10
-if [[ ${OSTYPE:-} == msys* || ${OSTYPE:-} == cygwin* ]]; then
-  manager_log=$_GIT_PRELOAD_MANAGER_LOG
-else
-  manager_log=$_GIT_PRELOAD_UNIX_MANAGER_LOG
-fi
+source "$1" || exit 10
+preload "$GIT_PRELOAD_WORKER_GIT" || exit 10
+manager_log=$PRELOAD_DIR/manager.log
 printf '%s\n' "$manager_log" >"$3/manager-path.txt"
 # Preserve the allocator's last events on ordinary command failure as well.
 trap 'cp "$manager_log" "$3/manager.log"' EXIT
 expected=$("$GIT_PRELOAD_WORKER_GIT" --version) || exit 11
-actual=$(git-ipc --version) || exit 12
+actual=$(git --version) || exit 12
 [[ $actual == "$expected" ]] || exit 13
-git-ipc rev-parse --show-toplevel >"$3/cwd.txt" || exit 17
+git rev-parse --show-toplevel >"$3/cwd.txt" || exit 17
 cd "$4/contrib/preload" || exit 19
-actual=$(git-ipc rev-parse --show-prefix) || exit 20
+actual=$(git rev-parse --show-prefix) || exit 20
 [[ $actual == 'contrib/preload/' ]] || exit 21
 cd "$4" || exit 22
 for ((i=0; i<$2; i++)); do
   begin=$EPOCHREALTIME
-  git-ipc --version >"$3/actual.txt" || exit 23
+  git --version >"$3/actual.txt" || exit 23
   end=$EPOCHREALTIME
   IFS= read -r actual <"$3/actual.txt" || exit 24
   [[ $actual == "$expected" ]] || exit 25
@@ -75,11 +72,11 @@ def main():
     root = args.root.resolve()
     env = os.environ.copy()
     env["GIT_PRELOAD_WORKER_GIT"] = str(args.git.resolve())
-    env["GIT_PRELOAD_MANAGER_PYTHON"] = sys.executable
+    env["PRELOAD_PYTHON"] = sys.executable
     if args.trace:
         env["GIT_TRACE_PRELOAD"] = str(output / "worker-trace.log")
     command = [shutil.which("bash"), "--noprofile", "--norc", "-c", SHELL,
-               "acceptance", shell_path(root / "contrib/preload/git-manager.sh"),
+               "acceptance", shell_path(root / "contrib/preload/preload-manager.sh"),
                str(args.count), shell_path(output), shell_path(root)]
     started = time.monotonic()
     with (output / "stress.csv").open("w", encoding="utf-8", newline="\n") as out:
@@ -108,7 +105,7 @@ def main():
               "sha": subprocess.check_output([str(args.git.resolve()), "rev-parse", "HEAD"],
                                               cwd=root, text=True).strip(),
               "platform": sys.platform, "git": str(args.git.resolve()),
-              "context": "per-call cwd; environment inherited from manager startup", "workers": 3,
+              "context": "per-call cwd; environment inherited from manager startup", "initial_workers": 3,
               "binary_sha256": hashlib.sha256(args.git.resolve().read_bytes()).hexdigest(),
               "tracked_worktree_diff": subprocess.check_output(
                   [str(args.git.resolve()), "diff", "--stat", "HEAD"], cwd=root, text=True),

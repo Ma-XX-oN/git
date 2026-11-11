@@ -1,7 +1,7 @@
 name: Preload production acceptance
 on:
   push:
-    branches: [production/preload]
+    branches: [production/preload, experiment/preload-git-function]
   workflow_dispatch:
     inputs:
       community_pr:
@@ -68,7 +68,6 @@ jobs:
             gitbin="$(cygpath -w "$PWD/git.exe")"
             helper="$(cygpath -w "$PWD/t/helper/test-tool.exe")"
             "$py" t/preload/test_windows_worker_lifecycle.py "$gitbin"
-            "$py" t/preload/test_windows_allocator.py
           else
             py="$pythonLocation/bin/python3"
             gitbin="$PWD/git"
@@ -77,6 +76,7 @@ jobs:
           fi
           "$py" t/preload/test_transport.py "$helper"
           "$py" t/preload/test_manager_lifecycle.py
+          "$py" t/preload/test_preload_manager.py --git "$gitbin" --output preload-results/manager
           "$py" t/preload/test_owner_death.py --git "$gitbin"
           "$py" t/preload/test_shell_environment.py --git "$gitbin" --output preload-results/environment
           "$py" t/preload/test_existing_regressions.py --git "$gitbin" --output preload-results/commands
@@ -118,7 +118,7 @@ jobs:
       - name: Check out preserved baseline
         uses: actions/checkout@v4
         with:
-          ref: working-version-two
+          ref: production/preload
           path: baseline
           persist-credentials: false
       - name: Compare baseline in the same job
@@ -132,7 +132,7 @@ jobs:
             py="$pythonLocation/bin/python3"
           fi
           make -C baseline -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git$([[ $RUNNER_OS == Windows ]] && printf .exe)
-          "$py" t/perf/compare_preload_versions.py --baseline baseline --output preload-comparison
+          "$py" t/perf/compare_preload_versions.py --baseline baseline --baseline-ref production/preload --rounds 3 --output preload-comparison
       - name: Verify POSIX builds without pthread support
         if: runner.os != 'Windows'
         shell: bash
@@ -141,7 +141,7 @@ jobs:
           ./git --version
           directory=$(mktemp -d "${TMPDIR:-/tmp}/git-preload-$$-XXXXXXXX")
           set +e
-          GIT_PRELOAD_OWNER_PID=$$ ./git --preload-worker "$directory" >preload-no-threads.out 2>preload-no-threads.err
+          PRELOAD_PID=$$ ./git --preload-worker "$directory" >preload-no-threads.out 2>preload-no-threads.err
           status=$?
           set -e
           [[ $status == 136 ]]

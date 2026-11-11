@@ -25,7 +25,7 @@ int preload_worker_flush_output(int fd)
 }
 
 /*
- * The allocation manager relinquishes command ownership to git-ipc. Check
+ * The allocation manager relinquishes command ownership to the client. Check
  * the originating application's PID independently every 10 seconds. Do not use
  * getppid(): the worker's immediate parent is the allocation manager.
  */
@@ -36,7 +36,7 @@ int preload_worker_flush_output(int fd)
 static void preload_worker_remove_fifos(const char *directory)
 {
 	static const char *const names[5] = {
-		"stdout", "stderr", "exit-code", "stdin", "param-env-cwd"
+		"stdout", "stderr", "exit-code", "stdin", "params-cwd"
 	};
 	int i;
 
@@ -68,7 +68,7 @@ struct preload_owner_watch {
 static int preload_worker_create_fifos(const char *directory)
 {
 	static const char *const names[] = {
-		"stdout", "stderr", "exit-code", "stdin", "param-env-cwd"
+		"stdout", "stderr", "exit-code", "stdin", "params-cwd"
 	};
 	size_t i;
 
@@ -114,7 +114,7 @@ static void *preload_worker_watch_owner(void *context)
  */
 static int preload_worker_start_owner_watch(const char *directory)
 {
-	const char *raw = getenv("GIT_PRELOAD_OWNER_PID");
+	const char *raw = getenv("PRELOAD_PID");
 	unsigned long value = 0;
 	pthread_t watcher;
 	struct preload_owner_watch *watch;

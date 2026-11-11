@@ -19,12 +19,13 @@ int preload_worker_flush_output(int fd)
 }
 
 /*
- * Git Bash can open a throwaway pipe instance during redirection.
+ * Git Bash can open a throwaway pipe instance during redirection
+ * (see https://github.com/Ma-XX-oN/git/issues/7).
  * Two threads, created before READY, traverse all five channels themselves.
  * They connect and read one marker each; pipes remain synchronous for Git I/O.
  */
 /*
- * The manager transfers each worker to git-ipc at allocation time. Keep an
+ * The manager transfers each worker to the client at allocation time. Keep an
  * independent reference to the owning application so an abandoned worker
  * terminates even if it is blocked on a named pipe.
  *
@@ -56,8 +57,7 @@ static int preload_worker_start_owner_watch(void)
 	DWORD count, pid = 0, i;
 	HANDLE owner, thread;
 
-	count = GetEnvironmentVariableA("GIT_PRELOAD_OWNER_PID",
-					value, sizeof(value));
+	count = GetEnvironmentVariableA("PRELOAD_PID", value, sizeof(value));
 	if (!count || count >= sizeof(value))
 		return -1;
 	for (i = 0; i < count; i++) {
@@ -90,16 +90,23 @@ static int preload_worker_start_owner_watch(void)
 /**
  * @brief Prepare owner monitoring and the native endpoint name.
  * @param directory Borrowed existing private worker directory.
- * @param location Receives an owned native pipe-name stem on success.
+ * @param location Receives an owned native pipe "directory" on success:
+ *        PRELOAD_WIN_DIR followed by \worker-<pid>.
  * @return Zero on success, or a worker startup status on failure.
  */
 int preload_worker_platform_prepare(const char *directory, char **location)
 {
+	const char *pipes = getenv("PRELOAD_WIN_DIR");
+
 	preload_worker_directory = xstrdup(directory);
+	if (!pipes || !*pipes) {
+		error("--preload-worker requires PRELOAD_WIN_DIR");
+		return 136;
+	}
 	if (preload_worker_start_owner_watch()) {
 		return 136;
 	}
-	*location = xstrfmt("\\\\.\\pipe\\git-preload-%lu", (unsigned long)getpid());
+	*location = xstrfmt("%s\\worker-%lu", pipes, (unsigned long)getpid());
 	return 0;
 }
 

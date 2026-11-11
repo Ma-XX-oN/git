@@ -182,7 +182,7 @@ static int start_worker_transport(struct preload_worker *worker)
 {
 	static const struct preload_channel_spec channels[] = {
 		{ "stdin", 0 }, { "stdout", 1 }, { "stderr", 1 },
-		{ "exit-code", 1 }, { "param-env-cwd", 0 }
+		{ "exit-code", 1 }, { "params-cwd", 0 }
 	};
 	static const size_t order[] = {
 		WORKER_STDOUT, WORKER_STDERR, WORKER_STATUS, WORKER_STDIN, WORKER_CONTEXT
