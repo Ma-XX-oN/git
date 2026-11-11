@@ -68,8 +68,14 @@ int main() {
   }
 
   DWORD zero_count = 99;
-  if (!GetOverlappedResult(server, &zero, &zero_count, FALSE))
-    return fail("GetOverlappedResult zero");
+  BOOL result = GetOverlappedResult(server, &zero, &zero_count, FALSE);
+  DWORD completion = result ? ERROR_SUCCESS : GetLastError();
+  // Message-mode zero-byte reads report ERROR_MORE_DATA when the
+  // unread message remains in the pipe. This is a readiness signal;
+  // validate that the subsequent real read still receives the byte.
+  if (!result && completion != ERROR_MORE_DATA)
+    return fail("GetOverlappedResult zero", completion);
+  std::printf("ZERO_READ completion=%lu zero_count=%lu\n", completion, zero_count);
   if (zero_count != 0) {
     std::fprintf(stderr, "FAIL zero-read consumed %lu bytes\n", zero_count);
     return 4;
