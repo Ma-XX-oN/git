@@ -21,6 +21,7 @@ SHELL = r'''
 set -u
 source "$1" || exit 10
 preload "$2" || exit 11
+printf '%s\n' "$BASHPID" >"$4/caller.pid"
 for (( i = 0; i < 20; i++ )); do git --version >/dev/null || exit 12; done
 : >"$PRELOAD_TIMING"
 cp "$PRELOAD_DIR/manager.log" "$4/manager-warmup.log" || exit 13
@@ -28,9 +29,10 @@ for (( i = 0; i < $3; i++ )); do
   # paced: a direct run between calls lets the pool refill, as in
   # compare_preload_versions.py; burst: back to back, stressing the pool.
   [[ $5 == burst ]] || "$2" --version >/dev/null || exit 16
-  git --version >/dev/null || exit 14
+  __PRELOAD_PROFILE_CALL__ || exit 14
 done
 cp "$PRELOAD_DIR/manager.log" "$4/manager.log" || exit 15
+_preload_stop || exit 17
 '''
 
 # Client stamp names, in order, for each platform's record type.
@@ -81,6 +83,9 @@ def main():
                       help="paced: a direct run between preloaded calls keeps the "
                            "pool full; burst: back-to-back calls")
   parser.add_argument("--output", type=Path, default=Path("preload-stage-timing"))
+  parser.add_argument("--manager-python", type=Path,
+                      help="Optional manager interpreter or diagnostic launcher")
+  parser.add_argument("--workload", choices=("shell", "subshell"), default="shell")
   args = parser.parse_args()
   output = (args.output / args.mode).resolve()
   output.mkdir(parents=True, exist_ok=True)
@@ -88,9 +93,11 @@ def main():
   timing = output / "client-stages.txt"
   env = {key: value for key, value in os.environ.items()
          if not key.startswith(("GIT_TRACE", "PRELOAD_"))}
-  env["PRELOAD_PYTHON"] = sys.executable
+  env["PRELOAD_PYTHON"] = shell_path(args.manager_python.resolve()) if args.manager_python else sys.executable
   env["PRELOAD_TIMING"] = shell_path(timing)
-  subprocess.run([shutil.which("bash"), "--noprofile", "--norc", "-c", SHELL, "stages",
+  call = "git --version >/dev/null" if args.workload == "shell" else "actual=$(git --version)"
+  shell = SHELL.replace("__PRELOAD_PROFILE_CALL__", call)
+  subprocess.run([shutil.which("bash"), "--noprofile", "--norc", "-c", shell, "stages",
                   shell_path(root / "contrib/preload/preload-manager.sh"),
                   shell_path(args.git.resolve()), str(args.count), shell_path(output),
                   args.mode],
@@ -118,7 +125,7 @@ def main():
       float((server["received"] - stamps["sent"]) * 1000000))
     stages.setdefault("transit reply (manager delivered->client replied)", []).append(
       float((stamps["replied"] - server["delivered"]) * 1000000))
-  report = {"platform": sys.platform, "mode": args.mode, "calls": args.count,
+  report = {"platform": sys.platform, "mode": args.mode, "workload": args.workload, "calls": args.count,
             "client_record": kind,
             "stages": {name: summarize(values) for name, values in stages.items()}}
   (output / "stages.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
