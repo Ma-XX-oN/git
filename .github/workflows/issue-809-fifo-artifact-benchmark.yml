@@ -1,0 +1,110 @@
+name: RWF 809 isolated FIFO artifact same-runner comparison
+on:
+  push:
+    branches: [experiment-809-msys2-fifo-wfmo-main]
+    paths: [.github/workflows/issue-809-fifo-artifact-benchmark.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  windows-benchmark:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - id: msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MSYS
+          update: true
+          install: gcc
+      - name: Download exact native compiled DLL artifact
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 42960992181
+          github-token: ${{ github.token }}
+          name: issue-809-isolated-fifo-native-evidence
+          path: ${{ runner.temp }}/rwf809-prior
+      - name: Compile experimental FIFO workload
+        shell: msys2 {0}
+        run: |
+          set -euxo pipefail
+          sed 's/MAX_WRITERS = 48/MAX_WRITERS = 96/' experiments/issue-809/msys2_fifo_unmodified_baseline.c >experiments/issue-809/rwf809_compare.c
+          grep -q 'MAX_WRITERS = 96' experiments/issue-809/rwf809_compare.c
+          gcc -std=gnu11 -O2 -Wall -Wextra -Werror -pthread experiments/issue-809/rwf809_compare.c -o experiments/issue-809/rwf809_compare.exe
+      - name: Compare stock and patched in separate native Windows process trees
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sdk = Join-Path '${{ steps.msys2.outputs.msys2-location }}' 'usr\bin'
+          $stock = Join-Path $env:RUNNER_TEMP 'rwf809-stock-root'
+          $patch = Join-Path $env:RUNNER_TEMP 'rwf809-patch-root'
+          $prior = Join-Path $env:RUNNER_TEMP 'rwf809-prior\isolated-rwf809\msys-2.0.dll'
+          $hash = '3bd17b4e5318e6e1a241a8c650c8bbd994470042f242fa72dea0512649484e6f'
+          if ((Get-FileHash $prior -Algorithm SHA256).Hash.ToLowerInvariant() -ne $hash) { throw 'Patched DLL does not match pinned build' }
+          $compare = Join-Path $env:GITHUB_WORKSPACE 'experiments\issue-809\rwf809_compare.exe'
+          $results = Join-Path $env:RUNNER_TEMP 'rwf809-comparison.txt'
+          "PATCHED_DLL_SHA256=$hash" | Set-Content $results
+          foreach ($root in @($stock,$patch)) {
+            $bin = Join-Path $root 'usr\bin'
+            foreach ($dir in @($bin,(Join-Path $root 'tmp'),(Join-Path $root 'etc'))) { New-Item -ItemType Directory -Force $dir | Out-Null }
+            Copy-Item (Join-Path $sdk 'msys-*.dll') $bin
+            Copy-Item (Join-Path $sdk 'bash.exe') $bin
+            Copy-Item $compare (Join-Path $bin 'rwf809_compare.exe')
+          }
+          Copy-Item $prior (Join-Path $patch 'usr\bin\msys-2.0.dll') -Force
+          $stockHash = (Get-FileHash (Join-Path $stock 'usr\bin\msys-2.0.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($stockHash -eq $hash) { throw 'Control DLL matches candidate' }
+          "STOCK_DLL_SHA256=$stockHash" | Add-Content $results
+          function RunNative([string]$exe,[string[]]$args,[int]$limit) {
+            $psi = [System.Diagnostics.ProcessStartInfo]::new()
+            $psi.FileName = $exe
+            $psi.UseShellExecute = $false
+            $psi.CreateNoWindow = $true
+            $psi.RedirectStandardOutput = $true
+            $psi.RedirectStandardError = $true
+            foreach ($arg in $args) { [void]$psi.ArgumentList.Add($arg) }
+            $p = [System.Diagnostics.Process]::Start($psi)
+            if ($null -eq $p) { throw "Failed to launch $exe" }
+            try {
+              if (-not $p.WaitForExit($limit)) {
+                $p.Kill($true)
+                $p.WaitForExit()
+                throw "Timed out: $exe"
+              }
+              $stdout = $p.StandardOutput.ReadToEnd().Trim()
+              $stderr = $p.StandardError.ReadToEnd().Trim()
+              Write-Host "EXIT=$($p.ExitCode) STDOUT=$stdout STDERR=$stderr"
+              if ($p.ExitCode -ne 0) { throw "Native process failed: $exe" }
+              return $stdout
+            } finally { $p.Dispose() }
+          }
+          foreach ($item in @(@('stock',$stock),@('patched',$patch))) {
+            $bin = Join-Path $item[1] 'usr\bin'
+            $smoke = RunNative (Join-Path $bin 'bash.exe') @('--noprofile','--norc','-c','printf "RWF809_SMOKE_OK\n"') 12000
+            if ($smoke -ne 'RWF809_SMOKE_OK') { throw "Smoke failed: $($item[0])" }
+            "SMOKE=$($item[0]) PASS" | Add-Content $results
+          }
+          foreach ($item in @(@('stock',$stock),@('patched',$patch))) {
+            $exe = Join-Path $item[1] 'usr\bin\rwf809_compare.exe'
+            foreach ($writers in @(1,2,3,16,32,63,64,65)) {
+              foreach ($repeat in @(1,2)) {
+                $tag = "MODE=$($item[0]) REP=$repeat WRITERS=$writers"
+                Write-Host $tag
+                $tag | Add-Content $results
+                $out = RunNative $exe @("$writers",'201','100') 30000
+                if ($out -notmatch "BASELINE_FIFO writers=$writers ") { throw "Missing expected data: $tag" }
+                $out | Add-Content $results
+              }
+            }
+          }
+      - name: Preserve comparison results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rwf809-native-pinned-comparison
+          path: ${{ runner.temp }}/rwf809-comparison.txt
+          if-no-files-found: warn
