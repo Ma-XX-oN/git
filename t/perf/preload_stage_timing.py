@@ -86,6 +86,8 @@ def main():
   parser.add_argument("--manager-python", type=Path,
                       help="Optional manager interpreter or diagnostic launcher")
   parser.add_argument("--workload", choices=("shell", "subshell"), default="shell")
+  parser.add_argument("--shell-tracer", choices=("dtruss",),
+                      help="Trace Bash directly on macOS, avoiding protected Python exec stubs")
   args = parser.parse_args()
   output = (args.output / args.mode).resolve()
   output.mkdir(parents=True, exist_ok=True)
@@ -97,7 +99,9 @@ def main():
   env["PRELOAD_TIMING"] = shell_path(timing)
   call = "git --version >/dev/null" if args.workload == "shell" else "actual=$(git --version)"
   shell = SHELL.replace("__PRELOAD_PROFILE_CALL__", call)
-  subprocess.run([shutil.which("bash"), "--noprofile", "--norc", "-c", shell, "stages",
+  prefix = (["sudo", "-n", "--preserve-env=PRELOAD_PYTHON,PRELOAD_TIMING,PATH",
+             "/usr/bin/dtruss", "-f", "-l", "-d", "-e", "-o"] if args.shell_tracer else [])
+  subprocess.run(prefix + [shutil.which("bash"), "--noprofile", "--norc", "-c", shell, "stages",
                   shell_path(root / "contrib/preload/preload-manager.sh"),
                   shell_path(args.git.resolve()), str(args.count), shell_path(output),
                   args.mode],

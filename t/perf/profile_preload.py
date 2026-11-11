@@ -153,8 +153,10 @@ def kernel_traces(args, output):
         if sys.platform == "linux":
             prefix = ["strace", "-f", "-ttt", "-T", "-yy", "-o", str(directory / "trace.txt")]
         else:
-            prefix = ["sudo", "-n", "/usr/bin/dtruss", "-f", "-l", "-d", "-e", "-o"]
-        results[workload] = {"status": run(prefix + command, directory / "tracer.log")}
+            prefix = []
+            command += ["--shell-tracer", "dtruss"]
+        results[workload] = {"status": run(prefix + command, directory / "tracer.log"),
+                             "workload_completed": (directory / "paced/stages.json").exists()}
     if sys.platform == "linux":
         directory = output / "scheduler"
         directory.mkdir()
@@ -170,6 +172,9 @@ def kernel_traces(args, output):
                       "-o", str(directory / "sched.data"), "--"]
             status = run(prefix + command, directory / "record.log")
             results["scheduler"] = {"status": status, "perf": perf}
+            data = directory / "sched.data"
+            if data.exists():
+                subprocess.run(["sudo", "-n", "chmod", "0644", str(data)], check=True, timeout=30)
             if status == 0:
                 with (directory / "sched.txt").open("w") as trace:
                     decoded = subprocess.run(["sudo", "-n", perf, "script", "--ns", "-i",
