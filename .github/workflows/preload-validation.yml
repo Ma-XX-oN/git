@@ -322,13 +322,16 @@ jobs:
           python -m mesonbuild.mesonmain test -C build-pid --print-errorlogs t5790-preload
       - uses: actions/checkout@v4
         with:
-          ref: 26501aaea0
+          ref: 26501aaea0c3ed56d17b0b339a1d1f5b8d7b3f25
           path: pid-baseline
           sparse-checkout: contrib/preload
       - name: Compare full calls with identical worker binary
         run: |
           python t/perf/compare_preload_dispatch.py --baseline-library pid-baseline/contrib/preload/preload-manager.sh --baseline-ref 26501aaea0 --git "$PWD/git" --output pid-results/comparison
-          python t/perf/preload_stage_timing.py --git "$PWD/git" --mode paced --output pid-results/stages
+          python t/perf/preload_stage_timing.py --git "$PWD/git" --count 300 --library pid-baseline/contrib/preload/preload-manager.sh --output pid-results/stages-baseline-0
+          python t/perf/preload_stage_timing.py --git "$PWD/git" --count 300 --output pid-results/stages-candidate-0
+          python t/perf/preload_stage_timing.py --git "$PWD/git" --count 300 --output pid-results/stages-candidate-1
+          python t/perf/preload_stage_timing.py --git "$PWD/git" --count 300 --library pid-baseline/contrib/preload/preload-manager.sh --output pid-results/stages-baseline-1
       - uses: actions/upload-artifact@v4
         if: always()
         with:

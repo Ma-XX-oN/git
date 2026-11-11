@@ -6,6 +6,7 @@ call appends its stage timestamps ($EPOCHREALTIME) to a file and the manager
 logs TIMING lines for each GET. Runs serial calls after a warm-up, pairs the
 i-th client record with the i-th manager record, and reports the median and
 90th percentile of every stage in microseconds.
+Use --library PATH to measure another checkout with the same worker binary.
 """
 import argparse
 from decimal import Decimal
@@ -78,6 +79,8 @@ def main():
   """Run the calls and print one PRELOAD_STAGE line per stage."""
   parser = argparse.ArgumentParser(description=__doc__)
   parser.add_argument("--git", required=True, type=Path)
+  parser.add_argument("--library", type=Path,
+                      help="Preload library to measure; defaults to this checkout")
   parser.add_argument("--count", type=int, default=500)
   parser.add_argument("--mode", choices=("paced", "burst"), default="paced",
                       help="paced: a direct run between preloaded calls keeps the "
@@ -102,7 +105,8 @@ def main():
   prefix = (["sudo", "-n", "--preserve-env=PRELOAD_PYTHON,PRELOAD_TIMING,PATH",
              "/usr/bin/dtruss", "-f", "-l", "-d", "-e", "-o"] if args.shell_tracer else [])
   subprocess.run(prefix + [shutil.which("bash"), "--noprofile", "--norc", "-c", shell, "stages",
-                  shell_path(root / "contrib/preload/preload-manager.sh"),
+                  shell_path(args.library.resolve() if args.library else
+                             root / "contrib/preload/preload-manager.sh"),
                   shell_path(args.git.resolve()), str(args.count), shell_path(output),
                   args.mode],
                  env=env, check=True, timeout=600)
