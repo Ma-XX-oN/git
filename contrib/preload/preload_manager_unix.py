@@ -125,7 +125,10 @@ class Server:
     if isinstance(result, str):
       self.reply(pid, result)
     elif not self.reply(pid, str(self.directory / ("worker-" + str(result.pid)))):
-      result.kill()  # The caller exited and never learned of this worker.
+      # The caller exited and never learned of this worker; reap it too, so
+      # it does not remain as a zombie.
+      result.kill()
+      result.wait(timeout=5)
 
   def _preload(self, name, pid, path):
     """Create a command's pool for a caller."""

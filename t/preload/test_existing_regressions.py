@@ -46,8 +46,9 @@ def run_suite(script, selection, environment, output, root):
     calls = output / (Path(script).stem + ".calls")
     calls.write_text("", encoding="utf-8")
     env["GIT_TEST_PRELOAD_LOG"] = shell_path(calls)
+    # -v keeps each failing assertion's actual output in the preserved stdout.
     command = [shutil.which("bash"), "--noprofile", "--norc", script,
-               "--run=" + selection]
+               "--run=" + selection, "-v"]
     process = subprocess.Popen(command, cwd=root / "t", env=env,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                start_new_session=os.name != "nt")
