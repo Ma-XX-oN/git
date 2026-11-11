@@ -121,6 +121,13 @@ jobs:
           ref: production/preload
           path: baseline
           persist-credentials: false
+      - name: Check out unmodified upstream Git
+        uses: actions/checkout@v4
+        with:
+          # Branch point of production/preload on upstream master (v2.56.0-349).
+          ref: 750f5de7dfe9a4062f95088212b063f189d50e91
+          path: upstream
+          persist-credentials: false
       - name: Compare baseline in the same job
         shell: bash
         run: |
@@ -132,7 +139,10 @@ jobs:
             py="$pythonLocation/bin/python3"
           fi
           make -C baseline -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git$([[ $RUNNER_OS == Windows ]] && printf .exe)
-          "$py" t/perf/compare_preload_versions.py --baseline baseline --baseline-ref production/preload --rounds 3 --output preload-comparison
+          make -C upstream -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git$([[ $RUNNER_OS == Windows ]] && printf .exe)
+          # Direct calls in every round run unmodified upstream Git, so one job
+          # times upstream direct, pre-migration preloaded and migrated preloaded.
+          "$py" t/perf/compare_preload_versions.py --baseline baseline --baseline-ref production/preload --upstream upstream --rounds 3 --output preload-comparison
           # Per-stage latency of preloaded calls (client and manager timestamps).
           if [[ $RUNNER_OS == Windows ]]; then gitbin="$(cygpath -w "$PWD/git.exe")"; else gitbin="$PWD/git"; fi
           "$py" t/perf/preload_stage_timing.py --git "$gitbin" --mode paced --output preload-stage-timing

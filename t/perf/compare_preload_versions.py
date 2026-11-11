@@ -78,6 +78,9 @@ def main():
     parser.add_argument("--output", type=Path, default=Path("preload-comparison"))
     parser.add_argument("--rounds", type=int, default=2,
                         help="ABBA repetitions; each adds two rounds per variant.")
+    parser.add_argument("--upstream", type=Path,
+                        help="Built unmodified Git tree; when given, every round's "
+                             "direct calls run its executable instead of the variant's.")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     windows = os.name == "nt"
@@ -126,10 +129,24 @@ def main():
             "flags": (root / "GIT-CFLAGS").read_text(encoding="utf-8")}
     assert report["variants"]["baseline"]["flags"] == report["variants"]["candidate"]["flags"], (
         "baseline and candidate compiler flags differ")
+    direct = None
+    if args.upstream:
+        upstream = args.upstream.resolve()
+        direct = str(upstream / ("git.exe" if windows else "git"))
+        report["upstream"] = {
+            "git": direct,
+            "binary_sha256": hashlib.sha256(Path(direct).read_bytes()).hexdigest(),
+            "revision": subprocess.check_output(["git", "-C", str(upstream), "rev-parse", "HEAD"],
+                                                text=True).strip(),
+            "flags": (upstream / "GIT-CFLAGS").read_text(encoding="utf-8")}
+        assert report["upstream"]["flags"] == report["variants"]["candidate"]["flags"], (
+            "upstream and candidate compiler flags differ")
     try:
         for index, name in enumerate(report["order"]):
             bench, client, git, environment = variants[name]
-            row = bench.run_case(shutil.which("bash"), client, git, environment, 3, index, windows)
+            # Direct calls time the variant's own build, or unmodified upstream.
+            row = bench.run_case(shutil.which("bash"), client, git, environment, 3, index, windows,
+                                 direct_git=direct)
             row["variant"] = name
             report["rounds"].append(row)
             print("PRELOAD_MATCHED_ROUND", name, row["ipc"]["median_ms"], flush=True)
@@ -146,6 +163,13 @@ def main():
             100 * report["medians_ms"]["candidate"] / report["medians_ms"]["baseline"])
         report["change_percent"] = report["candidate_percent_of_baseline"] - 100
         print("PRELOAD_MATCHED_SUMMARY", json.dumps(report["medians_ms"]), flush=True)
+        if direct:
+            report["upstream_direct_ms"] = statistics.median(
+                sample for row in report["rounds"] for sample in row["direct"]["samples_ms"])
+            print("PRELOAD_THREEWAY_SUMMARY", json.dumps({
+                "upstream_direct": report["upstream_direct_ms"],
+                "pre_migration_preloaded": report["medians_ms"]["baseline"],
+                "migrated_preloaded": report["medians_ms"]["candidate"]}), flush=True)
     finally:
         (args.output / "matched.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 
