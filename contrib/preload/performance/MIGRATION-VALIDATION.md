@@ -749,3 +749,102 @@ Complete raw captures, including failed macOS trace logs, are archived as
 and `14d673a44530ab07c97afb582fab7413521a75a91886b75cd87e42ddb27e73ef`.
 After extraction, reproduce the analysis with
 `python t/perf/analyze_preload_profile.py DIRECTORY --output analysis.json`.
+
+## Unix FIFO versus TCP and fixed-width PID replies
+
+Run the standalone communication experiment with
+`python t/perf/compare_fifo_tcp.py --output results.json`. It requires Unix and
+Bash with EPOCHREALTIME. The JSON retains every validated RTT in microseconds,
+per-round medians/P95s, source SHA-256, runtime versions and hardware details.
+The workflow's `transport=true` input runs it on Linux and macOS without
+building or changing Git's production transport.
+
+### Historical comparison scope
+
+The downloaded transcript
+`Rwf-809-Git-Os-Performance-Disparity-Discovery__Windows IPC Benchmark Results_2026,11,06;15,38,56-2026,11,07;00,04,09.md.zst`
+explicitly calls the earlier experiment Windows-only and says it does not
+run Linux/macOS (line 29). Its result table at lines 839-843 reports TCP
+144 us median/201 us P95 versus a two-instance duplex named pipe at
+47 us/71 us, with 150/150 exchanges each. The independent-run table at
+lines 873-877 reports 196 versus 63 us. Those results establish a Windows
+comparison; they provide no Unix FIFO-versus-TCP measurement. The one-instance
+pipe failed to connect and is not a valid latency result.
+
+### Controls and completed runs
+
+Each round uses a persistent Bash caller and a Python server thread. Both
+transports use the same server request parser and blocking `os.read`/`os.write`
+operations. FIFO uses two private, precreated endpoints; TCP uses one private
+accepted loopback connection. Endpoint creation, opening and connection setup
+precede warmup. There are no mailbox claims, locks, Git workers or per-request
+helper processes in this experiment.
+
+Every request is one `GET\n` write. The reply is the server PID padded to eight
+ASCII hexadecimal digits. `line` sends eight digits plus newline and uses
+`read -r`; `fixed8` sends eight digits and uses `read -r -N 8`; `fixed9`
+sends exactly the same nine bytes as `line` and uses `read -r -N 9`.
+All reads use `-u` and a ten-second failure timeout, with `LC_ALL=C` and Bash
+POSIX mode disabled. Every reply is checked for exact content. The timer
+includes the request write and reply read, but excludes reply validation and
+sample emission. EPOCHREALTIME gives microsecond-resolution wall-clock samples;
+negative deltas are rejected.
+
+Each FIFO/TCP cohort uses three ABBA rounds (FIFO, TCP, TCP, FIFO), 30 warmup
+exchanges and 1000 measured exchanges per connection. Default TCP and
+server-side TCP_NODELAY have separate FIFO baselines; Bash's client socket
+retains default options. Each platform records 72,000 measured exchanges per
+run, with no failed exchanges. Two protocol tests also passed on each platform,
+covering fragmented/coalesced requests, malformed input and premature EOF.
+
+- [Initial run 43082592700](https://github.com/Ma-XX-oN/git/actions/runs/43082592700),
+  source `44afa6abb4`: framing cases grouped in sequence;
+  [complete raw JSON ZIP](evidence/fifo-tcp-44afa6.zip).
+- [Ordering-control run 43082917994](https://github.com/Ma-XX-oN/git/actions/runs/43082917994),
+  source `f3580912b3`: framing order rotates each round so each case runs
+  early, middle and late; [complete raw JSON ZIP](evidence/fifo-tcp-f35809.zip).
+
+### Matched results
+
+The table pools 6000 samples per transport/framing from the ordering-control
+run's default-TCP cohort. P95 uses sorted index `int(.95 * (n - 1))`.
+Percentages normalize TCP's median against its matched FIFO median.
+
+| Platform | Reply/read | FIFO median / P95 us | TCP median / P95 us | TCP median change |
+|---|---|---:|---:|---:|
+| Linux | 9-byte line | 49 / 62 | 62 / 77 | +26.5% |
+| Linux | 8-byte fixed | 32 / 36 | 39 / 50 | +21.9% |
+| Linux | 9-byte fixed | 33 / 38 | 40 / 52 | +21.2% |
+| macOS | 9-byte line | 81 / 177 | 118 / 250 | +45.7% |
+| macOS | 8-byte fixed | 64 / 149 | 111 / 194 | +73.4% |
+| macOS | 9-byte fixed | 69 / 153 | 118 / 224 | +71.0% |
+
+Server-side TCP_NODELAY did not reverse the transport result. Its independently
+matched FIFO/TCP median pairs were Linux 49/60, 32/39 and 34/41 us, and macOS
+90/125, 63/106 and 64/111 us, for line/fixed8/fixed9 respectively. TCP remained
+20.6-22.4% slower on Linux and 38.9-73.4% slower on macOS in those cohorts.
+
+Fixed8 reduced FIFO median latency versus line reads by 17 us on each runner:
+34.7% on Linux and 21.0% on macOS in the default-TCP cohorts. The identical-wire
+fixed9 control reduced FIFO latency by 16 us (32.7%) on Linux and 12 us (14.8%)
+on macOS. This supports a benefit from fixed-length reading independently of
+removing the newline. It does not establish syscall counts on macOS.
+
+The initial run also favored FIFO throughout: default-TCP FIFO/TCP medians were
+Linux 58/96, 43/61 and 43/73 us, and macOS 73/116, 61/104 and 62/97 us for
+line/fixed8/fixed9. Do not treat differences between runs as optimization
+effects: the Linux CPU model changed between jobs and macOS has substantial
+latency tails. Only within-job matched results support the percentages above.
+
+The ordering-control Linux runner has four logical CPUs on an AMD EPYC 9V74,
+Linux 7.0.0-1019-azure/glibc 2.43, Python 3.13.18 and Bash 5.3.9. The initial
+Linux runner used an AMD EPYC 7763 with four logical CPUs and the same runtimes.
+Both macOS jobs report an Apple M1 virtual machine with three logical CPUs,
+7 GiB memory, macOS 26.7.2, Python 3.13.17 and Bash 5.3.20.
+
+The measured recommendation is to retain FIFO and evaluate the fixed-width PID
+reply in the real allocation path. TCP provides connection separation but did
+not improve established-connection latency here. These are serial raw
+communication results; they exclude allocation, worker I/O, connection churn,
+authentication and contention. The 17 us median reduction is not a predicted
+full-command speedup, and this experiment makes no C-manager performance claim.
