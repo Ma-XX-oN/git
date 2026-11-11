@@ -78,6 +78,9 @@ class Mailbox:
     # from ever lacking a reader; it is only used to drain stale replies.
     self.reader = os.open(self.path, os.O_RDONLY | os.O_NONBLOCK)
     self.writer = os.open(self.path, os.O_WRONLY | os.O_NONBLOCK)
+    # The worker named by the most recent reply; killed on release if that
+    # reply was never read (its client exited before collecting it).
+    self.pending = None
     # One long-lived thread per mailbox serves its requests in order: handing
     # a request to a waiting thread is much cheaper than starting one, and a
     # request waiting for a worker blocks only its own mailbox.
@@ -107,33 +110,50 @@ class Mailbox:
       return None
     return int(text) if text.isdigit() else None
 
-  def deliver(self, text):
+  def deliver(self, text, worker=None):
     """Write one reply line into the mailbox.
+
+    Only checks that the mailbox is still claimed (one stat); whether its
+    client is alive is checked by the periodic reclaim, which kills a worker
+    whose reply was never read.
 
     Parameters
     ----------
     text : str
         Reply line without newline; short enough to be written atomically.
+    worker : subprocess.Popen, optional
+        Worker named by the reply, remembered until the next reply.
 
     Returns
     -------
     bool
-        False if the claiming client no longer exists (nothing is written).
+        False if the mailbox is no longer claimed (nothing is written).
     """
-    pid = self.owner()
-    if pid is None or not owner_alive(pid):
+    if not self.lock.exists():
       return False
     os.write(self.writer, (text + "\n").encode("utf-8"))
+    self.pending = worker
     return True
 
   def release(self):
-    """Drain any unread reply and remove the lock, freeing the mailbox."""
+    """Discard any unread reply and remove the lock, freeing the mailbox.
+
+    An unread reply means its client exited without collecting it, so the
+    worker it named is killed and reaped.
+    """
+    unread = False
     while True:
       try:
         if not os.read(self.reader, 4096):
           break
+        unread = True
       except BlockingIOError:
         break
+    worker, self.pending = self.pending, None
+    if unread and worker is not None:
+      log(f"UNCOLLECTED_WORKER_KILLED {self.path.name} pid={worker.pid}")
+      worker.kill()
+      worker.wait(timeout=5)
     self.lock.unlink(missing_ok=True)
 
   def close(self):
@@ -220,9 +240,10 @@ class Server:
       mailbox.deliver(result)
       delivered = time.time()
     else:
-      if not mailbox.deliver(str(self.directory / ("worker-" + str(result.pid)))):
-        # The caller exited and never learned of this worker; reap it too, so
-        # it does not remain as a zombie.
+      if not mailbox.deliver(str(self.directory / ("worker-" + str(result.pid))),
+                             worker=result):
+        # The mailbox was already reclaimed: its caller exited and will never
+        # learn of this worker. Reap it too, so it does not remain a zombie.
         result.kill()
         result.wait(timeout=5)
       delivered = time.time()

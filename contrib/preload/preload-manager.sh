@@ -102,33 +102,53 @@ _preload_unix_exchange() {
     exec {_PRELOAD_REQ_FD}>"$PRELOAD_DIR/request" || return 1
     _PRELOAD_FD_DIR=$PRELOAD_DIR
   fi
-  # Claim a free mailbox, starting at a random index to make collisions
-  # between concurrent callers unlikely ($RANDOM is reseeded in each subshell
-  # since Bash 5.1; a collision only means trying the next mailbox).
-  [[ $- == *C* ]] && noclobber=1
-  set -C
-  while :; do
-    [[ -f $PRELOAD_DIR/ready.json ]] || { (( noclobber )) || set +C; return 1; }
-    start=$(( RANDOM % _PRELOAD_SLOTS ))
-    for (( i = 0; i < _PRELOAD_SLOTS; i++ )); do
-      slot=$(( (start + i) % _PRELOAD_SLOTS ))
-      { printf '%s' "$BASHPID" >"$PRELOAD_DIR/slot.$slot.lock"; } 2>/dev/null && break 2
-    done
-    _preload_sleep .001  # Every mailbox is busy; wait for a FREE.
-  done
-  (( noclobber )) || set +C
-  # Stage timestamps for PRELOAD_TIMING: claimed, opened, sent, replied, freed.
+  # A top-level shell process ($BASHPID == $$, including a child bash -c)
+  # keeps the mailbox of its first GET open for later GETs, skipping the
+  # claim, open, close and FREE; the manager reclaims it when the process
+  # exits. Subshells such as $(git ...), and PRELOAD/STOP, claim and free a
+  # mailbox per call, so short-lived subshells cannot exhaust the mailboxes.
+  local keep=0
+  [[ $1 == GET && $BASHPID == "$$" ]] && keep=1
   _PRELOAD_TX=
-  [[ -z ${PRELOAD_TIMING:-} ]] || _PRELOAD_TX=$EPOCHREALTIME
-  # Opening a FIFO for reading blocks until it has a writer; the manager holds
-  # the only one. A manager that crashed (leaving ready.json) would make the
-  # open hang, so check it is alive first. Once open, its death gives EOF.
-  if ! kill -0 "$_PRELOAD_MANAGER_PID" 2>/dev/null ||
-     ! exec {fd}<"$PRELOAD_DIR/slot.$slot"; then
-    printf 'FREE %s\n' "$slot" >&"$_PRELOAD_REQ_FD"
-    return 1
+  if (( keep )) && [[ ${_PRELOAD_MB_PID:-} == "$BASHPID" &&
+                      ${_PRELOAD_MB_DIR:-} == "$PRELOAD_DIR" ]]; then
+    slot=$_PRELOAD_MB_SLOT fd=$_PRELOAD_MB_FD
+    [[ -f $PRELOAD_DIR/ready.json ]] || return 1
+    # Stage timestamps for PRELOAD_TIMING: claimed, opened (both skipped).
+    [[ -z ${PRELOAD_TIMING:-} ]] || _PRELOAD_TX="$EPOCHREALTIME $EPOCHREALTIME"
+  else
+    # Claim a free mailbox, starting at a random index to make collisions
+    # between concurrent callers unlikely ($RANDOM is reseeded in each
+    # subshell since Bash 5.1; a collision only means trying the next one).
+    [[ $- == *C* ]] && noclobber=1
+    set -C
+    while :; do
+      [[ -f $PRELOAD_DIR/ready.json ]] || { (( noclobber )) || set +C; return 1; }
+      start=$(( RANDOM % _PRELOAD_SLOTS ))
+      for (( i = 0; i < _PRELOAD_SLOTS; i++ )); do
+        slot=$(( (start + i) % _PRELOAD_SLOTS ))
+        { printf '%s' "$BASHPID" >"$PRELOAD_DIR/slot.$slot.lock"; } 2>/dev/null && break 2
+      done
+      _preload_sleep .001  # Every mailbox is busy; wait for a FREE.
+    done
+    (( noclobber )) || set +C
+    # Stage timestamps for PRELOAD_TIMING: claimed, opened, sent, replied, freed.
+    [[ -z ${PRELOAD_TIMING:-} ]] || _PRELOAD_TX=$EPOCHREALTIME
+    # Opening a FIFO for reading blocks until it has a writer; the manager
+    # holds the only one. A manager that crashed (leaving ready.json) would
+    # make the open hang, so check it is alive first. Once open, its death
+    # gives EOF.
+    if ! kill -0 "$_PRELOAD_MANAGER_PID" 2>/dev/null ||
+       ! exec {fd}<"$PRELOAD_DIR/slot.$slot"; then
+      printf 'FREE %s\n' "$slot" >&"$_PRELOAD_REQ_FD"
+      return 1
+    fi
+    if (( keep )); then
+      _PRELOAD_MB_SLOT=$slot _PRELOAD_MB_FD=$fd _PRELOAD_MB_PID=$BASHPID
+      _PRELOAD_MB_DIR=$PRELOAD_DIR
+    fi
+    [[ -z ${PRELOAD_TIMING:-} ]] || _PRELOAD_TX+=" $EPOCHREALTIME"
   fi
-  [[ -z ${PRELOAD_TIMING:-} ]] || _PRELOAD_TX+=" $EPOCHREALTIME"
   case $1 in
     STOP) line="STOP $slot" ;;
     *) line="$1 $2 $slot${3:+ $3}" ;;
@@ -138,8 +158,13 @@ _preload_unix_exchange() {
     IFS= read -r _PRELOAD_REPLY <&"$fd"
   rc=$?
   [[ -z ${PRELOAD_TIMING:-} ]] || _PRELOAD_TX+=" $EPOCHREALTIME"
-  exec {fd}<&-
-  printf 'FREE %s\n' "$slot" >&"$_PRELOAD_REQ_FD"
+  if (( keep )); then
+    # EOF means the manager is gone; drop the kept mailbox.
+    (( rc == 0 )) || { exec {fd}<&-; unset _PRELOAD_MB_PID; }
+  else
+    exec {fd}<&-
+    printf 'FREE %s\n' "$slot" >&"$_PRELOAD_REQ_FD"
+  fi
   [[ -z ${PRELOAD_TIMING:-} ]] || _PRELOAD_TX+=" $EPOCHREALTIME"
   return "$rc"
 }
@@ -421,6 +446,10 @@ _preload_start_session() {
   if [[ -n ${_PRELOAD_FD_DIR:-} ]]; then
     exec {_PRELOAD_REQ_FD}>&- {_PRELOAD_REQ_GUARD}<&-
     unset _PRELOAD_FD_DIR
+  fi
+  if [[ -n ${_PRELOAD_MB_PID:-} ]]; then
+    exec {_PRELOAD_MB_FD}<&-
+    unset _PRELOAD_MB_PID _PRELOAD_MB_DIR
   fi
   case $OSTYPE in
     linux*) base=${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}} ;;
