@@ -93,6 +93,22 @@ class DispatchTests(unittest.TestCase):
     self.worker.wait.assert_called_once_with(timeout=5)
     self.server.manager.replenish.assert_called_once_with("git")
 
+  def test_worker_reply_is_eight_hex_bytes_without_newline(self):
+    """Encode a worker PID as one atomic fixed-width reply and retain ownership."""
+    mailbox = self.mailboxes[0]
+    with patch.object(Path, "exists", return_value=True), \
+         patch.object(unix.os, "write") as write:
+      unix.Mailbox.deliver(mailbox, "0000007b", worker=self.worker)
+    write.assert_called_once_with(10, b"0000007b")
+    self.assertIs(mailbox.pending, self.worker)
+
+  def test_get_error_has_zero_pid_header_and_diagnostic(self):
+    """An allocation failure uses the fixed header without losing its reason."""
+    self.server.manager.allocate.return_value = "ERROR not preloaded: missing"
+    self.server.handle("GET missing 0")
+    self.mailboxes[0].deliver.assert_called_once_with(
+        "00000000ERROR not preloaded: missing")
+
   def test_nonblocking_shortage_does_not_grow_pool(self):
     """An empty fast-path attempt leaves growth to the queued blocking request."""
     manager = preload_pool.Manager.__new__(preload_pool.Manager)

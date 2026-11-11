@@ -7,12 +7,13 @@ For each request a client first claims a free mailbox by atomically creating
 writes one line to the FIFO `<directory>/request`:
 
   PRELOAD <name> <n> <executable-path>  ->  OK | ERROR <reason>
-  GET <name> <n>                        ->  <directory>/worker-<pid> | ERROR <reason>
+  GET <name> <n>                        ->  eight hexadecimal PID bytes, no newline
+                                            or 00000000 + ERROR <reason> + newline
   STOP <n>                              ->  OK; the manager exits after that
                                             caller's FREE (at most 5 s later)
   FREE <n>                              ->  (no reply) release mailbox <n>
 
-The reply line is written into `slot.<n>`, where the client is blocked in
+The reply frame is written into `slot.<n>`, where the client is blocked in
 `read`, so it wakes immediately: no polling. The manager holds both ends of
 every mailbox, so a client's open never blocks and, if the manager dies, the
 client's read ends with EOF instead of hanging. FREE drains the mailbox and
@@ -130,7 +131,7 @@ class Mailbox:
     return int(text) if text.isdigit() else None
 
   def deliver(self, text, worker=None):
-    """Write one reply line into the mailbox.
+    """Write one reply frame into the mailbox.
 
     Only checks that the mailbox is still claimed (one stat); whether its
     client is alive is checked by the periodic reclaim, which kills a worker
@@ -139,7 +140,9 @@ class Mailbox:
     Parameters
     ----------
     text : str
-        Reply line without newline; short enough to be written atomically.
+        Reply without newline; short enough to be written atomically. With a
+        worker, exactly eight lowercase hexadecimal PID digits are sent without
+        newline. Other replies receive a newline; GET errors start with 00000000.
     worker : subprocess.Popen, optional
         Worker named by the reply, remembered until the next reply.
 
@@ -150,7 +153,7 @@ class Mailbox:
     """
     if not self.lock.exists():
       return False
-    os.write(self.writer, (text + "\n").encode("utf-8"))
+    os.write(self.writer, (text if worker is not None else text + "\n").encode("utf-8"))
     self.pending = worker
     return True
 
@@ -270,11 +273,10 @@ class Server:
       return False
     allocated = time.time()
     if isinstance(result, str):
-      mailbox.deliver(result)
+      mailbox.deliver("00000000" + result)
       delivered = time.time()
     else:
-      if not mailbox.deliver(str(self.directory / ("worker-" + str(result.pid))),
-                             worker=result):
+      if not mailbox.deliver(f"{result.pid:08x}", worker=result):
         # The mailbox was already reclaimed: its caller exited and will never
         # learn of this worker. Reap it too, so it does not remain a zombie.
         result.kill()

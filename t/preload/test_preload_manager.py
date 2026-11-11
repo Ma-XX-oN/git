@@ -137,7 +137,9 @@ class Session:
         return None
       reply = bytearray()
       deadline = time.monotonic() + 15
-      while b"\n" not in reply:
+      get = line.startswith("GET ")
+      while (len(reply) < 8 if get else b"\n" not in reply) or (
+          get and reply[:8] == b"00000000" and b"\n" not in reply[8:]):
         left = deadline - time.monotonic()
         assert left > 0, "no reply; log:\n" + self.read_log()
         if select.select([fd], [], [], left)[0]:
@@ -145,6 +147,11 @@ class Session:
     finally:
       os.close(fd)
     self.send(f"FREE {slot}")  # After STOP, the manager exits on this FREE.
+    if get:
+      if reply[:8] == b"00000000":
+        return reply[8:-1].decode("utf-8")
+      assert len(reply) == 8 and all(c in b"0123456789abcdef" for c in reply), reply
+      return str(self.directory / f"worker-{int(reply, 16)}")
     return reply[:reply.index(b"\n")].decode("utf-8")
 
   def claim(self, pid):

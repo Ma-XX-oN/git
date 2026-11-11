@@ -64,8 +64,12 @@ Each call first obtains a worker from the manager:
   `slot.<n>.lock` with Bash `noclobber` (an atomic exclusive create)
   containing its `$BASHPID`, opens `slot.<n>` for reading, writes
   `GET <name> <n>` plus newline to the `request` FIFO and blocks in `read` on
-  the mailbox. The manager writes the worker directory into the mailbox,
-  which wakes the client immediately: no polling, no CPU and no process while
+  the mailbox. The manager writes eight lowercase hexadecimal PID digits
+  without a newline into the mailbox. The client uses `read -r -N 8 -u` and
+  reconstructs `$PRELOAD_DIR/worker-<decimal-pid>`. A zero PID (`00000000`)
+  introduces an `ERROR <reason>` line, preserving allocation diagnostics.
+  The fixed-width reply
+  wakes the client immediately: no polling, no CPU and no process while
   waiting. The client then sends `FREE <n>`; the manager drains the mailbox
   and deletes the lock. The manager holds both ends of every mailbox, so if
   it dies a waiting client's `read` returns end-of-file; a client checks the

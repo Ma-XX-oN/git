@@ -87,6 +87,9 @@ _preload_write_context() {
 # the request FIFO always has a reader, so a write after the manager has
 # exited cannot raise SIGPIPE and kill this shell.
 # Sets _PRELOAD_REPLY. Returns zero once a reply has been read.
+# GET reads eight hexadecimal PID bytes (no newline) and reconstructs the
+# worker directory. A zero PID is followed by an error line; other commands
+# use line replies. An incomplete or invalid PID frame returns failure.
 _preload_unix_exchange() {
   local slot start i fd line rc noclobber=0
   _PRELOAD_REPLY=
@@ -155,8 +158,19 @@ _preload_unix_exchange() {
   esac
   printf '%s\n' "$line" >&"$_PRELOAD_REQ_FD" &&
     { [[ -z ${PRELOAD_TIMING:-} ]] || _PRELOAD_TX+=" $EPOCHREALTIME"; } &&
-    IFS= read -r _PRELOAD_REPLY <&"$fd"
+    if [[ $1 == GET ]]; then
+      IFS= read -r -N 8 -u "$fd" _PRELOAD_REPLY
+    else
+      IFS= read -r _PRELOAD_REPLY <&"$fd"
+    fi
   rc=$?
+  if (( rc == 0 )) && [[ $1 == GET ]]; then
+    case $_PRELOAD_REPLY in
+      00000000) IFS= read -r -u "$fd" _PRELOAD_REPLY; rc=$? ;;
+      *[!0-9a-f]*) _PRELOAD_REPLY='invalid worker PID reply'; rc=1 ;;
+      *) _PRELOAD_REPLY="$PRELOAD_DIR/worker-$((16#$_PRELOAD_REPLY))" ;;
+    esac
+  fi
   [[ -z ${PRELOAD_TIMING:-} ]] || _PRELOAD_TX+=" $EPOCHREALTIME"
   if (( keep )); then
     # EOF means the manager is gone; drop the kept mailbox.
