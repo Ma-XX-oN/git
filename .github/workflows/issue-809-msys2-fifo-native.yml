@@ -67,7 +67,21 @@ jobs:
           cp runtime/x86_64-pc-cygwin/winsup/cygwin/new-msys-2.0.dll "$isolated/msys-2.0.dll"
           sha256sum /usr/bin/msys-2.0.dll "$isolated/msys-2.0.dll"
           cmp -s /usr/bin/msys-2.0.dll "$isolated/msys-2.0.dll" && exit 40 || test "$?" -eq 1
-          "$isolated/bash.exe" --noprofile --norc -c 'printf "PATCHED_BASH_OK\n"'
+          # Distinguish relocation defects from incompatibility with patched DLL.
+          stock_isolated=experiments/issue-809/stock-isolated-rwf809
+          mkdir -p "$stock_isolated"
+          cp /usr/bin/bash.exe /usr/bin/msys-*.dll "$stock_isolated/"
+          bash_stock_status=0
+          "$stock_isolated/bash.exe" --noprofile --norc -c 'printf "STOCK_ISOLATED_BASH_OK\n"' >experiments/issue-809/stock-bash-smoke.log 2>&1 || bash_stock_status=$?
+          bash_patched_status=0
+          "$isolated/bash.exe" --noprofile --norc -c 'printf "PATCHED_BASH_OK\n"' >experiments/issue-809/patched-bash-smoke.log 2>&1 || bash_patched_status=$?
+          echo "BASH_STOCK_ISOLATED_EXIT=$bash_stock_status"
+          echo "BASH_PATCHED_ISOLATED_EXIT=$bash_patched_status"
+          cat experiments/issue-809/stock-bash-smoke.log experiments/issue-809/patched-bash-smoke.log
+          if test "$bash_patched_status" -ne 0 && test -x /usr/bin/strace.exe; then
+            /usr/bin/strace.exe -o experiments/issue-809/patched-bash.strace \
+              "$isolated/bash.exe" --noprofile --norc -c 'printf "PATCHED_BASH_TRACE\n"' || :
+          fi
           cp experiments/issue-809/msys2_fifo_unmodified_baseline.c experiments/issue-809/rwf809-compare.c
           sed -i 's/MAX_WRITERS = 48/MAX_WRITERS = 96/' experiments/issue-809/rwf809-compare.c
           grep -q 'MAX_WRITERS = 96' experiments/issue-809/rwf809-compare.c
@@ -83,6 +97,8 @@ jobs:
               done
             done
           done
+          test "$bash_stock_status" -eq 0
+          test "$bash_patched_status" -eq 0
       - name: Upload diagnostics and same-runner measurements
         if: always()
         uses: actions/upload-artifact@v4
@@ -92,3 +108,7 @@ jobs:
           path: |
             experiments/issue-809/windows-fifo-comparison.txt
             experiments/issue-809/msys2_fifo_wfmo.generated.patch
+            experiments/issue-809/stock-bash-smoke.log
+            experiments/issue-809/patched-bash-smoke.log
+            experiments/issue-809/patched-bash.strace
+            experiments/issue-809/isolated-rwf809/msys-2.0.dll
