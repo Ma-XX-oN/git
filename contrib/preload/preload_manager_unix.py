@@ -147,7 +147,11 @@ def main():
   parser.add_argument("--owner-pid", required=True, type=int)
   parser.add_argument("--directory", required=True, type=Path)
   args = parser.parse_args()
-  directory = args.directory.resolve(strict=True)
+  # Keep the client's spelling: replies are checked against $PRELOAD_DIR, and
+  # resolving symlinks would turn macOS /var/folders into /private/var/folders.
+  directory = Path(os.path.abspath(args.directory))
+  if not directory.is_dir():
+    parser.error("session directory does not exist: " + str(directory))
   manager = preload_pool.Manager(
     directory, preload_pool.worker_environment(args.owner_pid))
   server = Server(directory, manager)
