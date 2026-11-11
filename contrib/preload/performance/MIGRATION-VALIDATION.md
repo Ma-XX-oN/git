@@ -947,3 +947,54 @@ preconnected context channel targets that remaining cost and is the next
 experiment; measure it in two variants (forwarding with a channel opened at GET
 time, then with a channel prepared alongside the worker) to separate moving work
 out of Bash from removing connection setup.
+
+### Windows
+
+Windows now uses the same GET frame, read by the shared `_preload_read_pid`
+helper; PRELOAD and STOP keep line replies. It was adopted for a single
+protocol and reader on both platforms, not for speed: the local measurements
+below show no resolvable Windows latency change.
+
+An MSYS `strace` of four preloaded calls shows the mechanism. Baseline Bash read
+each 36-byte reply (`\\.\pipe\preload-<owner>\worker-<pid>` plus newline) with
+36 one-byte `read()` calls, 144 in total; MSYS opens the request pipe through
+`fhandler_disk_file`, but Bash still treats it as unseekable. The candidate
+reads each reply with one eight-byte `read()`. strace inflates per-call times,
+so the trace gives counts only.
+
+Matched comparison on the laptop (AMD Ryzen 7 5700U, 16 logical CPUs, Windows 11
+10.0.26200, Python 3.13.1, Bash 5.2.37 MSYS), one `git.exe` for both variants,
+baseline `6cbb403fae`, three ABBA blocks of 12 rounds per workload:
+
+| Workload | Baseline ms | Candidate ms | Change |
+|---|---:|---:|---:|
+| shell | 4.153 | 4.123 | -0.7% |
+| `$(...)` | 31.039 | 31.240 | +0.6% |
+
+Shell round medians overlap (baseline 4.096-4.204 ms, candidate
+4.078-4.235 ms); `$(...)` is dominated by MSYS fork cost.
+
+Paced stage medians (300 calls each, run order baseline, candidate, candidate,
+baseline), in microseconds:
+
+| Stage | Baseline | Candidate |
+|---|---:|---:|
+| client sent->replied | 245, 258 | 239, 250 |
+| manager allocated->delivered | 55, 56 | 52, 52 |
+| client replied->channels | 1173, 1203 | 1239, 1190 |
+| client request->output | 1632, 1628 | 1660, 1631 |
+| client total | 3826, 3856 | 3908, 3890 |
+
+Unlike Unix, the exchange stages differ by less than run-to-run variation. The
+likely reasons, not separately measured: the Windows manager built its reply
+with one f-string and had no mailbox lock check, so there was little manager
+work to remove, and the one-byte reads are cheap without tracing. Windows per-call time is dominated by opening the five
+worker channels (about 1.2 ms) and command/output handling (about 1.6 ms),
+which makes manager-side forwarding over a preconnected channel the more
+promising Windows experiment.
+
+Windows validation with the change: the shared-reader test, manager protocol
+(including Git Bash's throwaway connection) and concurrency checks, owner
+death, manager lifecycle, shell environment, existing regression scripts,
+shell output, and the 6000-command acceptance stress (median 5.742 ms) pass.
+[Raw comparison, stage JSON and strace read tallies](evidence/fixed-pid-windows-laptop.zip).
