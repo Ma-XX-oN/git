@@ -1,7 +1,7 @@
 name: RWF 809 MSYS2 FIFO zero-byte readiness prerequisite
 on:
   push:
-    branches: [experiment-809-msys2-fifo-wfmo]
+    branches: [experiment-809-msys2-fifo-wfmo-main]
     paths:
       - experiments/issue-809/msys2_fifo_zero_read_probe.cpp
       - .github/workflows/issue-809-msys2-fifo-wfmo.yml
