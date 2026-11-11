@@ -96,7 +96,9 @@ def make_server(name, direction):
         if K.WriteFile(h, buf, len(PAYLOAD), c.byref(n), None):
           rec["data"] = PAYLOAD[:n.value]
           states[idx]["stage"] = "flushing"
-          if not K.FlushFileBuffers(h):
+          if K.FlushFileBuffers(h):
+            rec["flush_ok"] = True
+          else:
             rec["flush_error"] = c.get_last_error()
         else:
           rec["error"] = f"WriteFile:{c.get_last_error()}"
@@ -151,7 +153,13 @@ def benchmark(bash, direction, iterations):
           raise RuntimeError(f"{index}: blocked native server after reply={got!r}, "
                              f"request_ms={ms:.3f}, states={states}, records={safe}")
         connects = sum(r["connected"] for r in records)
-        payloads = sum(r["data"] == PAYLOAD for r in records)
+        # A preliminary metadata connection can accept WriteFile yet close
+        # without draining it. Only a successful flush proves the data path
+        # completed on the server side. The client ACK independently proves
+        # delivery to Bash.
+        payloads = sum(r["data"] == PAYLOAD and
+                       (direction == "write" or r.get("flush_ok", False))
+                       for r in records)
         expected = "OK:RWF809_OK" if direction == "read" else "OK"
         if (got,connects,payloads)!=(expected,2,1):
           safe = [{**r,"data":r["data"].hex()} for r in records]
