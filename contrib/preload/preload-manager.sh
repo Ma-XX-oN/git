@@ -220,19 +220,21 @@ _preload_request() {
 # The worker request (arguments and cwd) follows `GET <name> <marker>` on the
 # manager connection; the manager forwards it to the worker's params-cwd
 # channel with the same marker, so this function opens only the other four.
-# The GET line and request are sent by one printf, so the manager usually
-# receives them in one read. The Windows form of the cwd is cached per $PWD:
-# capturing `pwd -W` costs a subshell, paid once per directory.
+# Capturing `pwd -W` with $(...) or a pipeline forks, so the Windows cwd is
+# obtained without a fork in one of two ways (experiment: PRELOAD_CWD_MODE):
+#   file  (default) `pwd -W` writes a per-process file that `read` loads, so
+#         one printf sends the GET line and the whole request.
+#   write `pwd -W` prints straight into the request connection between two
+#         printfs: three writes, no file.
 _preload_template_windows() {
   local req wdir rc marker count header chunk status out_open=1 err_open=1 _pt=
-  local fd_in fd_out fd_err fd_exit format
+  local fd_in fd_out fd_err fd_exit format cwd= cwd_mode=${PRELOAD_CWD_MODE:-file}
   [[ -z ${PRELOAD_TIMING:-} ]] || _pt=$EPOCHREALTIME
-  if [[ ${_PRELOAD_CWD_KEY-} != "$PWD" ]]; then
-    if ! _PRELOAD_CWD_WIN=$(pwd -W); then
-      printf 'PRELOAD ERROR: cannot convert the working directory\n' >&2
-      return 255
-    fi
-    _PRELOAD_CWD_KEY=$PWD
+  if [[ $cwd_mode == file ]] &&
+     ! { pwd -W >|"$PRELOAD_DIR/cwd.$BASHPID" &&
+         IFS= read -r cwd <"$PRELOAD_DIR/cwd.$BASHPID"; }; then
+    printf 'PRELOAD ERROR: cannot convert the working directory\n' >&2
+    return 255
   fi
   if ! _preload_open req "$PRELOAD_WIN_DIR\\request" 40; then
     printf 'PRELOAD ERROR: cannot connect to the preload manager\n' >&2
@@ -246,9 +248,13 @@ _preload_template_windows() {
   # One %s\0 per argument; the name is a validated literal without % or \.
   # The cwd keeps the newline `pwd -W` prints, which the worker requires.
   printf -v format '%*s' "$#" ''
-  format="GET __PRELOAD_NAME__ %s\\n%b__PRELOAD_NAME__\\0${format// /%s\\0}cwd\\0%s\\n\\0end\\0"
+  format="GET __PRELOAD_NAME__ %s\\n%b__PRELOAD_NAME__\\0${format// /%s\\0}cwd\\0"
   _PRELOAD_REPLY=
-  printf "$format" "$marker" "$header" "$@" "$_PRELOAD_CWD_WIN" >&"$req" &&
+  if [[ $cwd_mode == file ]]; then
+    printf "$format%s\\n\\0end\\0" "$marker" "$header" "$@" "$cwd"
+  else
+    printf "$format" "$marker" "$header" "$@" && pwd -W && printf '\0end\0'
+  fi >&"$req" &&
     { [[ -z ${PRELOAD_TIMING:-} ]] || _pt+=" $EPOCHREALTIME"; } &&
     _preload_read_pid "$req" "$PRELOAD_WIN_DIR\\worker-"
   rc=$? wdir=$_PRELOAD_REPLY
