@@ -1776,20 +1776,15 @@ static const wchar_t *wcschrnul(const wchar_t *s, wchar_t c)
 	return s;
 }
 
-/**
- * @brief Compare case-insensitive environment keys, including drive pseudo-variables.
- * @param a Borrowed pointer to a wide NAME=VALUE entry pointer.
- * @param b Borrowed pointer to a wide NAME=VALUE entry pointer.
- * @return Negative, zero or positive according to key ordering; values are ignored.
- */
+/* Compare only keys */
 static int wenvcmp(const void *a, const void *b)
 {
 	wchar_t *p = *(wchar_t **)a, *q = *(wchar_t **)b;
 	size_t p_len, q_len;
 
 	/* Find the keys */
-	p_len = wcschrnul(p + (*p == L'='), L'=') - p;
-	q_len = wcschrnul(q + (*q == L'='), L'=') - q;
+	p_len = wcschrnul(p, L'=') - p;
+	q_len = wcschrnul(q, L'=') - q;
 
 	/* If the length differs, include the shorter key's NUL */
 	if (p_len < q_len)
@@ -1800,9 +1795,7 @@ static int wenvcmp(const void *a, const void *b)
 	return _wcsnicmp(p, q, p_len);
 }
 
-/**
- * @brief Build a sorted Unicode environment by merging inherited values and settings.
- *
+/*
  * Build an environment block combining the inherited environment
  * merged with the given list of settings.
  *
@@ -1813,10 +1806,8 @@ static int wenvcmp(const void *a, const void *b)
  *
  * We return a contiguous block of UNICODE strings with a final trailing
  * zero word.
- * @param deltaenv Borrowed NULL-terminated UTF-8 settings or removals.
- * @return Owned sorted Unicode block; caller frees it after use.
  */
-static wchar_t *make_environment_block(const char *const *deltaenv)
+static wchar_t *make_environment_block(char **deltaenv)
 {
 	wchar_t *wenv = GetEnvironmentStringsW(), *wdeltaenv, *result, *p;
 	size_t wlen, s, delta_size, size;
@@ -1845,11 +1836,11 @@ static wchar_t *make_environment_block(const char *const *deltaenv)
 	 * skipping duplicate keys
 	 */
 	for (p = wenv; p && *p; ) {
-		s = wcslen(p) + 1;
 		ALLOC_GROW(array, nr + 1, alloc);
+		s = wcslen(p) + 1;
 		array[nr++] = p;
-		size += s;
 		p += s;
+		size += s;
 	}
 
 	/* (over-)assess size needed for wchar version of deltaenv */
@@ -1866,7 +1857,7 @@ static wchar_t *make_environment_block(const char *const *deltaenv)
 	}
 
 	git_stable_qsort(array, nr, sizeof(*array), wenvcmp);
-	ALLOC_ARRAY(result, size + delta_size + 1);
+	ALLOC_ARRAY(result, size + delta_size);
 
 	for (p = result, i = 0; i < nr; i++) {
 		/* Skip any duplicate keys; last one wins */
@@ -1881,8 +1872,6 @@ static wchar_t *make_environment_block(const char *const *deltaenv)
 		COPY_ARRAY(p, array[i], size);
 		p += size;
 	}
-	if (p == result)
-		*p++ = L'\0';
 	*p = L'\0';
 
 	free(array);
@@ -2095,7 +2084,7 @@ static pid_t mingw_spawnve_fd(const char *cmd, const char **argv, char **deltaen
 	xutftowcs(wargs, args.buf, 2 * args.len + 1);
 	strbuf_release(&args);
 
-	wenvblk = make_environment_block((const char *const *)deltaenv);
+	wenvblk = make_environment_block(deltaenv);
 
 	memset(&pi, 0, sizeof(pi));
 	if (stdhandles_count &&
