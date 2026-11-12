@@ -221,14 +221,16 @@ _preload_request() {
 # manager connection; the manager forwards it to the worker's params-cwd
 # channel with the same marker, so this function opens only the other four.
 # Capturing `pwd -W` with $(...) or a pipeline forks, so the Windows cwd is
-# obtained without a fork in one of two ways (experiment: PRELOAD_CWD_MODE):
-#   file  (default) `pwd -W` writes a per-process file that `read` loads, so
-#         one printf sends the GET line and the whole request.
-#   write `pwd -W` prints straight into the request connection between two
-#         printfs: three writes, no file.
+# obtained without a fork in one of two ways (experiment: EXP_PRELOAD_CWD_MODE;
+# not PRELOAD_*, which the benchmark harnesses strip):
+#   write (default) `pwd -W` prints straight into the request connection
+#         between two printfs: three writes, no file.
+#   file  `pwd -W` writes a per-process file that `read` loads, so one printf
+#         sends the GET line and the whole request. Measured about 450 us
+#         slower per call on CI (run 43133247916).
 _preload_template_windows() {
   local req wdir rc marker count header chunk status out_open=1 err_open=1 _pt=
-  local fd_in fd_out fd_err fd_exit format cwd= cwd_mode=${PRELOAD_CWD_MODE:-file}
+  local fd_in fd_out fd_err fd_exit format cwd= cwd_mode=${EXP_PRELOAD_CWD_MODE:-write}
   [[ -z ${PRELOAD_TIMING:-} ]] || _pt=$EPOCHREALTIME
   if [[ $cwd_mode == file ]] &&
      ! { pwd -W >|"$PRELOAD_DIR/cwd.$BASHPID" &&

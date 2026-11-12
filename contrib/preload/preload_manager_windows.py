@@ -19,9 +19,9 @@ would otherwise write to the worker's `params-cwd` channel. After the reply
 the manager writes the marker to that channel and relays the following bytes
 unparsed until the client closes the request connection, then holds the
 channel until the worker exits. The client opens only stdout, stderr,
-exit-code and stdin. PRELOAD_CONTEXT_CONNECT selects when the manager
-connects: `get` (default) when forwarding, `spawn` as soon as the worker is
-READY.
+exit-code and stdin. EXP_PRELOAD_CONNECT (experiment; not PRELOAD_*, which
+the benchmark harnesses strip) selects when the manager connects: `get`
+(default) when forwarding, `spawn` as soon as the worker is READY.
 
 Each connection is a private reply channel, so concurrent subshells never see
 each other's replies. Git Bash opens a throwaway connection before the real
@@ -422,10 +422,11 @@ def main():
   if not owner:
     raise OSError(C.get_last_error(), "OpenProcess(owner)")
   prepare = None
-  if os.environ.get("PRELOAD_CONTEXT_CONNECT") == "spawn":
+  if os.environ.get("EXP_PRELOAD_CONNECT") == "spawn":
     def prepare(worker):
       """Preconnect a READY worker's params-cwd channel for forwarding."""
       worker.preload_context = connect_context(args.pipe_dir, worker.pid)
+      log(f"CONTEXT_PRECONNECTED {worker.pid}")
   manager = preload_pool.Manager(directory, preload_pool.worker_environment(
     args.owner_pid, {"PRELOAD_WIN_DIR": args.pipe_dir}), prepare)
   address = args.pipe_dir + "\\request"

@@ -25,7 +25,7 @@ on:
         required: false
         default: false
       relay:
-        description: Validate and measure Windows params-cwd relay (file vs write cwd)
+        description: Validate and measure Windows params-cwd relay (connect at GET vs spawn)
         type: boolean
         required: false
         default: false
@@ -365,7 +365,7 @@ jobs:
           . /etc/profile || exit 1
           cd "$GITHUB_WORKSPACE"
           make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease all
-      - name: Validate relay in both cwd modes
+      - name: Validate relay with both connect modes
         shell: bash
         run: |
           . /etc/profile || exit 1
@@ -375,8 +375,8 @@ jobs:
           "$py" -m unittest discover -s t/preload -p test_pid_reply.py -v
           "$py" t/preload/test_windows_worker_lifecycle.py "$gitbin"
           "$py" t/preload/test_manager_lifecycle.py
-          for mode in file write; do
-            export PRELOAD_CWD_MODE=$mode
+          for mode in get spawn; do
+            export EXP_PRELOAD_CONNECT=$mode
             "$py" t/preload/test_preload_manager.py --git "$gitbin" --output relay-results/$mode/manager
             "$py" t/preload/test_owner_death.py --git "$gitbin"
             "$py" t/preload/test_many_arguments.py --git "$gitbin"
@@ -399,17 +399,20 @@ jobs:
           py="$(cygpath -u "$pythonLocation")/python.exe"
           gitbin="$(cygpath -w "$PWD/git.exe")"
           baseline=relay-baseline/contrib/preload/preload-manager.sh
-          for mode in file write; do
-            PRELOAD_CWD_MODE=$mode "$py" t/perf/compare_preload_dispatch.py --baseline-library "$baseline" --baseline-ref 646a8b6479 --git "$gitbin" --rounds 5 --output relay-results/comparison-$mode
+          for mode in get spawn; do
+            EXP_PRELOAD_CONNECT=$mode "$py" t/perf/compare_preload_dispatch.py --baseline-library "$baseline" --baseline-ref 646a8b6479 --git "$gitbin" --rounds 5 --output relay-results/comparison-$mode
           done
           for workload in shell subshell; do
             "$py" t/perf/preload_stage_timing.py --git "$gitbin" --count 300 --workload $workload --library "$baseline" --output relay-results/stages-$workload-baseline-0
-            PRELOAD_CWD_MODE=file "$py" t/perf/preload_stage_timing.py --git "$gitbin" --count 300 --workload $workload --output relay-results/stages-$workload-file-0
-            PRELOAD_CWD_MODE=write "$py" t/perf/preload_stage_timing.py --git "$gitbin" --count 300 --workload $workload --output relay-results/stages-$workload-write-0
-            PRELOAD_CWD_MODE=write "$py" t/perf/preload_stage_timing.py --git "$gitbin" --count 300 --workload $workload --output relay-results/stages-$workload-write-1
-            PRELOAD_CWD_MODE=file "$py" t/perf/preload_stage_timing.py --git "$gitbin" --count 300 --workload $workload --output relay-results/stages-$workload-file-1
+            EXP_PRELOAD_CONNECT=get "$py" t/perf/preload_stage_timing.py --git "$gitbin" --count 300 --workload $workload --output relay-results/stages-$workload-get-0
+            EXP_PRELOAD_CONNECT=spawn "$py" t/perf/preload_stage_timing.py --git "$gitbin" --count 300 --workload $workload --output relay-results/stages-$workload-spawn-0
+            EXP_PRELOAD_CONNECT=spawn "$py" t/perf/preload_stage_timing.py --git "$gitbin" --count 300 --workload $workload --output relay-results/stages-$workload-spawn-1
+            EXP_PRELOAD_CONNECT=get "$py" t/perf/preload_stage_timing.py --git "$gitbin" --count 300 --workload $workload --output relay-results/stages-$workload-get-1
             "$py" t/perf/preload_stage_timing.py --git "$gitbin" --count 300 --workload $workload --library "$baseline" --output relay-results/stages-$workload-baseline-1
           done
+          # The variant must have reached the manager: spawn runs log preconnects.
+          grep -q CONTEXT_PRECONNECTED relay-results/stages-shell-spawn-0/paced/manager.log
+          ! grep -q CONTEXT_PRECONNECTED relay-results/stages-shell-get-0/paced/manager.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
