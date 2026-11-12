@@ -217,17 +217,38 @@ _preload_request() {
 # Template for generated Windows command functions; __PRELOAD_NAME__ is
 # replaced by the command name. Arguments: the command's arguments. Returns
 # the command's exit status, or 255 for a preload failure.
+# The worker request (arguments and cwd) follows `GET <name> <marker>` on the
+# manager connection; the manager forwards it to the worker's params-cwd
+# channel with the same marker, so this function opens only the other four.
+# The GET line and request are sent by one printf, so the manager usually
+# receives them in one read. The Windows form of the cwd is cached per $PWD:
+# capturing `pwd -W` costs a subshell, paid once per directory.
 _preload_template_windows() {
   local req wdir rc marker count header chunk status out_open=1 err_open=1 _pt=
-  local fd_in fd_out fd_err fd_exit fd_ctl
+  local fd_in fd_out fd_err fd_exit format
   [[ -z ${PRELOAD_TIMING:-} ]] || _pt=$EPOCHREALTIME
+  if [[ ${_PRELOAD_CWD_KEY-} != "$PWD" ]]; then
+    if ! _PRELOAD_CWD_WIN=$(pwd -W); then
+      printf 'PRELOAD ERROR: cannot convert the working directory\n' >&2
+      return 255
+    fi
+    _PRELOAD_CWD_KEY=$PWD
+  fi
   if ! _preload_open req "$PRELOAD_WIN_DIR\\request" 40; then
     printf 'PRELOAD ERROR: cannot connect to the preload manager\n' >&2
     return 255
   fi
   [[ -z ${PRELOAD_TIMING:-} ]] || _pt+=" $EPOCHREALTIME"
+  marker=$(( _PRELOAD_SEQ = (${_PRELOAD_SEQ:-0} + 1) % 10 ))
+  count=$(( $# + 1 ))
+  # Little-endian 32-bit entry count; the low two bytes cover 64Ki entries.
+  printf -v header '\\x%02x\\x%02x\\x00\\x00' $(( count & 255 )) $(( count >> 8 & 255 ))
+  # One %s\0 per argument; the name is a validated literal without % or \.
+  # The cwd keeps the newline `pwd -W` prints, which the worker requires.
+  printf -v format '%*s' "$#" ''
+  format="GET __PRELOAD_NAME__ %s\\n%b__PRELOAD_NAME__\\0${format// /%s\\0}cwd\\0%s\\n\\0end\\0"
   _PRELOAD_REPLY=
-  printf 'GET __PRELOAD_NAME__\n' >&"$req" &&
+  printf "$format" "$marker" "$header" "$@" "$_PRELOAD_CWD_WIN" >&"$req" &&
     { [[ -z ${PRELOAD_TIMING:-} ]] || _pt+=" $EPOCHREALTIME"; } &&
     _preload_read_pid "$req" "$PRELOAD_WIN_DIR\\worker-"
   rc=$? wdir=$_PRELOAD_REPLY
@@ -237,32 +258,20 @@ _preload_template_windows() {
     printf 'PRELOAD ERROR: %s\n' "${wdir:-no reply from the preload manager}" >&2
     return 255
   fi
-  marker=$(( _PRELOAD_SEQ = (${_PRELOAD_SEQ:-0} + 1) % 10 ))
   # Open in the order the worker accepts connections.
   if ! _preload_open_marked fd_out "$wdir\\stdout" "$marker" 40 ||
      ! _preload_open_marked fd_err "$wdir\\stderr" "$marker" 40 ||
      ! _preload_open_marked fd_exit "$wdir\\exit-code" "$marker" 40 ||
-     ! _preload_open_marked fd_in "$wdir\\stdin" "$marker" 40 ||
-     ! _preload_open_marked fd_ctl "$wdir\\params-cwd" "$marker" 40; then
-    for rc in $fd_out $fd_err $fd_exit $fd_in $fd_ctl; do eval "exec $rc>&-"; done
+     ! _preload_open_marked fd_in "$wdir\\stdin" "$marker" 40; then
+    for rc in $fd_out $fd_err $fd_exit $fd_in; do eval "exec $rc>&-"; done
     printf 'PRELOAD ERROR: cannot connect to worker %s\n' "$wdir" >&2
     return 255
   fi
-  [[ -z ${PRELOAD_TIMING:-} ]] || _pt+=" $EPOCHREALTIME"
-  count=$(( $# + 1 ))
-  # Little-endian 32-bit entry count; the low two bytes cover 64Ki entries.
-  printf -v header '\\x%02x\\x%02x\\x00\\x00' $(( count & 255 )) $(( count >> 8 & 255 ))
-  if ! { printf '%b%s\0' "$header" '__PRELOAD_NAME__' &&
-         { (( $# == 0 )) || printf '%s\0' "$@"; } &&
-         _preload_write_context; } >&"$fd_ctl"; then
-    exec {fd_out}<&- {fd_err}<&- {fd_exit}<&- {fd_in}>&- {fd_ctl}>&-
-    printf 'PRELOAD ERROR: worker request write failed\n' >&2
-    return 255
-  fi
-  [[ -z ${PRELOAD_TIMING:-} ]] || _pt+=" $EPOCHREALTIME"
-  # Keep stdin and params-cwd open until output EOF so closing them cannot
-  # discard a marker before the worker reads it. Alternate between stdout
-  # and stderr so neither stream blocks the other.
+  # Stage timestamps for PRELOAD_TIMING: channels, then request (already sent).
+  [[ -z ${PRELOAD_TIMING:-} ]] || _pt+=" $EPOCHREALTIME $EPOCHREALTIME"
+  # Keep stdin open until output EOF so closing it cannot discard a marker
+  # before the worker reads it. Alternate between stdout and stderr so
+  # neither stream blocks the other.
   while (( out_open || err_open )); do
     if (( out_open )); then
       chunk=
@@ -271,7 +280,7 @@ _preload_template_windows() {
       [[ -z $chunk ]] || printf '%s' "$chunk"
       if (( rc == 1 )); then out_open=0; exec {fd_out}<&-
       elif (( rc != 0 && rc <= 128 )); then
-        exec {fd_out}<&- {fd_err}<&- {fd_exit}<&- {fd_in}>&- {fd_ctl}>&-
+        exec {fd_out}<&- {fd_err}<&- {fd_exit}<&- {fd_in}>&-
         printf 'PRELOAD ERROR: stdout read failed\n' >&2; return 255
       fi
     fi
@@ -282,13 +291,13 @@ _preload_template_windows() {
       [[ -z $chunk ]] || printf '%s' "$chunk" >&2
       if (( rc == 1 )); then err_open=0; exec {fd_err}<&-
       elif (( rc != 0 && rc <= 128 )); then
-        exec {fd_out}<&- {fd_err}<&- {fd_exit}<&- {fd_in}>&- {fd_ctl}>&-
+        exec {fd_out}<&- {fd_err}<&- {fd_exit}<&- {fd_in}>&-
         printf 'PRELOAD ERROR: stderr read failed\n' >&2; return 255
       fi
     fi
   done
   [[ -z ${PRELOAD_TIMING:-} ]] || _pt+=" $EPOCHREALTIME"
-  exec {fd_in}>&- {fd_ctl}>&-
+  exec {fd_in}>&-
   IFS= read -r status <&"$fd_exit"
   rc=$?
   exec {fd_exit}<&-

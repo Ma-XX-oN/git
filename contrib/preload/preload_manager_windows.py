@@ -7,11 +7,21 @@ and send one line on that connection:
   PRELOAD <name> <native-executable-path>   ->  OK | ERROR <reason>
   GET <name>                                ->  eight hexadecimal PID bytes, no newline
                                                 or 00000000 + ERROR <reason> + newline
+  GET <name> <marker> + worker request      ->  as GET <name>
   STOP                                      ->  OK, then the manager exits
 
 The client rebuilds the worker's pipe directory `<pipe-dir>\\worker-<pid>`
 from the PID. A fixed-length reply lets Bash read it in one call; a line
 reply costs Bash one read per byte on a pipe.
+
+With a marker digit, the GET line is followed by exactly the bytes the client
+would otherwise write to the worker's `params-cwd` channel. After the reply
+the manager writes the marker to that channel and relays the following bytes
+unparsed until the client closes the request connection, then holds the
+channel until the worker exits. The client opens only stdout, stderr,
+exit-code and stdin. PRELOAD_CONTEXT_CONNECT selects when the manager
+connects: `get` (default) when forwarding, `spawn` as soon as the worker is
+READY.
 
 Each connection is a private reply channel, so concurrent subshells never see
 each other's replies. Git Bash opens a throwaway connection before the real
@@ -26,6 +36,7 @@ from ctypes import wintypes as W
 import json
 import os
 from pathlib import Path
+import queue
 import sys
 import threading
 import time
@@ -59,6 +70,9 @@ K.WaitForSingleObject.argtypes = [W.HANDLE, W.DWORD]
 K.WaitForSingleObject.restype = W.DWORD
 K.WaitNamedPipeW.argtypes = [W.LPCWSTR, W.DWORD]
 K.WaitNamedPipeW.restype = W.BOOL
+K.CreateFileW.argtypes = [W.LPCWSTR, W.DWORD, W.DWORD, W.LPVOID, W.DWORD, W.DWORD,
+                          W.HANDLE]
+K.CreateFileW.restype = W.HANDLE
 
 INVALID = C.c_void_p(-1).value
 PIPE_ACCESS_DUPLEX = 3
@@ -73,6 +87,51 @@ WAIT_TIMEOUT = 258
 MIN_LISTENING = 3
 MAX_IDLE = 6
 MAX_LINE = 4096
+GENERIC_READ_WRITE = 0xc0000000
+OPEN_EXISTING = 3
+
+
+def connect_context(pipe_dir, pid):
+  """Connect to a worker's params-cwd channel.
+
+  The worker accepts a connection made before it reaches that channel; the
+  marker byte written later identifies it.
+
+  Parameters
+  ----------
+  pipe_dir : str
+      Session pipe directory.
+  pid : int
+      Worker PID.
+
+  Returns
+  -------
+  int
+      Owned pipe handle.
+  """
+  address = f"{pipe_dir}\\worker-{pid}\\params-cwd"
+  for _ in range(40):
+    handle = K.CreateFileW(address, GENERIC_READ_WRITE, 0, None, OPEN_EXISTING, 0, None)
+    if handle != INVALID:
+      return handle
+    K.WaitNamedPipeW(address, 5)
+  raise C.WinError(C.get_last_error())
+
+
+def write_all(handle, payload):
+  """Write a complete payload to a pipe.
+
+  Parameters
+  ----------
+  handle : int
+      Borrowed connected pipe handle.
+  payload : bytes
+      Bytes to write.
+  """
+  count = W.DWORD()
+  if not K.WriteFile(handle, payload, len(payload), C.byref(count), None) or \
+      count.value != len(payload):
+    raise C.WinError(C.get_last_error())
 
 
 class Server:
@@ -82,12 +141,15 @@ class Server:
   ----------
   address : str
       Full request pipe name, `<pipe-dir>\\request`.
+  pipe_dir : str
+      Session pipe directory, used to reach a worker's params-cwd channel.
   manager : preload_pool.Manager
       Pools serving PRELOAD and GET requests.
   """
 
-  def __init__(self, address, manager):
+  def __init__(self, address, pipe_dir, manager):
     self.address = address
+    self.pipe_dir = pipe_dir
     self.manager = manager
     self.lock = threading.Lock()
     self.listening = 0
@@ -161,27 +223,38 @@ class Server:
       K.CloseHandle(handle)
 
   def _serve(self, handle):
-    """Answer one request line, then wait for the client to close.
+    """Answer one request, then wait for the client to close.
 
     Parameters
     ----------
     handle : int
         Borrowed connected instance.
     """
-    line = self._read_line(handle)
-    if line is None:
+    request = self._read_line(handle)
+    if request is None:
       return  # Git Bash's throwaway connection, or an aborted client.
+    line, data = request
     received = time.time()
     command, _, rest = line.partition(" ")
     worker = None
+    forward = None
     if command == "GET":
-      result = self.manager.allocate(rest)
+      name, _, marker = rest.partition(" ")
       allocated = time.time()
-      if isinstance(result, str):
-        reply = "00000000" + result
+      if marker and (len(marker) != 1 or not marker.isdigit()):
+        reply = "00000000ERROR invalid marker"
       else:
-        worker = result
-        reply = f"{worker.pid:08x}"
+        result = self.manager.allocate(name)
+        allocated = time.time()
+        if isinstance(result, str):
+          reply = "00000000" + result
+        else:
+          worker = result
+          reply = f"{worker.pid:08x}"
+          if marker:
+            forward = marker.encode("ascii") + data
+          else:
+            self._release_context(worker)  # The client connects params-cwd itself.
     elif command == "PRELOAD":
       name, _, path = rest.partition(" ")
       reply = self.manager.preload(name, path) if name and path else "ERROR usage"
@@ -190,31 +263,36 @@ class Server:
     else:
       reply = "ERROR unknown request"
     try:
-      self._write(handle, (reply if worker is not None else reply + "\n").encode("utf-8"))
+      write_all(handle, (reply if worker is not None else reply + "\n").encode("utf-8"))
     except OSError:
       if worker is not None:  # The client never learned of this worker.
         worker.kill()
+        self._release_context(worker)
+        forward = None
       raise
     finally:
       # Start the replacement only now, so it cannot delay the reply.
       if worker is not None:
-        self.manager.replenish(rest)
+        self.manager.replenish(name)
     if command == "GET" and preload_pool.TIMING:
       log(f"TIMING GET received={received:.6f} allocated={allocated:.6f} "
           f"delivered={time.time():.6f}")
     if command == "STOP":
       log("MANAGER_STOP_REQUEST")
       self.stopped.set()
+    if forward is not None:
+      self._forward(handle, worker, forward)
     # Disconnecting discards unread data; wait until the client closes.
-    self._read_line(handle)
+    self._drain(handle)
 
   def _read_line(self, handle):
     """Read one newline-terminated request.
 
     Returns
     -------
-    str or None
-        Line without newline, or None if the client closed first.
+    tuple of (str, bytes) or None
+        Line without newline and any bytes already read after it, or None
+        if the client closed first.
     """
     data = bytearray()
     buffer = C.create_string_buffer(MAX_LINE)
@@ -226,22 +304,110 @@ class Server:
       data.extend(buffer.raw[:count.value])
       if len(data) > MAX_LINE:
         return None
-    return data[:data.index(b"\n")].decode("utf-8")
+    end = data.index(b"\n")
+    return data[:end].decode("utf-8"), bytes(data[end + 1:])
 
-  def _write(self, handle, payload):
-    """Write a complete reply.
+  def _drain(self, handle):
+    """Discard request bytes until the client closes its connection.
 
     Parameters
     ----------
     handle : int
         Borrowed connected instance.
-    payload : bytes
-        Reply line including its newline, or a GET PID frame without one.
     """
+    buffer = C.create_string_buffer(MAX_LINE)
     count = W.DWORD()
-    if not K.WriteFile(handle, payload, len(payload), C.byref(count), None) or \
-        count.value != len(payload):
-      raise C.WinError(C.get_last_error())
+    while K.ReadFile(handle, buffer, MAX_LINE, C.byref(count), None) and count.value:
+      pass
+
+  def _forward(self, request, worker, head):
+    """Relay the rest of the request connection to the worker's params-cwd.
+
+    The bytes after the GET line are exactly what params-cwd expects; they
+    are relayed unparsed until the client closes the request connection,
+    which it does after reading the reply. The worker validates them as it
+    would the client's own write.
+
+    Reading the request never waits on params-cwd: the worker reads that
+    channel only after the client has connected the others, and the client
+    does so only after writing its whole request. A request larger than the
+    params-cwd buffer would otherwise deadlock.
+
+    Parameters
+    ----------
+    request : int
+        Borrowed connected request instance.
+    worker : subprocess.Popen
+        Allocated worker; its preconnected handle, if any, is used.
+    head : bytes
+        Marker digit followed by the request bytes already read.
+    """
+    context = getattr(worker, "preload_context", None)
+    worker.preload_context = None
+    try:
+      if context is None:
+        context = connect_context(self.pipe_dir, worker.pid)
+      # At most MAX_LINE + 1 bytes into an empty 64 KiB buffer: cannot block.
+      write_all(context, head)
+    except OSError as error:
+      log(f"FORWARD_FAILED pid={worker.pid} {error!r}")
+      worker.kill()
+      if context is not None:
+        K.CloseHandle(context)
+      return
+    chunks = queue.SimpleQueue()
+    threading.Thread(target=self._deliver, args=(worker, context, chunks),
+                     daemon=True).start()
+    buffer = C.create_string_buffer(MAX_LINE)
+    count = W.DWORD()
+    while K.ReadFile(request, buffer, MAX_LINE, C.byref(count), None) and count.value:
+      chunks.put(buffer.raw[:count.value])
+    chunks.put(None)
+    if preload_pool.TIMING:
+      log(f"TIMING FORWARD pid={worker.pid} relayed={time.time():.6f}")
+
+  @staticmethod
+  def _deliver(worker, context, chunks):
+    """Write relayed request chunks, then hold params-cwd until the worker exits.
+
+    Closing the connection before the worker reaches that channel would
+    discard the marker and request.
+
+    Parameters
+    ----------
+    worker : subprocess.Popen
+        Allocated worker.
+    context : int
+        Owned params-cwd handle, closed here.
+    chunks : queue.SimpleQueue
+        Request chunks in order, ended by None.
+    """
+    try:
+      while (chunk := chunks.get()) is not None:
+        write_all(context, chunk)
+      worker.wait()
+    except OSError as error:
+      log(f"FORWARD_FAILED pid={worker.pid} {error!r}")
+      worker.kill()
+    finally:
+      K.CloseHandle(context)
+
+  @staticmethod
+  def _release_context(worker):
+    """Close a preconnected params-cwd handle that will not be used.
+
+    The worker treats the closed connection as a probe and keeps waiting for
+    the client's own connection.
+
+    Parameters
+    ----------
+    worker : subprocess.Popen
+        Allocated worker, possibly holding a preconnected handle.
+    """
+    handle = getattr(worker, "preload_context", None)
+    worker.preload_context = None
+    if handle is not None:
+      K.CloseHandle(handle)
 
 
 def main():
@@ -255,10 +421,15 @@ def main():
   owner = K.OpenProcess(SYNCHRONIZE, False, args.owner_pid)
   if not owner:
     raise OSError(C.get_last_error(), "OpenProcess(owner)")
+  prepare = None
+  if os.environ.get("PRELOAD_CONTEXT_CONNECT") == "spawn":
+    def prepare(worker):
+      """Preconnect a READY worker's params-cwd channel for forwarding."""
+      worker.preload_context = connect_context(args.pipe_dir, worker.pid)
   manager = preload_pool.Manager(directory, preload_pool.worker_environment(
-    args.owner_pid, {"PRELOAD_WIN_DIR": args.pipe_dir}))
+    args.owner_pid, {"PRELOAD_WIN_DIR": args.pipe_dir}), prepare)
   address = args.pipe_dir + "\\request"
-  server = Server(address, manager)
+  server = Server(address, args.pipe_dir, manager)
   ready = directory / "ready.json"
   try:
     server.start()

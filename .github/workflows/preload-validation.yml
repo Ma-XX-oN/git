@@ -24,11 +24,16 @@ on:
         type: boolean
         required: false
         default: false
+      relay:
+        description: Validate and measure Windows params-cwd relay through the manager
+        type: boolean
+        required: false
+        default: false
 permissions:
   contents: read
 jobs:
   native:
-    if: ${{ !(github.event_name == 'workflow_dispatch' && (inputs.profile || inputs.transport || inputs.fixed_pid)) }}
+    if: ${{ !(github.event_name == 'workflow_dispatch' && (inputs.profile || inputs.transport || inputs.fixed_pid || inputs.relay)) }}
     strategy:
       fail-fast: false
       matrix:
@@ -341,6 +346,73 @@ jobs:
           path: |
             pid-results/
             build-pid/meson-logs/
+
+  relay:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.relay }}
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Build Makefile targets
+        shell: bash
+        run: |
+          . /etc/profile || exit 1
+          cd "$GITHUB_WORKSPACE"
+          make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease all
+      - name: Validate relay in both connect modes
+        shell: bash
+        run: |
+          . /etc/profile || exit 1
+          cd "$GITHUB_WORKSPACE"
+          py="$(cygpath -u "$pythonLocation")/python.exe"
+          gitbin="$(cygpath -w "$PWD/git.exe")"
+          "$py" -m unittest discover -s t/preload -p test_pid_reply.py -v
+          "$py" t/preload/test_windows_worker_lifecycle.py "$gitbin"
+          "$py" t/preload/test_manager_lifecycle.py
+          for mode in get spawn; do
+            export PRELOAD_CONTEXT_CONNECT=$mode
+            "$py" t/preload/test_preload_manager.py --git "$gitbin" --output relay-results/$mode/manager
+            "$py" t/preload/test_owner_death.py --git "$gitbin"
+            "$py" t/preload/test_many_arguments.py --git "$gitbin"
+            "$py" t/preload/test_shell_environment.py --git "$gitbin" --output relay-results/$mode/environment
+            "$py" t/preload/test_existing_regressions.py --git "$gitbin" --output relay-results/$mode/commands
+            "$py" t/preload/test_shell_output.py --git "$gitbin" --output relay-results/$mode/output
+            "$py" t/preload/acceptance.py --git "$gitbin" --count 6000 --trace --output relay-results/$mode/acceptance
+          done
+      - uses: actions/checkout@v4
+        with:
+          ref: 646a8b6479c0f168ac023e595e80e4e12881b245
+          path: relay-baseline
+          sparse-checkout: contrib/preload
+          persist-credentials: false
+      - name: Compare full calls and stages with identical worker binary
+        shell: bash
+        run: |
+          . /etc/profile || exit 1
+          cd "$GITHUB_WORKSPACE"
+          py="$(cygpath -u "$pythonLocation")/python.exe"
+          gitbin="$(cygpath -w "$PWD/git.exe")"
+          baseline=relay-baseline/contrib/preload/preload-manager.sh
+          for mode in get spawn; do
+            PRELOAD_CONTEXT_CONNECT=$mode "$py" t/perf/compare_preload_dispatch.py --baseline-library "$baseline" --baseline-ref 646a8b6479 --git "$gitbin" --rounds 5 --output relay-results/comparison-$mode
+          done
+          "$py" t/perf/preload_stage_timing.py --git "$gitbin" --count 300 --library "$baseline" --output relay-results/stages-baseline-0
+          PRELOAD_CONTEXT_CONNECT=get "$py" t/perf/preload_stage_timing.py --git "$gitbin" --count 300 --output relay-results/stages-get-0
+          PRELOAD_CONTEXT_CONNECT=spawn "$py" t/perf/preload_stage_timing.py --git "$gitbin" --count 300 --output relay-results/stages-spawn-0
+          PRELOAD_CONTEXT_CONNECT=spawn "$py" t/perf/preload_stage_timing.py --git "$gitbin" --count 300 --output relay-results/stages-spawn-1
+          PRELOAD_CONTEXT_CONNECT=get "$py" t/perf/preload_stage_timing.py --git "$gitbin" --count 300 --output relay-results/stages-get-1
+          "$py" t/perf/preload_stage_timing.py --git "$gitbin" --count 300 --library "$baseline" --output relay-results/stages-baseline-1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: relay-Windows
+          path: relay-results/
 
   regression:
     name: Final compatibility (${{ matrix.os }})

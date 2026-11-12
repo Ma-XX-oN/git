@@ -79,10 +79,17 @@ class Pool:
       Complete worker environment, including PRELOAD_PID.
   notify : callable
       Called without arguments whenever a worker becomes READY or fails.
+  spawner : Spawner, optional
+      Threads running replacement startups; a private one by default.
+  prepare : callable, optional
+      Called with each worker after READY and before it is published; an
+      OSError is logged and the worker is published unprepared.
   """
 
-  def __init__(self, name, executable, directory, environment, notify, spawner=None):
+  def __init__(self, name, executable, directory, environment, notify, spawner=None,
+               prepare=None):
     self.name = name
+    self.prepare = prepare
     self.executable = executable
     self.directory = directory
     self.environment = environment
@@ -193,6 +200,11 @@ class Pool:
         self.errors.append(f"no READY from pid={p.pid} response={line!r}")
       log(f"WORKER_NOT_READY {self.name} pid={p.pid} response={line!r}")
       return
+    if self.prepare is not None:
+      try:
+        self.prepare(p)
+      except OSError as error:
+        log(f"WORKER_PREPARE_FAILED {self.name} {p.pid} {error!r}")
     self.ready.put(p)
     log(f"WORKER_READY {self.name} {p.pid}")
 
@@ -260,11 +272,14 @@ class Manager:
       Existing private session directory.
   environment : dict
       Worker environment shared by all pools.
+  prepare : callable, optional
+      Passed to every Pool; see Pool.
   """
 
-  def __init__(self, directory, environment):
+  def __init__(self, directory, environment, prepare=None):
     self.directory = directory
     self.environment = environment
+    self.prepare = prepare
     self.pools = {}
     self.lock = threading.Lock()
     self.changed = threading.Condition(self.lock)
@@ -295,7 +310,7 @@ class Manager:
     if not path.is_file():
       return "ERROR executable not found: " + executable
     pool = Pool(name, path, self.directory, self.environment, self._notify,
-                self.spawner)
+                self.spawner, self.prepare)
     if not pool.start():
       return f"ERROR {name} doesn't support --preload-worker"
     with self.lock:
