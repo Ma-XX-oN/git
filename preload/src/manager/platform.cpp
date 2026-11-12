@@ -97,23 +97,41 @@ Process::Process(const std::string &executable, const std::string &directory) : 
 
 Process::~Process() { preload_connection_close(context); }
 
+/** Deadline callback borrows Process until ReadyDeadline joins its callbacks. */
+static VOID CALLBACK ready_timeout(void *process, BOOLEAN)
+{
+	static_cast<Process *>(process)->kill();
+}
+
+/** Native timer-queue deadline; no polling or per-startup application thread. */
+struct ReadyDeadline {
+	HANDLE timer = NULL; /**< Owned timer; its callbacks borrow the starting Process. */
+	/** Arm timeout_ms deadline; retry cancellation every 10 ms after expiry.
+	 * Retries cover a cancellation racing with ReadFile submission.
+	 */
+	ReadyDeadline(Process *process, unsigned timeout_ms)
+	{
+		if (!CreateTimerQueueTimer(&timer, NULL, ready_timeout, process, timeout_ms, 10, WT_EXECUTEDEFAULT))
+			throw std::runtime_error("create READY deadline failed");
+	}
+	/** Cancel timer and join every callback before Process or READY handle release. */
+	~ReadyDeadline() { DeleteTimerQueueTimer(NULL, timer, INVALID_HANDLE_VALUE); }
+};
+
 bool Process::ready(unsigned timeout_ms)
 {
 	std::string line;
-	auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
-	while (std::chrono::steady_clock::now() < deadline && line.size() < 64) {
-		DWORD available, count;
-		if (!PeekNamedPipe(impl->output.value, NULL, 0, NULL, &available, NULL)) break;
-		if (available) {
+	{
+		ReadyDeadline deadline(this, timeout_ms);
+		while (line.size() < 64) {
+			DWORD count;
 			char byte;
 			if (!ReadFile(impl->output.value, &byte, 1, &count, NULL) || !count) break;
 			line += byte;
 			if (byte == '\n') break;
-		} else {
-			if (WaitForSingleObject(impl->process.value, 0) != WAIT_TIMEOUT) break;
-			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		}
 	}
+	std::lock_guard<std::mutex> lock(impl->mutex);
 	CloseHandle(impl->output.value);
 	impl->output.value = NULL;
 	return line == "READY " + std::to_string(pid) + "\n";
@@ -134,6 +152,7 @@ void Process::kill()
 {
 	std::lock_guard<std::mutex> lock(impl->mutex);
 	if (WaitForSingleObject(impl->process.value, 0) == WAIT_TIMEOUT) TerminateProcess(impl->process.value, 1);
+	if (impl->output.value) preload_connection_cancel(reinterpret_cast<preload_connection>(impl->output.value));
 }
 
 struct Owner::Impl { Handle process; };

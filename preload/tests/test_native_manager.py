@@ -113,6 +113,14 @@ class NativePools(unittest.TestCase):
             else:
                 with self.assertRaises(ProcessLookupError): os.kill(child, 0)
 
+    def test_ready_timeout(self):
+        """A live executable without timely READY is killed within the support deadline."""
+        self.session.stop()
+        self.session = Session(self.directory, environment={**os.environ, "PRELOAD_FIXTURE_DELAY_MS": "5000"})
+        started = time.monotonic()
+        self.assertIn("doesn't support --preload-worker", self.preload("probe"))
+        self.assertLess(time.monotonic() - started, 3)
+
 
 if __name__ == "__main__":
     unittest.main()
