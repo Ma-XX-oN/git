@@ -1,6 +1,6 @@
 #include "git-compat-util.h"
 #include "common-init.h"
-#include "preload-worker.h"
+#include "preload/include/worker/worker.h"
 
 int main(int argc, const char **argv)
 {

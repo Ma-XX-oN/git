@@ -1,0 +1,18 @@
+# Preload-specific settings; they override the repository root's
+# .editorconfig, whose general settings still apply (no `root = true`).
+
+[client/*.sh]
+indent_style = space
+indent_size = 2
+
+[*.py]
+indent_style = space
+indent_size = 2
+
+[**.ps1]
+indent_style = space
+indent_size = 2
+
+[src/client/*.cs]
+indent_style = space
+indent_size = 2

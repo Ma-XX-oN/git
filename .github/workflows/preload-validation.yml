@@ -88,23 +88,34 @@ jobs:
             py="$(cygpath -u "$pythonLocation")/python.exe"
             gitbin="$(cygpath -w "$PWD/git.exe")"
             helper="$(cygpath -w "$PWD/t/helper/test-tool.exe")"
-            "$py" t/preload/test_windows_worker_lifecycle.py "$gitbin"
+            "$py" preload/tests/test_windows_worker_lifecycle.py "$gitbin"
           else
             py="$pythonLocation/bin/python3"
             gitbin="$PWD/git"
             helper="$PWD/t/helper/test-tool"
-            "$py" t/preload/test_posix_worker.py "$gitbin"
+            "$py" preload/tests/test_posix_worker.py "$gitbin"
           fi
-          "$py" t/preload/test_transport.py "$helper"
-          "$py" t/preload/test_manager_lifecycle.py
-          "$py" -m unittest discover -s t/preload -p test_manager_dispatch.py -v
-          "$py" t/preload/test_preload_manager.py --git "$gitbin" --output preload-results/manager
-          "$py" t/preload/test_owner_death.py --git "$gitbin"
-          "$py" t/preload/test_many_arguments.py --git "$gitbin"
-          "$py" t/preload/test_shell_environment.py --git "$gitbin" --output preload-results/environment
-          "$py" t/preload/test_existing_regressions.py --git "$gitbin" --output preload-results/commands
-          "$py" t/preload/acceptance.py --git "$gitbin" --count 6000 --trace --output preload-results
-          "$py" t/preload/test_shell_output.py --git "$gitbin" --output preload-results/output
+          "$py" preload/tests/test_transport.py "$helper"
+          "$py" preload/tests/test_manager_lifecycle.py
+          "$py" -m unittest discover -s preload/tests -p test_manager_dispatch.py -v
+          "$py" preload/tests/test_manager.py --git "$gitbin" --output preload-results/manager
+          "$py" preload/tests/test_owner_death.py --git "$gitbin"
+          "$py" preload/tests/test_worker_crash.py --git "$gitbin"
+          "$py" preload/tests/test_many_arguments.py --git "$gitbin"
+          "$py" preload/tests/test_shell_environment.py --git "$gitbin" --output preload-results/environment
+          "$py" preload/tests/test_existing_regressions.py --git "$gitbin" --output preload-results/commands
+          "$py" preload/tests/acceptance.py --git "$gitbin" --count 6000 --trace --output preload-results
+          "$py" preload/tests/test_shell_output.py --git "$gitbin" --output preload-results/output
+      - name: PowerShell client correctness and session lifecycle
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          # The SDK profile's minimal PATH omits PowerShell 7; resolve it first.
+          pwsh="$(command -v pwsh)" || exit 1
+          . /etc/profile || exit 1
+          cd "$GITHUB_WORKSPACE"
+          "$pwsh" -NoProfile -File preload/tests/test_powershell.ps1 -Git "$(cygpath -w "$PWD/git.exe")" -Python "$pythonLocation/python.exe" -Output "$(cygpath -w "$PWD/preload-results/powershell")"
+          "$pwsh" -NoProfile -File preload/tests/test_powershell_stress.ps1 -Git "$(cygpath -w "$PWD/git.exe")" -Python "$pythonLocation/python.exe" -Output "$(cygpath -w "$PWD/preload-results/powershell-stress")" -Count 6000
       - name: Preserve native fast-path evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -116,6 +127,8 @@ jobs:
         run: |
           meson_options=()
           if [[ $RUNNER_OS == Windows ]]; then
+            # The SDK profile's minimal PATH omits PowerShell 7; resolve it first.
+            pwsh="$(command -v pwsh)" || exit 1
             . /etc/profile || exit 1
             cd "$GITHUB_WORKSPACE"
             py="$(cygpath -u "$pythonLocation")/python.exe"
@@ -131,12 +144,13 @@ jobs:
           if [[ $RUNNER_OS == Windows ]]; then
             export PATH="/usr/bin:$PATH"
             gitbin="$(cygpath -w "$PWD/build-preload/git.exe")"
-            "$py" t/preload/test_windows_worker_lifecycle.py "$gitbin"
+            "$py" preload/tests/test_windows_worker_lifecycle.py "$gitbin"
+            "$pwsh" -NoProfile -File preload/tests/test_powershell.ps1 -Git "$gitbin" -Python "$pythonLocation/python.exe" -Output "$(cygpath -w "$PWD/preload-results/meson-powershell")"
           else
             gitbin="$PWD/build-preload/git"
-            "$py" t/preload/test_posix_worker.py "$gitbin"
+            "$py" preload/tests/test_posix_worker.py "$gitbin"
           fi
-          "$py" t/preload/test_existing_regressions.py --git "$gitbin" --output preload-results/meson-commands
+          "$py" preload/tests/test_existing_regressions.py --git "$gitbin" --output preload-results/meson-commands
           "$py" -m mesonbuild.mesonmain test -C build-preload --print-errorlogs t5790-preload
       - name: Check out manager before READY dispatch optimization
         uses: actions/checkout@v4
@@ -159,7 +173,7 @@ jobs:
             baselinebin="$PWD/dispatch-baseline/git"
           fi
           make -C dispatch-baseline -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git$([[ $RUNNER_OS == Windows ]] && printf .exe)
-          "$py" t/perf/compare_preload_dispatch.py --baseline-library dispatch-baseline/contrib/preload/preload-manager.sh --baseline-git "$baselinebin" --git "$gitbin" --output preload-dispatch-comparison
+          "$py" preload/perf/compare_dispatch.py --baseline-library dispatch-baseline/contrib/preload/preload-manager.sh --baseline-git "$baselinebin" --git "$gitbin" --output preload-dispatch-comparison
       - name: Check out preserved baseline
         uses: actions/checkout@v4
         with:
@@ -187,11 +201,21 @@ jobs:
           make -C upstream -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git$([[ $RUNNER_OS == Windows ]] && printf .exe)
           # Direct calls in every round run unmodified upstream Git, so one job
           # times upstream direct, pre-migration preloaded and migrated preloaded.
-          "$py" t/perf/compare_preload_versions.py --baseline baseline --baseline-ref production/preload --upstream upstream --rounds 3 --output preload-comparison
+          "$py" preload/perf/compare_versions.py --baseline baseline --baseline-ref production/preload --upstream upstream --rounds 3 --output preload-comparison
           # Per-stage latency of preloaded calls (client and manager timestamps).
           if [[ $RUNNER_OS == Windows ]]; then gitbin="$(cygpath -w "$PWD/git.exe")"; else gitbin="$PWD/git"; fi
-          "$py" t/perf/preload_stage_timing.py --git "$gitbin" --mode paced --output preload-stage-timing
-          "$py" t/perf/preload_stage_timing.py --git "$gitbin" --mode burst --output preload-stage-timing
+          "$py" preload/perf/stage_timing.py --git "$gitbin" --mode paced --output preload-stage-timing
+          "$py" preload/perf/stage_timing.py --git "$gitbin" --mode burst --output preload-stage-timing
+      - name: Compare Windows PowerShell and Bash clients
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          pwsh="$(command -v pwsh)" || exit 1
+          . /etc/profile || exit 1
+          cd "$GITHUB_WORKSPACE"
+          export PATH="${pwsh%/*}:$PATH"
+          py="$(cygpath -u "$pythonLocation")/python.exe"
+          "$py" preload/perf/compare_powershell.py --git "$(cygpath -w "$PWD/git.exe")" --output preload-powershell-comparison --count 200 --rounds 2 --powershell-output discard
       - name: Verify POSIX builds without pthread support
         if: runner.os != 'Windows'
         shell: bash
@@ -216,6 +240,7 @@ jobs:
             preload-comparison/
             preload-stage-timing/
             preload-dispatch-comparison/
+            preload-powershell-comparison/
             t/test-results/
             build-preload/meson-logs/
             preload-no-threads.*
@@ -249,9 +274,9 @@ jobs:
       - name: Build unchanged worker and check profiler accounting
         run: |
           make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git
-          python -m unittest discover -s t/preload -p test_preload_profile.py -v
+          python -m unittest discover -s preload/tests -p test_profile.py -v
       - name: Profile real shell and manager paths
-        run: python t/perf/profile_preload.py --git "$PWD/git" --output preload-profile
+        run: python preload/perf/profile_worker.py --git "$PWD/git" --output preload-profile
       - name: Preserve all profiling evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -279,8 +304,8 @@ jobs:
           echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
       - name: Compare communication and framing
         run: |
-          python -m unittest discover -s t/preload -p test_fifo_tcp.py -v
-          python t/perf/compare_fifo_tcp.py --output transport-results/results.json
+          python -m unittest discover -s preload/tests -p test_fifo_tcp.py -v
+          python preload/perf/compare_fifo_tcp.py --output transport-results/results.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -309,25 +334,25 @@ jobs:
         run: make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease all
       - name: Validate fixed frames and worker fast path
         run: |
-          python -m unittest discover -s t/preload -p test_manager_dispatch.py -v
-          python -m unittest discover -s t/preload -p test_pid_reply.py -v
-          python -m unittest discover -s t/preload -p test_preload_benchmark.py -v
-          python t/preload/test_posix_worker.py "$PWD/git"
-          python t/preload/test_transport.py "$PWD/t/helper/test-tool"
-          python t/preload/test_manager_lifecycle.py
-          python t/preload/test_preload_manager.py --git "$PWD/git" --output pid-results/manager
-          python t/preload/test_owner_death.py --git "$PWD/git"
-          python t/preload/test_shell_environment.py --git "$PWD/git" --output pid-results/environment
-          python t/preload/test_shell_output.py --git "$PWD/git" --output pid-results/output
-          python t/preload/test_existing_regressions.py --git "$PWD/git" --output pid-results/commands
-          python t/preload/acceptance.py --git "$PWD/git" --count 6000 --trace --output pid-results/acceptance
+          python -m unittest discover -s preload/tests -p test_manager_dispatch.py -v
+          python -m unittest discover -s preload/tests -p test_pid_reply.py -v
+          python -m unittest discover -s preload/tests -p test_benchmark.py -v
+          python preload/tests/test_posix_worker.py "$PWD/git"
+          python preload/tests/test_transport.py "$PWD/t/helper/test-tool"
+          python preload/tests/test_manager_lifecycle.py
+          python preload/tests/test_manager.py --git "$PWD/git" --output pid-results/manager
+          python preload/tests/test_owner_death.py --git "$PWD/git"
+          python preload/tests/test_shell_environment.py --git "$PWD/git" --output pid-results/environment
+          python preload/tests/test_shell_output.py --git "$PWD/git" --output pid-results/output
+          python preload/tests/test_existing_regressions.py --git "$PWD/git" --output pid-results/commands
+          python preload/tests/acceptance.py --git "$PWD/git" --count 6000 --trace --output pid-results/acceptance
       - name: Build Meson and validate worker regressions
         run: |
           python -m pip install meson ninja
           python -m mesonbuild.mesonmain setup build-pid -Drust=disabled -Dcurl=disabled -Dgettext=disabled -Dgit_gui=disabled -Dgitk=disabled -Dzlib_backend=zlib
           python -m mesonbuild.mesonmain compile -C build-pid -j4
-          python t/preload/test_posix_worker.py "$PWD/build-pid/git"
-          python t/preload/test_existing_regressions.py --git "$PWD/build-pid/git" --output pid-results/meson-commands
+          python preload/tests/test_posix_worker.py "$PWD/build-pid/git"
+          python preload/tests/test_existing_regressions.py --git "$PWD/build-pid/git" --output pid-results/meson-commands
           python -m mesonbuild.mesonmain test -C build-pid --print-errorlogs t5790-preload
       - uses: actions/checkout@v4
         with:
@@ -336,11 +361,11 @@ jobs:
       - name: Compare full calls with matching worker protocols
         run: |
           make -C pid-baseline -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git
-          python t/perf/compare_preload_dispatch.py --baseline-library pid-baseline/contrib/preload/preload-manager.sh --baseline-ref 26501aaea0 --baseline-git "$PWD/pid-baseline/git" --git "$PWD/git" --output pid-results/comparison
-          python t/perf/preload_stage_timing.py --git "$PWD/pid-baseline/git" --count 300 --library pid-baseline/contrib/preload/preload-manager.sh --output pid-results/stages-baseline-0
-          python t/perf/preload_stage_timing.py --git "$PWD/git" --count 300 --output pid-results/stages-candidate-0
-          python t/perf/preload_stage_timing.py --git "$PWD/git" --count 300 --output pid-results/stages-candidate-1
-          python t/perf/preload_stage_timing.py --git "$PWD/pid-baseline/git" --count 300 --library pid-baseline/contrib/preload/preload-manager.sh --output pid-results/stages-baseline-1
+          python preload/perf/compare_dispatch.py --baseline-library pid-baseline/contrib/preload/preload-manager.sh --baseline-ref 26501aaea0 --baseline-git "$PWD/pid-baseline/git" --git "$PWD/git" --output pid-results/comparison
+          python preload/perf/stage_timing.py --git "$PWD/pid-baseline/git" --count 300 --library pid-baseline/contrib/preload/preload-manager.sh --output pid-results/stages-baseline-0
+          python preload/perf/stage_timing.py --git "$PWD/git" --count 300 --output pid-results/stages-candidate-0
+          python preload/perf/stage_timing.py --git "$PWD/git" --count 300 --output pid-results/stages-candidate-1
+          python preload/perf/stage_timing.py --git "$PWD/pid-baseline/git" --count 300 --library pid-baseline/contrib/preload/preload-manager.sh --output pid-results/stages-baseline-1
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -374,18 +399,18 @@ jobs:
           cd "$GITHUB_WORKSPACE"
           py="$(cygpath -u "$pythonLocation")/python.exe"
           gitbin="$(cygpath -w "$PWD/git.exe")"
-          "$py" -m unittest discover -s t/preload -p test_pid_reply.py -v
-          "$py" t/preload/test_windows_worker_lifecycle.py "$gitbin"
-          "$py" t/preload/test_manager_lifecycle.py
+          "$py" -m unittest discover -s preload/tests -p test_pid_reply.py -v
+          "$py" preload/tests/test_windows_worker_lifecycle.py "$gitbin"
+          "$py" preload/tests/test_manager_lifecycle.py
           for mode in get spawn; do
             export EXP_PRELOAD_CONNECT=$mode
-            "$py" t/preload/test_preload_manager.py --git "$gitbin" --output relay-results/$mode/manager
-            "$py" t/preload/test_owner_death.py --git "$gitbin"
-            "$py" t/preload/test_many_arguments.py --git "$gitbin"
-            "$py" t/preload/test_shell_environment.py --git "$gitbin" --output relay-results/$mode/environment
-            "$py" t/preload/test_existing_regressions.py --git "$gitbin" --output relay-results/$mode/commands
-            "$py" t/preload/test_shell_output.py --git "$gitbin" --output relay-results/$mode/output
-            "$py" t/preload/acceptance.py --git "$gitbin" --count 6000 --trace --output relay-results/$mode/acceptance
+            "$py" preload/tests/test_manager.py --git "$gitbin" --output relay-results/$mode/manager
+            "$py" preload/tests/test_owner_death.py --git "$gitbin"
+            "$py" preload/tests/test_many_arguments.py --git "$gitbin"
+            "$py" preload/tests/test_shell_environment.py --git "$gitbin" --output relay-results/$mode/environment
+            "$py" preload/tests/test_existing_regressions.py --git "$gitbin" --output relay-results/$mode/commands
+            "$py" preload/tests/test_shell_output.py --git "$gitbin" --output relay-results/$mode/output
+            "$py" preload/tests/acceptance.py --git "$gitbin" --count 6000 --trace --output relay-results/$mode/acceptance
           done
       - uses: actions/checkout@v4
         with:
@@ -403,15 +428,15 @@ jobs:
           make -C relay-baseline -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git.exe
           baselinebin="$(cygpath -w "$PWD/relay-baseline/git.exe")"
           for mode in get spawn; do
-            EXP_PRELOAD_CONNECT=$mode "$py" t/perf/compare_preload_dispatch.py --baseline-library "$baseline" --baseline-ref 646a8b6479 --baseline-git "$baselinebin" --git "$gitbin" --rounds 5 --output relay-results/comparison-$mode
+            EXP_PRELOAD_CONNECT=$mode "$py" preload/perf/compare_dispatch.py --baseline-library "$baseline" --baseline-ref 646a8b6479 --baseline-git "$baselinebin" --git "$gitbin" --rounds 5 --output relay-results/comparison-$mode
           done
           for workload in shell subshell; do
-            "$py" t/perf/preload_stage_timing.py --git "$baselinebin" --count 300 --workload $workload --library "$baseline" --output relay-results/stages-$workload-baseline-0
-            EXP_PRELOAD_CONNECT=get "$py" t/perf/preload_stage_timing.py --git "$gitbin" --count 300 --workload $workload --output relay-results/stages-$workload-get-0
-            EXP_PRELOAD_CONNECT=spawn "$py" t/perf/preload_stage_timing.py --git "$gitbin" --count 300 --workload $workload --output relay-results/stages-$workload-spawn-0
-            EXP_PRELOAD_CONNECT=spawn "$py" t/perf/preload_stage_timing.py --git "$gitbin" --count 300 --workload $workload --output relay-results/stages-$workload-spawn-1
-            EXP_PRELOAD_CONNECT=get "$py" t/perf/preload_stage_timing.py --git "$gitbin" --count 300 --workload $workload --output relay-results/stages-$workload-get-1
-            "$py" t/perf/preload_stage_timing.py --git "$baselinebin" --count 300 --workload $workload --library "$baseline" --output relay-results/stages-$workload-baseline-1
+            "$py" preload/perf/stage_timing.py --git "$baselinebin" --count 300 --workload $workload --library "$baseline" --output relay-results/stages-$workload-baseline-0
+            EXP_PRELOAD_CONNECT=get "$py" preload/perf/stage_timing.py --git "$gitbin" --count 300 --workload $workload --output relay-results/stages-$workload-get-0
+            EXP_PRELOAD_CONNECT=spawn "$py" preload/perf/stage_timing.py --git "$gitbin" --count 300 --workload $workload --output relay-results/stages-$workload-spawn-0
+            EXP_PRELOAD_CONNECT=spawn "$py" preload/perf/stage_timing.py --git "$gitbin" --count 300 --workload $workload --output relay-results/stages-$workload-spawn-1
+            EXP_PRELOAD_CONNECT=get "$py" preload/perf/stage_timing.py --git "$gitbin" --count 300 --workload $workload --output relay-results/stages-$workload-get-1
+            "$py" preload/perf/stage_timing.py --git "$baselinebin" --count 300 --workload $workload --library "$baseline" --output relay-results/stages-$workload-baseline-1
           done
           # The variant must have reached the manager: spawn runs log preconnects.
           grep -q CONTEXT_PRECONNECTED relay-results/stages-shell-spawn-0/paced/manager.log

@@ -464,8 +464,8 @@ libgit_sources = [
   'pathspec.c',
   'pkt-line.c',
   'preload-index.c',
-  'preload-context.c',
-  'preload-worker.c',
+  'preload/src/worker/context.c',
+  'preload/src/worker/worker.c',
   'pretty.c',
   'prio-queue.c',
   'progress.c',
@@ -861,7 +861,7 @@ if help_format_opt != 'man'
     libgit_c_args += '-DDEFAULT_HELP_FORMAT="' + help_format_opt + '"'
 endif
 
-libgit_include_directories = [ '.' ]
+libgit_include_directories = [ '.', 'preload/include' ]
 libgit_dependencies = [ ]
 
 # Treat any warning level above 1 the same as we treat DEVELOPER=1 in our
@@ -1305,9 +1305,9 @@ endif
 
 # Configure general compatibility wrappers.
 if host_machine.system() == 'windows'
-  libgit_sources += ['preload-worker-win32.c', 'preload-transport-win32.c']
+  libgit_sources += ['preload/src/worker/worker-win32.c', 'preload/src/worker/transport-win32.c']
 else
-  libgit_sources += ['preload-worker-posix.c', 'preload-transport-posix.c']
+  libgit_sources += ['preload/src/worker/worker-posix.c', 'preload/src/worker/transport-posix.c']
 endif
 if host_machine.system() == 'cygwin'
   compat_sources += [

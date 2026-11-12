@@ -1255,16 +1255,17 @@ LIB_OBJS += path.o
 LIB_OBJS += path-walk.o
 LIB_OBJS += pathspec.o
 LIB_OBJS += pkt-line.o
-LIB_OBJS += preload-context.o
+LIB_OBJS += preload/src/worker/context.o
 LIB_OBJS += preload-index.o
-LIB_OBJS += preload-worker.o
+LIB_OBJS += preload/src/worker/worker.o
 ifneq ($(filter MINGW Windows,$(uname_S)),)
-LIB_OBJS += preload-worker-win32.o
-LIB_OBJS += preload-transport-win32.o
+LIB_OBJS += preload/src/worker/worker-win32.o
+LIB_OBJS += preload/src/worker/transport-win32.o
 else
-LIB_OBJS += preload-worker-posix.o
-LIB_OBJS += preload-transport-posix.o
+LIB_OBJS += preload/src/worker/worker-posix.o
+LIB_OBJS += preload/src/worker/transport-posix.o
 endif
+$(filter preload/src/worker/%,$(LIB_OBJS)): EXTRA_CPPFLAGS += -I./preload/include
 LIB_OBJS += pretty.o
 LIB_OBJS += prio-queue.o
 LIB_OBJS += progress.o

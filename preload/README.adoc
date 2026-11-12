@@ -1,0 +1,84 @@
+= Preload components
+
+This directory contains the worker implementation, Bash and PowerShell clients, Python manager,
+tests, diagnostics and protocol documentation.
+
+From the Git checkout root, source `preload/client/manager.sh` and call
+`preload /path/to/git`. See link:docs/protocol.adoc[the protocol and usage guide]
+for requirements, supported behavior and limits.
+
+== Layout
+
+* `src/worker/`: worker, context and platform transport implementations.
+* `src/client/`: shared .NET pipe connector for the PowerShell frontend.
+* `include/worker/`: worker and transport headers; use `include/` as the
+  compiler header search path.
+* `client/`: Bash and PowerShell client libraries.
+* `manager/`: Python managers and shared worker pool.
+* `tests/`: lifecycle, framing, concurrency and command regression checks.
+* `perf/`: benchmarks, profilers and plotting tools.
+* `docs/`: protocol, transport contract, performance journals and raw evidence.
+
+Future C manager sources and headers belong in `src/manager/` and
+`include/manager/` respectively.
+
+== Git integration and validation
+
+The Git Makefile and Meson build select the worker sources and platform backend.
+`common-main.c`, `common-exit.c`, and the Git test adapters remain in the host
+repository. The C implementation still uses Git utilities and its application
+entry/exit integration; this layout prepares extraction without changing that
+API or providing an independent build system.
+
+Run `python preload/tests/test_manager_lifecycle.py` for pool lifecycle checks,
+or `python preload/tests/test_many_arguments.py --git /path/to/built/git` for
+parameter-count boundaries. Native worker tests require a matching built Git.
+The `preload-validation.yml` workflow uses these paths for platform validation.
+
+Historical captures and review patches retain their original contents and path
+names. Version-comparison tools recognize both this layout and older checkout
+layouts so historical clients keep their matching manager and worker protocol.
+
+== PowerShell client
+
+On Windows with PowerShell 7, dot-source `client/manager.ps1` to use the same
+Python manager and worker protocol. The worker executable's runtime DLLs must
+be available on `PATH`. Use a new private directory for each session:
+
+[source,powershell]
+----
+. ./preload/client/manager.ps1
+Start-Preload -Executable C:/path/to/git.exe -Python C:/path/to/python.exe `
+    -Directory "$env:TEMP/preload-$([guid]::NewGuid())"
+try {
+    $result = Invoke-Preload -Arguments @('status', '--short')
+    $result.Stdout
+    $result.Stderr
+    $result.ExitCode
+} finally {
+    Stop-Preload
+}
+----
+
+The result contains captured UTF-8 stdout, stderr and exit status; invocation
+also sets `$LASTEXITCODE`. Both output channels drain concurrently and are
+buffered until completion. This API accepts no stdin and installs no
+command overrides. PowerShell pipeline and redirection equivalence with native
+commands is outside its tested contract. Workers inherit the startup environment.
+Pass `-DiscardOutput` to drain directly to a null sink without buffering or
+decoding output; that mode returns only the integer exit status.
+The client compiles `src/client/pipe.cs` once per PowerShell process with the
+bundled `Add-Type` compiler. All pipe opens share that typed connector.
+See link:docs/protocol.adoc[the API contract] for connection/read deadlines and
+the fifteen-second output-drain deadline; longer-running commands use the executable.
+
+Run `tests/test_powershell.ps1` for correctness (it also needs `sh` on `PATH`,
+e.g. `C:\msys64\usr\bin`, for its shell-alias cases), or
+`python preload/perf/compare_powershell.py --git C:/path/to/git.exe --output C:/path/to/new-results`
+from the checkout root for correctness plus warmed, serial ABBA comparisons
+against Bash and a direct PowerShell baseline. Manager startup is excluded from
+timings; raw per-call samples and machine metadata are saved in `comparison.json`.
+The comparison defaults to PowerShell discard mode, matching Bash's stdout
+redirection to `/dev/null`; use `--powershell-output capture` to time capture.
+See link:docs/performance/powershell-profile-20261112.md[the stage profile and
+diagnostic controls] for measured client overhead and reproduction commands.

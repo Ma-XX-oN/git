@@ -1,0 +1,8 @@
+# Preserve the Bash client's two-space nesting without changing repository-wide rules.
+*.sh whitespace=trail,space,incomplete text eol=lf
+*.ps1 whitespace=trail,space,incomplete text eol=lf
+*.cs whitespace=trail,space,incomplete text eol=lf
+# Preserve original measurement bytes and their recorded digests.
+docs/performance/evidence/* -text
+# Native Windows captures keep CRLF; check spaces without treating CR as an error.
+docs/performance/evidence/powershell-*.json whitespace=trail,space,cr-at-eol

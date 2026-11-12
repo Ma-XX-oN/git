@@ -1,6 +1,6 @@
 #include "git-compat-util.h"
 #include "trace2.h"
-#include "preload-worker.h"
+#include "preload/include/worker/worker.h"
 
 static void check_bug_if_BUG(void)
 {

@@ -11,7 +11,7 @@ test -n "${BASH_VERSION:-}" || error 'preload regression adapter requires Bash'
 _git_test_preload_start() {
   local client
   export PRELOAD_PYTHON=$GIT_TEST_PRELOAD_PYTHON
-  source "$TEST_DIRECTORY/../contrib/preload/preload-manager.sh" ||
+  source "$TEST_DIRECTORY/../preload/client/manager.sh" ||
     error 'preload regression manager failed to start'
   preload "$GIT_TEST_PRELOAD_GIT" ||
     error 'preload regression workers failed to start'
