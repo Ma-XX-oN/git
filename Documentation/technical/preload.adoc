@@ -109,7 +109,8 @@ POSIX worker mode requires pthread support for owner monitoring. Builds with
 Each worker exposes stdin, stdout, stderr, exit-code and params-cwd
 channels. The client opens stdout, stderr, status, stdin and context in that
 order. The context request begins with a little-endian 32-bit argument count
-including `git`, followed by that many NUL-terminated UTF-8 arguments.
+including `git`, followed by that many NUL-terminated UTF-8 arguments. The
+count has no fixed limit; the worker's 128 KiB request capacity bounds it.
 The optional `cwd` field follows with its newline-terminated native path plus
 NUL. Requests end with `end`
 and NUL on both platforms; completion does not require closing the context

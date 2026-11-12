@@ -22,7 +22,7 @@ struct preload_worker {
 	char *location; /**< Owned endpoint stem, borrowed by transport. */
 	char *frame; /**< Owned request, retained while Git may reference argv. */
 	size_t used; /**< Valid bytes in frame, excluding its final end field. */
-	const char *args[33]; /**< Borrowed argv entries within frame, plus NULL. */
+	const char **args; /**< Owned argv array: entries borrowed from frame, plus NULL. */
 	unsigned int redirected; /**< Bit mask of installed descriptors 0 through 2. */
 };
 
@@ -79,7 +79,8 @@ static int request_complete(const char *frame, size_t used)
 	if (used < 4)
 		return 0;
 	count = request_u32(frame);
-	if (!count || count > 32)
+	/* Each entry must end within the frame, which bounds count by its size. */
+	if (!count)
 		return -1;
 	for (i = 0; i < count; i++) {
 		const char *end = memchr(frame + pos, '\0', used - pos);
@@ -249,6 +250,7 @@ static int apply_worker_request(struct preload_worker *worker)
 	unsigned int i, count = request_u32(worker->frame);
 	size_t pos = 4;
 
+	CALLOC_ARRAY(worker->args, count + 1);
 	for (i = 0; i < count; i++) {
 		worker->args[i] = worker->frame + pos;
 		if (!is_utf8(worker->args[i]))
@@ -357,12 +359,13 @@ static int run_worker(const char *directory)
 	}
 	active_worker = &worker;
 	init_git(worker.args);
-	/* Git and CRT exit handlers may still reference argv's request storage. */
+	/* Git and CRT exit handlers may still reference argv and its request storage. */
 	exit(cmd_main(count, worker.args));
 done:
 	trace_printf_key(&preload_worker_trace, "worker request/startup failed status=%d errno=%d\n",
 			 status, errno);
 	status = finish_worker(&worker, status);
+	free(worker.args);
 	free(worker.frame);
 	return status;
 }

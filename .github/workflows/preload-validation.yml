@@ -95,6 +95,7 @@ jobs:
           "$py" -m unittest discover -s t/preload -p test_manager_dispatch.py -v
           "$py" t/preload/test_preload_manager.py --git "$gitbin" --output preload-results/manager
           "$py" t/preload/test_owner_death.py --git "$gitbin"
+          "$py" t/preload/test_many_arguments.py --git "$gitbin"
           "$py" t/preload/test_shell_environment.py --git "$gitbin" --output preload-results/environment
           "$py" t/preload/test_existing_regressions.py --git "$gitbin" --output preload-results/commands
           "$py" t/preload/acceptance.py --git "$gitbin" --count 6000 --trace --output preload-results

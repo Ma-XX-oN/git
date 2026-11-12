@@ -215,16 +215,12 @@ _preload_request() {
 }
 
 # Template for generated Windows command functions; __PRELOAD_NAME__ is
-# replaced by the command name. Arguments: the command's arguments (at most
-# 31). Returns the command's exit status, or 255 for a preload failure.
+# replaced by the command name. Arguments: the command's arguments. Returns
+# the command's exit status, or 255 for a preload failure.
 _preload_template_windows() {
   local req wdir rc marker count header chunk status out_open=1 err_open=1 _pt=
   local fd_in fd_out fd_err fd_exit fd_ctl
   [[ -z ${PRELOAD_TIMING:-} ]] || _pt=$EPOCHREALTIME
-  if (( $# > 31 )); then
-    printf '__PRELOAD_NAME__: preload supports at most 31 arguments\n' >&2
-    return 255
-  fi
   if ! _preload_open req "$PRELOAD_WIN_DIR\\request" 40; then
     printf 'PRELOAD ERROR: cannot connect to the preload manager\n' >&2
     return 255
@@ -254,7 +250,8 @@ _preload_template_windows() {
   fi
   [[ -z ${PRELOAD_TIMING:-} ]] || _pt+=" $EPOCHREALTIME"
   count=$(( $# + 1 ))
-  printf -v header '\\x%02x\\x00\\x00\\x00' "$count"
+  # Little-endian 32-bit entry count; the low two bytes cover 64Ki entries.
+  printf -v header '\\x%02x\\x%02x\\x00\\x00' $(( count & 255 )) $(( count >> 8 & 255 ))
   if ! { printf '%b%s\0' "$header" '__PRELOAD_NAME__' &&
          { (( $# == 0 )) || printf '%s\0' "$@"; } &&
          _preload_write_context; } >&"$fd_ctl"; then
@@ -309,10 +306,6 @@ _preload_template_unix() {
   local wdir rc count header chunk status out_open=1 err_open=1 _pt=
   local fd_in fd_out fd_err fd_exit fd_ctl
   [[ -z ${PRELOAD_TIMING:-} ]] || _pt=$EPOCHREALTIME
-  if (( $# > 31 )); then
-    printf '__PRELOAD_NAME__: preload supports at most 31 arguments\n' >&2
-    return 255
-  fi
   _preload_unix_exchange GET __PRELOAD_NAME__
   [[ -z ${PRELOAD_TIMING:-} ]] || _pt+=" $_PRELOAD_TX"
   wdir=$_PRELOAD_REPLY
@@ -332,7 +325,8 @@ _preload_template_unix() {
   exec {fd_in}>&-
   [[ -z ${PRELOAD_TIMING:-} ]] || _pt+=" $EPOCHREALTIME"
   count=$(( $# + 1 ))
-  printf -v header '\\x%02x\\x00\\x00\\x00' "$count"
+  # Little-endian 32-bit entry count; the low two bytes cover 64Ki entries.
+  printf -v header '\\x%02x\\x%02x\\x00\\x00' $(( count & 255 )) $(( count >> 8 & 255 ))
   if ! { printf '%b%s\0' "$header" '__PRELOAD_NAME__' &&
          { (( $# == 0 )) || printf '%s\0' "$@"; } &&
          _preload_write_context; } >&"$fd_ctl"; then
