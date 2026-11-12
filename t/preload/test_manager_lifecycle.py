@@ -2,6 +2,7 @@
 """Exercise real pool shutdown while worker startup has not registered its child."""
 import importlib.util
 import io
+import os
 from pathlib import Path
 import tempfile
 import threading
@@ -155,6 +156,65 @@ def check_growth_on_shortage(pools):
   print("PRELOAD_MANAGER_LIFECYCLE_PASS growth target=" + str(pool.target), flush=True)
 
 
+def check_prepared_resource_cleanup(pools):
+  """Release prepared resources on idle death, replacement and shutdown.
+
+  Parameters
+  ----------
+  pools : module
+      Production preload_pool module; real descriptors model owned handles.
+  """
+  prepared = []
+
+  def prepare(worker):
+    """Give the fixture worker an owned descriptor before it becomes READY."""
+    worker.resource = os.open(os.devnull, os.O_RDONLY)
+    prepared.append(worker)
+
+  def release(worker):
+    """Close the fixture's resource once, matching the Windows handle callback."""
+    descriptor = getattr(worker, "resource", None)
+    worker.resource = None
+    if descriptor is not None:
+      os.close(descriptor)
+
+  with tempfile.TemporaryDirectory(prefix="preload-prepared-") as directory:
+    pool = pools.Pool("git", Path("unused"), Path(directory), {}, lambda: None,
+                      prepare=prepare, release=release)
+    try:
+      with patch.object(pools.subprocess, "Popen", side_effect=lambda *a, **kw: Worker()):
+        pool.spawn()
+      pool.close()
+      assert prepared[0].resource is None, "pool shutdown leaked prepared resource"
+      manager = pools.Manager(Path(directory), {}, prepare, release)
+      try:
+        with patch.object(pools.subprocess, "Popen", side_effect=lambda *a, **kw: Worker()), \
+             patch.object(pools.Path, "is_file", return_value=True):
+          assert manager.preload("git", "unused") == "OK"
+          previous = manager.pools["git"]
+          old_workers = list(previous.children)
+          dead = previous.ready.queue[0]
+          dead.returncode = 0
+          with patch.object(previous, "request_spawn"):
+            allocated = previous.take()
+          assert dead.resource is None, "discarded idle worker leaked resource"
+          assert allocated.resource is not None, "pool closed an allocated resource"
+          release(allocated)  # Ownership transferred to the server.
+          allocated.kill()
+          assert manager.preload("git", "unused") == "OK"
+          assert all(worker.resource is None for worker in old_workers), \
+              "pool replacement leaked resources"
+      finally:
+        manager.close()
+        manager.close()  # Release callbacks must tolerate repeated shutdown.
+      assert all(worker.resource is None for worker in prepared), "manager leaked resource"
+    finally:
+      for worker in prepared:
+        release(worker)
+  print("PRELOAD_MANAGER_LIFECYCLE_PASS prepared-resource-shutdown-death-replacement-transfer",
+        flush=True)
+
+
 def main():
   """Run the lifecycle checks against the shared pool implementation."""
   root = Path(__file__).resolve().parents[2] / "contrib/preload"
@@ -163,6 +223,7 @@ def main():
   spec.loader.exec_module(pools)
   check_close_during_spawn(pools)
   check_growth_on_shortage(pools)
+  check_prepared_resource_cleanup(pools)
 
 
 if __name__ == "__main__":

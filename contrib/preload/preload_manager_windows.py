@@ -428,7 +428,8 @@ def main():
       worker.preload_context = connect_context(args.pipe_dir, worker.pid)
       log(f"CONTEXT_PRECONNECTED {worker.pid}")
   manager = preload_pool.Manager(directory, preload_pool.worker_environment(
-    args.owner_pid, {"PRELOAD_WIN_DIR": args.pipe_dir}), prepare)
+    args.owner_pid, {"PRELOAD_WIN_DIR": args.pipe_dir}), prepare,
+    Server._release_context if prepare is not None else None)
   address = args.pipe_dir + "\\request"
   server = Server(address, args.pipe_dir, manager)
   ready = directory / "ready.json"

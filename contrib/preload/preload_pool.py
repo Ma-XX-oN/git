@@ -84,12 +84,17 @@ class Pool:
   prepare : callable, optional
       Called with each worker after READY and before it is published; an
       OSError is logged and the worker is published unprepared.
+  release : callable, optional
+      Called with a discarded idle worker or a worker retained at shutdown.
+      Releases resources owned by prepare; must tolerate an unprepared worker
+      and repeated cleanup. Allocated workers transfer cleanup to the caller.
   """
 
   def __init__(self, name, executable, directory, environment, notify, spawner=None,
-               prepare=None):
+               prepare=None, release=None):
     self.name = name
     self.prepare = prepare
+    self.release = release
     self.executable = executable
     self.directory = directory
     self.environment = environment
@@ -228,6 +233,8 @@ class Pool:
       if p.poll() is None:
         log(f"ALLOCATED {self.name} {p.pid}")
         return p
+      if self.release is not None:
+        self.release(p)
       self.request_spawn()  # It died while idle; replace it.
 
   def grow(self):
@@ -261,6 +268,8 @@ class Pool:
         pass
       if p.stdout:
         p.stdout.close()
+      if self.release is not None:
+        self.release(p)
 
 
 class Manager:
@@ -274,12 +283,15 @@ class Manager:
       Worker environment shared by all pools.
   prepare : callable, optional
       Passed to every Pool; see Pool.
+  release : callable, optional
+      Cleanup paired with prepare, passed to every Pool; see Pool.
   """
 
-  def __init__(self, directory, environment, prepare=None):
+  def __init__(self, directory, environment, prepare=None, release=None):
     self.directory = directory
     self.environment = environment
     self.prepare = prepare
+    self.release = release
     self.pools = {}
     self.lock = threading.Lock()
     self.changed = threading.Condition(self.lock)
@@ -310,7 +322,7 @@ class Manager:
     if not path.is_file():
       return "ERROR executable not found: " + executable
     pool = Pool(name, path, self.directory, self.environment, self._notify,
-                self.spawner, self.prepare)
+                self.spawner, self.prepare, self.release)
     if not pool.start():
       return f"ERROR {name} doesn't support --preload-worker"
     with self.lock:
