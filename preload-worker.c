@@ -67,6 +67,7 @@ static int skip_context_value(const char *frame, size_t used,
 
 /**
  * @brief Recognize the shared argv/context frame and explicit end field.
+ *
  * @param frame Borrowed bytes; may contain an incomplete request.
  * @param used Number of readable bytes in frame.
  * @return One if complete, zero if incomplete, -1 for invalid framing.
@@ -108,6 +109,7 @@ static int request_complete(const char *frame, size_t used)
 
 /**
  * @brief Close only descriptors already redirected to command channels.
+ *
  * @param mask Bit n identifies installed descriptor n, for n from zero to two.
  */
 static void close_redirected_stdio(unsigned int mask)
@@ -131,6 +133,7 @@ static void close_redirected_stdio(unsigned int mask)
 
 /**
  * @brief Deliver the command result and close its status channel.
+ *
  * @param transport Borrowed connected transport; retains other channels.
  * @param channel Zero-based status channel index in transport's configuration.
  * @param status Command exit value to encode as an EXIT record.
@@ -167,6 +170,7 @@ done:
 
 /**
  * @brief Run ordered completion when exiting an active preload command.
+ *
  * @param status Git's command exit value, supplied by common_exit().
  */
 void preload_worker_on_exit(int status)
@@ -177,6 +181,7 @@ void preload_worker_on_exit(int status)
 
 /**
  * @brief Prepare the shared channel table and prestart backend connections.
+ *
  * @param worker Owned command state with a valid private directory.
  * @return Zero on success, or a startup failure status.
  */
@@ -209,6 +214,7 @@ static int start_worker_transport(struct preload_worker *worker)
 
 /**
  * @brief Read a bounded argv/context request through its explicit end field.
+ *
  * @param worker Owned state; receives frame storage and validated byte length.
  * @return Zero on success, 123 for I/O failure or 124 for invalid framing.
  */
@@ -243,6 +249,7 @@ static int read_worker_request(struct preload_worker *worker)
 
 /**
  * @brief Decode already framed UTF-8 arguments and apply the command context.
+ *
  * @param worker Owned validated request; args borrow its frame storage.
  * @return Argument count on success, or -1 for invalid arguments/context.
  */
@@ -266,6 +273,7 @@ static int apply_worker_request(struct preload_worker *worker)
 
 /**
  * @brief Install command stdio, tracking each successful descriptor transfer.
+ *
  * @param worker Owned selected transport; redirected records partial progress.
  * @return Zero on success, -1 on descriptor or platform-handle failure.
  */
@@ -294,6 +302,7 @@ static int install_worker_stdio(struct preload_worker *worker)
 
 /**
  * @brief Close output before delivering status, including partial setup errors.
+ *
  * @param worker Owned state; releases transport/location and filesystem endpoints.
  * @param status Requested command or startup exit value.
  * @return status, or 138 if the accepted status channel could not deliver it.
@@ -321,6 +330,7 @@ static int finish_worker(struct preload_worker *worker, int status)
 
 /**
  * @brief Complete the active command before returning to ordinary CRT exit.
+ *
  * @param status Command exit value supplied by common_exit().
  */
 static void finish_worker_on_exit(int status)
@@ -334,6 +344,7 @@ static void finish_worker_on_exit(int status)
 
 /**
  * @brief Execute one command with shared framing, stdio and completion handling.
+ *
  * @param directory Borrowed private worker directory, valid through process exit.
  * @return Startup failure status; successful commands leave through normal exit.
  */
@@ -373,6 +384,7 @@ done:
 
 /**
  * @brief Dispatch the exclusive startup mode without initializing a repository.
+ *
  * @param argc Number of argv entries, including git and --preload-worker.
  * @param argv Borrowed startup arguments; exactly one session directory is required.
  * @return Startup failure status; commands complete through normal process exit.

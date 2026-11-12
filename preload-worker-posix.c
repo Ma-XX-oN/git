@@ -16,6 +16,7 @@
  */
 /**
  * @brief Validate the output descriptor after its C stream has been flushed.
+ *
  * @param fd Borrowed open output descriptor; FIFO writes already reach the kernel.
  * @return Zero for a valid descriptor, -1 with errno set otherwise.
  */
@@ -31,6 +32,7 @@ int preload_worker_flush_output(int fd)
  */
 /**
  * @brief Remove this single-use worker's private FIFO endpoints.
+ *
  * @param directory Borrowed worker-owned directory; absent endpoints are safe.
  */
 static void preload_worker_remove_fifos(const char *directory)
@@ -62,6 +64,7 @@ struct preload_owner_watch {
 
 /**
  * @brief Prepare the FIFO channels before publishing READY.
+ *
  * @param directory Borrowed newly created private worker directory.
  * @return Zero on success, -1 with errno set on failure; caller removes partial FIFOs.
  */
@@ -85,6 +88,7 @@ static int preload_worker_create_fifos(const char *directory)
 
 /**
  * @brief Terminate and remove endpoints when the original application owner dies.
+ *
  * @param context Owned preload_owner_watch, retained until process termination.
  * @return Never returns; owner death terminates the worker process with status 137.
  */
@@ -109,6 +113,7 @@ static void *preload_worker_watch_owner(void *context)
 
 /**
  * @brief Capture the owner PID and keep its watcher alive until process exit.
+ *
  * @param directory Borrowed private worker directory; copied into monitor-owned state.
  * @return Zero on success, -1 for invalid/dead owner or thread startup failure.
  */
@@ -146,6 +151,7 @@ static int preload_worker_start_owner_watch(const char *directory)
 
 /**
  * @brief Prepare FIFO endpoints and owner monitoring before READY.
+ *
  * @param directory Borrowed existing private worker directory.
  * @param location Receives an owned FIFO-directory string on success.
  * @return Zero on success, or a worker startup status on failure.
@@ -176,6 +182,7 @@ int preload_worker_open_input(void)
 
 /**
  * @brief POSIX standard descriptors are already installed by dup2.
+ *
  * @return Zero; no separate operating-system handle table requires updating.
  */
 int preload_worker_platform_stdio(void)
@@ -185,6 +192,7 @@ int preload_worker_platform_stdio(void)
 
 /**
  * @brief Remove this worker's FIFOs and private directory.
+ *
  * @param directory Borrowed directory created by shared worker startup.
  */
 void preload_worker_platform_cleanup(const char *directory)

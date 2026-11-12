@@ -4,6 +4,7 @@
 
 /**
  * @brief Apply a path emitted directly by the caller's pwd builtin.
+ *
  * @param value Borrowed native UTF-8 path followed by one framing newline.
  * @param len Readable bytes, excluding the wire NUL terminator.
  * @return Zero on success, -1 for invalid text or chdir failure.
@@ -23,6 +24,7 @@ static int apply_cwd_field(const char *value, size_t len)
 
 /**
  * @brief Apply the optional working directory to this single-use worker.
+ *
  * @param buf Borrowed cwd field, excluding argv and the request end tag.
  * @param len Readable byte count; zero retains the inherited working directory.
  * @return Zero on success, -1 for malformed fields or chdir failure.

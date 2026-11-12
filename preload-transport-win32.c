@@ -42,6 +42,7 @@ struct preload_transport {
 
 /**
  * @brief Read shared progress without modifying it.
+ *
  * @param value Borrowed aligned atomic LONG shared by the connector threads.
  * @return Value observed with an interlocked memory barrier.
  */
@@ -52,6 +53,7 @@ static LONG atomic_read(LONG *value)
 
 /**
  * @brief Connect one candidate and consume exactly one marker byte.
+ *
  * @param connections Borrowed live transport; caller is one of its connectors.
  * @param channel Configured logical channel index.
  * @param index Calling connector's instance index, zero or one.
@@ -106,6 +108,7 @@ static void connect_candidate(struct preload_transport *connections,
 
 /**
  * @brief Collect marker results after both connectors have arrived.
+ *
  * @param connections Borrowed transport with both candidate operations returned.
  * @param channel Logical channel index in the configuration.
  * @param chosen Receives the last marked candidate index, or -1 if none.
@@ -143,6 +146,7 @@ static int collect_channel_markers(struct preload_transport *connections,
 }
 /**
  * @brief Inspect completed candidates and publish the channel's result.
+ *
  * @param connections Borrowed shared state, accessed by the winning connector.
  * @param channel Configured logical channel index; both operations have returned.
  */
@@ -200,6 +204,7 @@ static void finish_channel(struct preload_transport *connections,
  * cancellation is accepted or the peer arrives. The winner then inspects both
  * results and publishes completion. Keeping cancellation and marker inspection
  * on one thread prevents a late cancel from interrupting duplicate inspection.
+ *
  * @param connections Borrowed live transport, shared by both connectors.
  * @param channel Configured logical channel index for this rendezvous.
  * @param step One-based channel generation in the configured connection order.
@@ -242,6 +247,7 @@ static int rendezvous(struct preload_transport *connections,
 
 /**
  * @brief Traverse channels, then return normally to signal thread completion.
+ *
  * @param data Borrowed preload_transport_connector, stable until this thread is joined.
  * @return Zero; shared failure state records connection errors.
  */
@@ -264,6 +270,7 @@ static DWORD WINAPI connect_channels(LPVOID data)
 
 /**
  * @brief Pass the complete handle table to two threads before publishing READY.
+ *
  * @param connections Borrowed initialized transport; retains owned thread handles.
  * @return Zero on success, -1 on thread creation failure; release still joins partial startup.
  */
@@ -296,6 +303,7 @@ static int start_connections(struct preload_transport *connections)
  * expires after the workers have advanced to another channel. On failure, retry
  * handle-targeted cancellation until both threads exit; storage and handles stay
  * alive throughout cancellation, including a call submitted just after a retry.
+ *
  * @param connections Borrowed live state; all handles remain owned until threads stop.
  */
 static void join_connector_threads(struct preload_transport *connections)
@@ -337,6 +345,7 @@ static void join_connector_threads(struct preload_transport *connections)
 }
 /**
  * @brief Join connectors, discard probes and retain selected synchronous handles.
+ *
  * @param connections Borrowed prepared state; relinquishes owned thread handles.
  * @return First connection failure, or PRELOAD_TRANSPORT_OK.
  */
@@ -376,6 +385,7 @@ struct preload_pipe_security {
 
 /**
  * @brief Check endpoint names and the connection-order permutation.
+ *
  * @param config Borrowed configuration; must specify 1 through 32 channels.
  * @return Zero if valid, -1 with EINVAL otherwise.
  */
@@ -404,6 +414,7 @@ invalid:
 
 /**
  * @brief Allocate a transport whose endpoint slots are initially unowned.
+ *
  * @param config Borrowed validated configuration; strings outlive the transport.
  * @return Newly owned transport, released with preload_transport_release().
  */
@@ -428,6 +439,7 @@ static struct preload_transport *allocate_transport(
 
 /**
  * @brief Grant pipe access exclusively to the current process owner.
+ *
  * @param security Zero-initialized owned storage, including on partial failure.
  * @return Zero on success, -1 with a Win32 last error on failure.
  *
@@ -466,6 +478,7 @@ static int prepare_pipe_security(struct preload_pipe_security *security)
 
 /**
  * @brief Create two synchronous duplex instances for each logical channel.
+ *
  * @param transport Owned endpoint table, retaining partial results on error.
  * @param attributes Borrowed owner-restricted descriptor, valid during this call.
  * @return Zero on success, -1 with a Win32 last error on failure.
@@ -503,6 +516,7 @@ static int create_pipe_instances(struct preload_transport *transport,
 
 /**
  * @brief Prepare owned endpoints and prestart the two blocking connectors.
+ *
  * @param out Receives owned state, including partial state on failure; release it.
  * @param config Borrowed configuration; referenced strings outlive returned state.
  * @return Zero on success, -1 with errno set on failure.
@@ -535,6 +549,7 @@ int preload_transport_start(struct preload_transport **out,
 
 /**
  * @brief Complete connections in the configured order before application I/O.
+ *
  * @param transport Borrowed prepared state; invoke once before transferring channels.
  * @return A preload_transport_result; failed connections remain owned until release.
  */
@@ -545,6 +560,7 @@ int preload_transport_wait(struct preload_transport *transport)
 
 /**
  * @brief Read application bytes from a connected input channel.
+ *
  * @param transport Borrowed connected state.
  * @param channel Configured zero-based channel index, still owned by transport.
  * @param buffer Caller-owned destination with at least size writable bytes.
@@ -566,6 +582,7 @@ ssize_t preload_transport_read(struct preload_transport *transport, size_t chann
 
 /**
  * @brief Write application bytes to a connected output channel.
+ *
  * @param transport Borrowed connected state.
  * @param channel Configured zero-based channel index, still owned by transport.
  * @param buffer Borrowed source with at least size readable bytes.
@@ -585,6 +602,7 @@ ssize_t preload_transport_write(struct preload_transport *transport, size_t chan
 
 /**
  * @brief Finish buffered delivery where the platform requires it.
+ *
  * @param transport Borrowed connected state.
  * @param channel Configured output channel index, still owned by transport.
  * @return Zero on success, -1 with errno set on failure. Windows waits for consumption.
@@ -599,6 +617,7 @@ int preload_transport_flush(struct preload_transport *transport, size_t channel)
 
 /**
  * @brief Transfer a connected channel to a caller-owned CRT/POSIX descriptor.
+ *
  * @param transport Borrowed connected state; relinquishes the selected channel.
  * @param channel Configured channel index, still owned by transport.
  * @return Descriptor on success, -1 on failure, retaining ownership on failure.
@@ -625,6 +644,7 @@ int preload_transport_has_channel(struct preload_transport *transport, size_t ch
 
 /**
  * @brief Close one channel after connection work has finished.
+ *
  * @param transport Borrowed connected state; retains all other channels.
  * @param channel Configured zero-based index; closing an already closed channel is safe.
  */
@@ -643,6 +663,7 @@ void preload_transport_close_channel(struct preload_transport *transport, size_t
 
 /**
  * @brief Cancel/join pending connections and release all owned resources.
+ *
  * @param transport Owned prepared or connected state, including partial startup; NULL is safe.
  */
 void preload_transport_release(struct preload_transport *transport)

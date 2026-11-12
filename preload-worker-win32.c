@@ -34,6 +34,7 @@ int preload_worker_flush_output(int fd)
  */
 /**
  * @brief Terminate an abandoned worker when the captured owner handle signals.
+ *
  * @param context Owned synchronous owner process handle, retained until process exit.
  * @return Never returns; owner death terminates the worker with status 137.
  */
@@ -49,6 +50,7 @@ static DWORD WINAPI preload_worker_watch_owner(LPVOID context)
 
 /**
  * @brief Capture the original application process and start its lifetime watcher.
+ *
  * @return Zero on success, -1 for an invalid/dead owner or native startup failure.
  */
 static int preload_worker_start_owner_watch(void)
@@ -89,6 +91,7 @@ static int preload_worker_start_owner_watch(void)
 
 /**
  * @brief Prepare owner monitoring and the native endpoint name.
+ *
  * @param directory Borrowed existing private worker directory.
  * @param location Receives an owned native pipe "directory" on success:
  *        PRELOAD_WIN_DIR followed by \worker-<pid>.
@@ -112,6 +115,7 @@ int preload_worker_platform_prepare(const char *directory, char **location)
 
 /**
  * @brief Open an EOF-producing command input descriptor.
+ *
  * @return Owned binary NUL descriptor, or -1 with errno set.
  */
 int preload_worker_open_input(void)
@@ -121,6 +125,7 @@ int preload_worker_open_input(void)
 
 /**
  * @brief Synchronize Win32 standard handles after CRT descriptor replacement.
+ *
  * @return Zero on success, -1 with errno set on failure.
  */
 int preload_worker_platform_stdio(void)
@@ -135,6 +140,7 @@ int preload_worker_platform_stdio(void)
 
 /**
  * @brief Remove a finished worker's empty private directory.
+ *
  * @param directory Borrowed directory created by shared worker startup.
  */
 void preload_worker_platform_cleanup(const char *directory)

@@ -10,6 +10,7 @@ struct preload_transport {
 
 /**
  * @brief Prepare borrowed FIFO names created by the worker's endpoint preparation.
+ *
  * @param out Receives owned state, or NULL on configuration failure; caller releases it.
  * @param config Borrowed configuration; referenced strings outlive the transport.
  * @return Zero on success, -1 with errno set for invalid configuration.
@@ -48,6 +49,7 @@ int preload_transport_start(struct preload_transport **out,
 
 /**
  * @brief Complete connections in the configured order before application I/O.
+ *
  * @param transport Borrowed prepared state; invoke once before transferring channels.
  * @return A preload_transport_result; failed connections remain owned until release.
  */
@@ -70,6 +72,7 @@ int preload_transport_wait(struct preload_transport *transport)
 
 /**
  * @brief Read application bytes from a connected input channel.
+ *
  * @param transport Borrowed connected state.
  * @param channel Configured zero-based channel index, still owned by transport.
  * @param buffer Caller-owned destination with at least size writable bytes.
@@ -84,6 +87,7 @@ ssize_t preload_transport_read(struct preload_transport *transport, size_t chann
 
 /**
  * @brief Write application bytes to a connected output channel.
+ *
  * @param transport Borrowed connected state.
  * @param channel Configured zero-based channel index, still owned by transport.
  * @param buffer Borrowed source with at least size readable bytes.
@@ -98,6 +102,7 @@ ssize_t preload_transport_write(struct preload_transport *transport, size_t chan
 
 /**
  * @brief Finish buffered delivery where the platform requires it.
+ *
  * @param transport Borrowed connected state.
  * @param channel Configured output channel index, still owned by transport.
  * @return Zero on success, -1 with errno set on failure. Windows waits for consumption.
@@ -113,6 +118,7 @@ int preload_transport_flush(struct preload_transport *transport, size_t channel)
 
 /**
  * @brief Transfer a connected channel to a caller-owned CRT/POSIX descriptor.
+ *
  * @param transport Borrowed connected state; relinquishes the selected channel.
  * @param channel Configured channel index, still owned by transport.
  * @return Descriptor on success, -1 on failure, retaining ownership on failure.
@@ -136,6 +142,7 @@ int preload_transport_has_channel(struct preload_transport *transport, size_t ch
 
 /**
  * @brief Close one channel after connection work has finished.
+ *
  * @param transport Borrowed connected state; retains all other channels.
  * @param channel Configured zero-based index; closing an already closed channel is safe.
  */
@@ -148,6 +155,7 @@ void preload_transport_close_channel(struct preload_transport *transport, size_t
 
 /**
  * @brief Cancel/join pending connections and release all owned resources.
+ *
  * @param transport Owned prepared or connected state, including partial startup; NULL is safe.
  */
 void preload_transport_release(struct preload_transport *transport)

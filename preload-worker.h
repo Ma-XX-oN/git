@@ -12,6 +12,7 @@ extern struct trace_key preload_worker_trace;
 
 /**
  * @brief Validate worker startup arguments and run the platform worker.
+ *
  * @param argc Number of argv entries, including git and --preload-worker.
  * @param argv Borrowed startup arguments, including an existing session directory.
  * @return Startup error status; command execution exits the process normally.
@@ -19,17 +20,20 @@ extern struct trace_key preload_worker_trace;
 int preload_worker_main(int argc, const char **argv);
 /**
  * @brief Complete output and status for this process's active command.
+ *
  * @param status Git command exit value; ordinary Git processes have no active worker.
  */
 void preload_worker_on_exit(int status);
 /**
  * @brief Complete platform output flushing after the C stream has been flushed.
+ *
  * @param fd Borrowed writable standard-output descriptor, still open.
  * @return Zero on success, -1 on failure, with errno set.
  */
 int preload_worker_flush_output(int fd);
 /**
  * @brief Prepare backend endpoints and owner monitoring before READY.
+ *
  * @param directory Borrowed private worker directory, valid through process exit.
  * @param location Receives an owned endpoint stem on success; valid until transport release.
  * @return Zero on success, nonzero startup status on failure.
@@ -41,6 +45,7 @@ int preload_worker_open_input(void);
 int preload_worker_platform_stdio(void);
 /**
  * @brief Remove worker-owned filesystem endpoints after transport release.
+ *
  * @param directory Borrowed private worker directory.
  */
 void preload_worker_platform_cleanup(const char *directory);
