@@ -229,9 +229,13 @@ _preload_request() {
 #         sends the GET line and the whole request. Measured about 450 us
 #         slower per call on CI (run 43133247916).
 _preload_template_windows() {
-  local req wdir rc marker count header chunk status out_open=1 err_open=1 _pt=
+  local req wdir rc marker header chunk status out_open=1 err_open=1 _pt=
   local fd_in fd_out fd_err fd_exit format cwd= cwd_mode=${EXP_PRELOAD_CWD_MODE:-write}
   [[ -z ${PRELOAD_TIMING:-} ]] || _pt=$EPOCHREALTIME
+  if (( $# > 65535 )); then
+    printf '__PRELOAD_NAME__: preload supports at most 65535 parameters\n' >&2
+    return 255
+  fi
   if [[ $cwd_mode == file ]] &&
      ! { pwd -W >|"$PRELOAD_DIR/cwd.$BASHPID" &&
          IFS= read -r cwd <"$PRELOAD_DIR/cwd.$BASHPID"; }; then
@@ -244,9 +248,8 @@ _preload_template_windows() {
   fi
   [[ -z ${PRELOAD_TIMING:-} ]] || _pt+=" $EPOCHREALTIME"
   marker=$(( _PRELOAD_SEQ = (${_PRELOAD_SEQ:-0} + 1) % 10 ))
-  count=$(( $# + 1 ))
-  # Little-endian 32-bit entry count; the low two bytes cover 64Ki entries.
-  printf -v header '\\x%02x\\x%02x\\x00\\x00' $(( count & 255 )) $(( count >> 8 & 255 ))
+  # Little-endian 32-bit parameter count, excluding the executable (0..65535).
+  printf -v header '\\x%02x\\x%02x\\x00\\x00' $(( $# & 255 )) $(( $# >> 8 ))
   # One %s\0 per argument; the name is a validated literal without % or \.
   # The cwd keeps the newline `pwd -W` prints, which the worker requires.
   printf -v format '%*s' "$#" ''
@@ -320,9 +323,13 @@ _preload_template_windows() {
 
 # Template for generated Linux/macOS command functions; see the Windows one.
 _preload_template_unix() {
-  local wdir rc count header chunk status out_open=1 err_open=1 _pt=
+  local wdir rc header chunk status out_open=1 err_open=1 _pt=
   local fd_in fd_out fd_err fd_exit fd_ctl
   [[ -z ${PRELOAD_TIMING:-} ]] || _pt=$EPOCHREALTIME
+  if (( $# > 65535 )); then
+    printf '__PRELOAD_NAME__: preload supports at most 65535 parameters\n' >&2
+    return 255
+  fi
   _preload_unix_exchange GET __PRELOAD_NAME__
   [[ -z ${PRELOAD_TIMING:-} ]] || _pt+=" $_PRELOAD_TX"
   wdir=$_PRELOAD_REPLY
@@ -341,9 +348,8 @@ _preload_template_unix() {
   # stdin is connected but unused until a multitee builtin exists.
   exec {fd_in}>&-
   [[ -z ${PRELOAD_TIMING:-} ]] || _pt+=" $EPOCHREALTIME"
-  count=$(( $# + 1 ))
-  # Little-endian 32-bit entry count; the low two bytes cover 64Ki entries.
-  printf -v header '\\x%02x\\x%02x\\x00\\x00' $(( count & 255 )) $(( count >> 8 & 255 ))
+  # Little-endian 32-bit parameter count, excluding the executable (0..65535).
+  printf -v header '\\x%02x\\x%02x\\x00\\x00' $(( $# & 255 )) $(( $# >> 8 ))
   if ! { printf '%b%s\0' "$header" '__PRELOAD_NAME__' &&
          { (( $# == 0 )) || printf '%s\0' "$@"; } &&
          _preload_write_context; } >&"$fd_ctl"; then

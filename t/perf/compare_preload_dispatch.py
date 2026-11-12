@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Compare two generic preload libraries with one unchanged worker binary.
+"""Compare two generic preload libraries with matching worker protocols.
 
-Run with --baseline-library PATH --git PATH --output DIRECTORY. Measures
-repeated shell calls and command substitutions in separate ABBA rounds, using
+Run with --baseline-library PATH --git PATH --output DIRECTORY. Use
+--baseline-git PATH when the baseline library requires an older wire protocol.
+Otherwise both libraries use the same worker binary. Measures repeated shell
+calls and command substitutions in separate ABBA rounds, using
 the existing paired benchmark and unmodified library protocols. matched.json
 retains raw samples, source hashes, binary identity and machine details.
 """
@@ -44,7 +46,7 @@ def measure(args, environment):
     Parameters
     ----------
     args : argparse.Namespace
-        Parsed paths, positive ABBA repetition count, and revision labels.
+        Parsed library/worker paths, positive ABBA count, and revision labels.
     environment : dict
         Child environment with tracing disabled and the manager Python selected.
 
@@ -57,10 +59,14 @@ def measure(args, environment):
     libraries = {"baseline": args.baseline_library.resolve(strict=True),
                  "candidate": args.candidate_library.resolve(strict=True)}
     git = args.git.resolve(strict=True)
+    baseline_git = args.baseline_git.resolve(strict=True) if args.baseline_git else git
     report = {"machine": machine_metadata(), "tracing": False,
               "baseline_ref": args.baseline_ref,
               "candidate_ref": os.environ.get("GITHUB_SHA", "working-tree"),
               "worker": {"path": str(git), "sha256": hashlib.sha256(git.read_bytes()).hexdigest()},
+              "baseline_worker": {"path": str(baseline_git),
+                                  "sha256": hashlib.sha256(baseline_git.read_bytes()).hexdigest()},
+              "same_worker_binary": baseline_git == git,
               "variants": {name: library_identity(path) for name, path in libraries.items()},
               "initial_workers": 3, "startup_included_in_samples": False,
               "order": ["baseline", "candidate", "candidate", "baseline"] * args.rounds,
@@ -70,7 +76,8 @@ def measure(args, environment):
         for workload in ("shell", "subshell"):
             for index, name in enumerate(report["order"]):
                 row = benchmark.run_case(shutil.which("bash"), shell_path(libraries[name]),
-                                         shell_path(git), environment, 3, index,
+                                         shell_path(baseline_git if name == "baseline" else git),
+                                         environment, 3, index,
                                          os.name == "nt", workload=workload)
                 row["variant"] = name
                 report["rounds"].append(row)
@@ -100,6 +107,8 @@ def main():
     parser.add_argument("--candidate-library", type=Path,
                         default=root / "contrib/preload/preload-manager.sh")
     parser.add_argument("--git", required=True, type=Path)
+    parser.add_argument("--baseline-git", type=Path,
+                        help="Worker matching the baseline protocol; defaults to --git")
     parser.add_argument("--rounds", default=3, type=int)
     parser.add_argument("--output", type=Path, default=Path("preload-dispatch-comparison"))
     args = parser.parse_args()

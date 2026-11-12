@@ -108,9 +108,17 @@ POSIX worker mode requires pthread support for owner monitoring. Builds with
 
 Each worker exposes stdin, stdout, stderr, exit-code and params-cwd
 channels. The client opens stdout, stderr, status, stdin and context in that
-order. The context request begins with a little-endian 32-bit argument count
-including `git`, followed by that many NUL-terminated UTF-8 arguments. The
-count has no fixed limit; the worker's 128 KiB request capacity bounds it.
+order. The context request begins with a little-endian 32-bit parameter count
+excluding `git`, ranging from 0 to 65,535. It is followed by the NUL-terminated
+UTF-8 executable name and then that many NUL-terminated UTF-8 parameters.
+The worker allocates one argv entry for the executable, one per parameter,
+and a terminating NULL pointer. Calls with more than 65,535 parameters return
+255 with a diagnostic before requesting a worker. The worker also rejects
+out-of-range wire counts. The separate 128 KiB request capacity still applies.
+Client and worker must agree on this count convention. Historical benchmark
+clients use a worker built from the same revision, selected with
+`compare_preload_dispatch.py --baseline-git`; the report records both worker
+identities rather than claiming an unchanged-binary comparison.
 The optional `cwd` field follows with its newline-terminated native path plus
 NUL. Requests end with `end`
 and NUL on both platforms; completion does not require closing the context

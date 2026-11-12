@@ -109,7 +109,7 @@ def run_case(git, name, arguments, expected_status, expected_output,
             write(duplicate, b"1")
             write(handles["stdin"], b"1")
         elif "params-cwd" in handles:
-            frame = struct.pack("<I", len(arguments) + 1) + b"git\0"
+            frame = struct.pack("<I", len(arguments)) + b"git\0"
             frame += b"".join((arg.encode() if isinstance(arg, str) else arg) + b"\0"
                               for arg in arguments) + context + b"end\0"
             payload = b"\0" if malformed else frame

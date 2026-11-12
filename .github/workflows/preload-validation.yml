@@ -143,9 +143,8 @@ jobs:
         with:
           ref: 346517302dfc305cf122f359714c0dc12e4b0884
           path: dispatch-baseline
-          sparse-checkout: contrib/preload
           persist-credentials: false
-      - name: Compare READY dispatch with the same worker binary
+      - name: Compare READY dispatch with matching worker protocols
         shell: bash
         run: |
           if [[ $RUNNER_OS == Windows ]]; then
@@ -153,11 +152,14 @@ jobs:
             cd "$GITHUB_WORKSPACE"
             py="$(cygpath -u "$pythonLocation")/python.exe"
             gitbin="$(cygpath -w "$PWD/git.exe")"
+            baselinebin="$(cygpath -w "$PWD/dispatch-baseline/git.exe")"
           else
             py="$pythonLocation/bin/python3"
             gitbin="$PWD/git"
+            baselinebin="$PWD/dispatch-baseline/git"
           fi
-          "$py" t/perf/compare_preload_dispatch.py --baseline-library dispatch-baseline/contrib/preload/preload-manager.sh --git "$gitbin" --output preload-dispatch-comparison
+          make -C dispatch-baseline -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git$([[ $RUNNER_OS == Windows ]] && printf .exe)
+          "$py" t/perf/compare_preload_dispatch.py --baseline-library dispatch-baseline/contrib/preload/preload-manager.sh --baseline-git "$baselinebin" --git "$gitbin" --output preload-dispatch-comparison
       - name: Check out preserved baseline
         uses: actions/checkout@v4
         with:
@@ -331,14 +333,14 @@ jobs:
         with:
           ref: 26501aaea0c3ed56d17b0b339a1d1f5b8d7b3f25
           path: pid-baseline
-          sparse-checkout: contrib/preload
-      - name: Compare full calls with identical worker binary
+      - name: Compare full calls with matching worker protocols
         run: |
-          python t/perf/compare_preload_dispatch.py --baseline-library pid-baseline/contrib/preload/preload-manager.sh --baseline-ref 26501aaea0 --git "$PWD/git" --output pid-results/comparison
-          python t/perf/preload_stage_timing.py --git "$PWD/git" --count 300 --library pid-baseline/contrib/preload/preload-manager.sh --output pid-results/stages-baseline-0
+          make -C pid-baseline -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git
+          python t/perf/compare_preload_dispatch.py --baseline-library pid-baseline/contrib/preload/preload-manager.sh --baseline-ref 26501aaea0 --baseline-git "$PWD/pid-baseline/git" --git "$PWD/git" --output pid-results/comparison
+          python t/perf/preload_stage_timing.py --git "$PWD/pid-baseline/git" --count 300 --library pid-baseline/contrib/preload/preload-manager.sh --output pid-results/stages-baseline-0
           python t/perf/preload_stage_timing.py --git "$PWD/git" --count 300 --output pid-results/stages-candidate-0
           python t/perf/preload_stage_timing.py --git "$PWD/git" --count 300 --output pid-results/stages-candidate-1
-          python t/perf/preload_stage_timing.py --git "$PWD/git" --count 300 --library pid-baseline/contrib/preload/preload-manager.sh --output pid-results/stages-baseline-1
+          python t/perf/preload_stage_timing.py --git "$PWD/pid-baseline/git" --count 300 --library pid-baseline/contrib/preload/preload-manager.sh --output pid-results/stages-baseline-1
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -389,9 +391,8 @@ jobs:
         with:
           ref: 646a8b6479c0f168ac023e595e80e4e12881b245
           path: relay-baseline
-          sparse-checkout: contrib/preload
           persist-credentials: false
-      - name: Compare full calls and stages with identical worker binary
+      - name: Compare full calls and stages with matching worker protocols
         shell: bash
         run: |
           . /etc/profile || exit 1
@@ -399,16 +400,18 @@ jobs:
           py="$(cygpath -u "$pythonLocation")/python.exe"
           gitbin="$(cygpath -w "$PWD/git.exe")"
           baseline=relay-baseline/contrib/preload/preload-manager.sh
+          make -C relay-baseline -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git.exe
+          baselinebin="$(cygpath -w "$PWD/relay-baseline/git.exe")"
           for mode in get spawn; do
-            EXP_PRELOAD_CONNECT=$mode "$py" t/perf/compare_preload_dispatch.py --baseline-library "$baseline" --baseline-ref 646a8b6479 --git "$gitbin" --rounds 5 --output relay-results/comparison-$mode
+            EXP_PRELOAD_CONNECT=$mode "$py" t/perf/compare_preload_dispatch.py --baseline-library "$baseline" --baseline-ref 646a8b6479 --baseline-git "$baselinebin" --git "$gitbin" --rounds 5 --output relay-results/comparison-$mode
           done
           for workload in shell subshell; do
-            "$py" t/perf/preload_stage_timing.py --git "$gitbin" --count 300 --workload $workload --library "$baseline" --output relay-results/stages-$workload-baseline-0
+            "$py" t/perf/preload_stage_timing.py --git "$baselinebin" --count 300 --workload $workload --library "$baseline" --output relay-results/stages-$workload-baseline-0
             EXP_PRELOAD_CONNECT=get "$py" t/perf/preload_stage_timing.py --git "$gitbin" --count 300 --workload $workload --output relay-results/stages-$workload-get-0
             EXP_PRELOAD_CONNECT=spawn "$py" t/perf/preload_stage_timing.py --git "$gitbin" --count 300 --workload $workload --output relay-results/stages-$workload-spawn-0
             EXP_PRELOAD_CONNECT=spawn "$py" t/perf/preload_stage_timing.py --git "$gitbin" --count 300 --workload $workload --output relay-results/stages-$workload-spawn-1
             EXP_PRELOAD_CONNECT=get "$py" t/perf/preload_stage_timing.py --git "$gitbin" --count 300 --workload $workload --output relay-results/stages-$workload-get-1
-            "$py" t/perf/preload_stage_timing.py --git "$gitbin" --count 300 --workload $workload --library "$baseline" --output relay-results/stages-$workload-baseline-1
+            "$py" t/perf/preload_stage_timing.py --git "$baselinebin" --count 300 --workload $workload --library "$baseline" --output relay-results/stages-$workload-baseline-1
           done
           # The variant must have reached the manager: spawn runs log preconnects.
           grep -q CONTEXT_PRECONNECTED relay-results/stages-shell-spawn-0/paced/manager.log

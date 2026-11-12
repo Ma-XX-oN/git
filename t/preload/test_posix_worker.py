@@ -11,7 +11,7 @@ import tempfile
 
 def frame(arguments, context=b""):
     """Encode the bounded argv frame followed by context fields."""
-    return struct.pack("<I", len(arguments) + 1) + b"git\0" + b"".join(
+    return struct.pack("<I", len(arguments)) + b"git\0" + b"".join(
         argument.encode("utf-8") + b"\0" for argument in arguments) + context + b"end\0"
 
 
@@ -80,12 +80,12 @@ def main():
              subprocess.check_output([git, "hash-object", "--stdin"], input=b""))
     run_case(git, "literal-end-argument", frame(["check-ref-format", "refs/heads/end"]), 0, b"")
     run_case(git, "short-header", b"\0", 124, b"")
-    run_case(git, "zero-argc", struct.pack("<I", 0), 124, b"")
-    run_case(git, "excess-argc", struct.pack("<I", 33), 124, b"")
+    run_case(git, "missing-executable", struct.pack("<I", 0), 124, b"")
+    run_case(git, "excess-parameters", struct.pack("<I", 65536), 124, b"")
     run_case(git, "high-bit-argc", struct.pack("<I", 0x80000000), 124, b"")
     run_case(git, "maximum-argc", struct.pack("<I", 0xffffffff), 124, b"")
-    run_case(git, "unterminated-argv", struct.pack("<I", 1) + b"git", 124, b"")
-    run_case(git, "wrong-program", struct.pack("<I", 1) + b"other\0end\0", 128, b"")
+    run_case(git, "unterminated-argv", struct.pack("<I", 0) + b"git", 124, b"")
+    run_case(git, "wrong-program", struct.pack("<I", 0) + b"other\0end\0", 128, b"")
     run_case(git, "malformed-context", frame(["--version"], b"unknown\0"), 124, b"")
     run_case(git, "unsupported-environment-field", frame(["--version"], b"env\0"),
              124, b"")
@@ -95,7 +95,7 @@ def main():
              frame(["var", "GIT_EDITOR"]), 0, b"preload-worker-inherited-editor\n")
     for bad in (b"\xff", b"\xc0\x80", b"\xed\xa0\x80"):
         run_case(git, "invalid-utf8-argv-" + bad.hex(),
-                 struct.pack("<I", 2) + b"git\0" + bad + b"\0end\0", 128, b"")
+                 struct.pack("<I", 1) + b"git\0" + bad + b"\0end\0", 128, b"")
 
 
 if __name__ == "__main__":

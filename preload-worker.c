@@ -79,9 +79,10 @@ static int request_complete(const char *frame, size_t used)
 	if (used < 4)
 		return 0;
 	count = request_u32(frame);
-	/* Each entry must end within the frame, which bounds count by its size. */
-	if (!count)
+	/* The wire count excludes argv[0]; each string must end within the frame. */
+	if (count > 65535)
 		return -1;
+	count++;
 	for (i = 0; i < count; i++) {
 		const char *end = memchr(frame + pos, '\0', used - pos);
 		if (!end)
@@ -247,7 +248,7 @@ static int read_worker_request(struct preload_worker *worker)
  */
 static int apply_worker_request(struct preload_worker *worker)
 {
-	unsigned int i, count = request_u32(worker->frame);
+	unsigned int i, count = request_u32(worker->frame) + 1;
 	size_t pos = 4;
 
 	CALLOC_ARRAY(worker->args, count + 1);

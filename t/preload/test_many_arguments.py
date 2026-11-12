@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Verify that a preloaded call accepts as many arguments as direct execution.
 
-The worker sizes argv from the request's argument count, so neither the old
-31-argument limit nor a one-byte count may truncate or reject the call.
+The wire count excludes the executable and permits 0..65535 parameters.
+Check the old 31-argument and one-byte boundaries, the maximum count, and
+rejection before GET without poisoning the next call.
 """
 import argparse
 import os
@@ -29,6 +30,34 @@ for count in $2; do
   fi
   printf 'PRELOAD_MANY_ARGUMENTS_PASS %s\n' "$count"
 done
+# Zero parameters still includes the executable's string in the frame.
+expected=$(command git 2>/dev/null); direct=$?
+actual=$(git 2>/dev/null); preloaded=$?
+[[ $direct == "$preloaded" && $actual == "$expected" ]] || exit 4
+printf 'PRELOAD_MANY_ARGUMENTS_PASS zero\n'
+# Empty strings keep the maximum-count request below the 128 KiB frame limit.
+padding=()
+for ((i = 0; i < 65534; i++)); do padding+=(""); done
+expected=$(command git --version) || exit 5
+actual=$(git --version "${padding[@]}") || exit 6
+[[ $actual == "$expected" ]] || exit 7
+printf 'PRELOAD_MANY_ARGUMENTS_PASS 65535\n'
+padding+=("")
+(
+  request_seen=0
+  # Neither platform may reach GET or open a connection for an oversized call.
+  # No arguments are used; return failure and record the unexpected request.
+  _preload_open() { request_seen=1; return 1; }
+  _preload_unix_exchange() { request_seen=1; return 1; }
+  git --version "${padding[@]}" 2>"$PRELOAD_DIR/argument-limit.err"
+  status=$?
+  IFS= read -r diagnostic <"$PRELOAD_DIR/argument-limit.err" || exit 8
+  [[ $status == 255 && $request_seen == 0 &&
+     $diagnostic == 'git: preload supports at most 65535 parameters' ]] || exit 9
+) || exit 10
+actual=$(git --version) || exit 11
+[[ $actual == "$expected" ]] || exit 12
+printf 'PRELOAD_MANY_ARGUMENTS_PASS overflow-before-GET-and-recovery\n'
 _preload_stop
 '''
 
