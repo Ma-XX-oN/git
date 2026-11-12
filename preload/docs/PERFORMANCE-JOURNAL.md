@@ -10,6 +10,18 @@ The per-call environment-transfer requirement was superseded by startup
 inheritance, as described below; earlier measurements retain their original
 protocol and workload definitions.
 
+## Library and PowerShell validation: 2026-11-12
+
+Implementation `83c911b2b4` passed the Linux, macOS and Windows fast-path matrix
+with Make and Meson, including Bash stress and Windows PowerShell correctness
+and stress. The [validation report](performance/library-validation-20261112.md)
+links exact CI archives and records hardware, runtime versions and matched
+baselines. On Windows, the output-discarding client comparison measured Bash at
+4.0505 ms and PowerShell at 3.16785 ms (78.2% of Bash). The separate production
+comparison measured Windows Bash at 97.1% of production preload latency;
+Linux and macOS measured 109.2% and 109.8%, respectively. These are whole-migration
+comparisons, not an isolated measure of the directory move or the final commit.
+
 ## Startup-environment contract
 
 ### Production diagnostic cleanup
