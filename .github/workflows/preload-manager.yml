@@ -5,6 +5,9 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: native-preload-manager-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   native:
     strategy:

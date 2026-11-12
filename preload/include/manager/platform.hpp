@@ -35,6 +35,7 @@ class Owner {
 public:
 	/** Validate positive native PID and acquire monitoring resources; throws on failure. */
 	explicit Owner(std::uint32_t pid);
+	/** Release monitoring resources; never terminate the owner. */
 	~Owner();
 	/** Return whether owner still exists; permission denial counts as alive on POSIX. */
 	bool alive() const;

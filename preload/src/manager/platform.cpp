@@ -53,8 +53,8 @@ struct Handle {
 };
 
 struct Process::Impl {
-	Handle process, output;
-	std::mutex mutex;
+	Handle process, output; /**< Owned process and READY reader. Writer belongs to child. */
+	std::mutex mutex; /**< Serializes status, termination, and READY-handle release. */
 };
 
 Process::Process(const std::string &executable, const std::string &directory) : impl(new Impl)
@@ -69,7 +69,8 @@ Process::Process(const std::string &executable, const std::string &directory) : 
 	if (input.value == INVALID_HANDLE_VALUE) throw std::runtime_error("open NUL failed");
 	STARTUPINFOEXW startup{};
 	startup.StartupInfo.cb = sizeof(startup);
-	startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+	startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+	startup.StartupInfo.wShowWindow = SW_HIDE;
 	startup.StartupInfo.hStdInput = input.value;
 	startup.StartupInfo.hStdOutput = writer.value;
 	startup.StartupInfo.hStdError = input.value;
@@ -86,7 +87,7 @@ Process::Process(const std::string &executable, const std::string &directory) : 
 	auto command = quote(path) + L" --preload-worker " + quote(wide(directory));
 	PROCESS_INFORMATION process{};
 	bool created = configured && CreateProcessW(path.c_str(), command.data(), NULL, NULL, TRUE,
-		EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW, NULL, NULL, &startup.StartupInfo, &process);
+		EXTENDED_STARTUPINFO_PRESENT, NULL, NULL, &startup.StartupInfo, &process);
 	DWORD error = GetLastError();
 	DeleteProcThreadAttributeList(startup.lpAttributeList);
 	if (!created) throw std::runtime_error("CreateProcess failed: " + std::to_string(error));
@@ -155,7 +156,8 @@ void Process::kill()
 	if (impl->output.value) preload_connection_cancel(reinterpret_cast<preload_connection>(impl->output.value));
 }
 
-struct Owner::Impl { Handle process; };
+/** Pins owner identity until monitoring ends. */
+struct Owner::Impl { Handle process; /**< Owned synchronization handle. */ };
 Owner::Owner(std::uint32_t pid) : impl(new Impl)
 {
 	impl->process.value = OpenProcess(SYNCHRONIZE, FALSE, pid);
@@ -197,10 +199,10 @@ extern char **environ;
 
 namespace preload {
 struct Process::Impl {
-	int output = -1;
-	std::mutex mutex;
-	bool exited = false;
-	int status = 0;
+	int output = -1; /**< Owned READY reader, closed after handshake. */
+	std::mutex mutex; /**< Serializes waitpid and kill to prevent PID-reuse races. */
+	bool exited = false; /**< True after waitpid reaps the process. */
+	int status = 0; /**< Cached native wait status, valid when exited. */
 	~Impl() { if (output != -1) ::close(output); }
 };
 
@@ -268,7 +270,8 @@ void Process::kill()
 	if (!impl->exited) ::kill(static_cast<pid_t>(pid), SIGKILL);
 }
 
-struct Owner::Impl { std::uint32_t pid; };
+/** Native POSIX owner identity. */
+struct Owner::Impl { std::uint32_t pid; /**< Positive PID, checked against native range. */ };
 Owner::Owner(std::uint32_t pid) : impl(new Impl{pid})
 {
 	if (pid > static_cast<std::uint32_t>(std::numeric_limits<pid_t>::max()))

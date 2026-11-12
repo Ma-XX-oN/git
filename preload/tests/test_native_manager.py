@@ -121,6 +121,26 @@ class NativePools(unittest.TestCase):
         self.assertIn("doesn't support --preload-worker", self.preload("probe"))
         self.assertLess(time.monotonic() - started, 3)
 
+    @unittest.skipIf(WINDOWS, "POSIX mailbox reclamation")
+    def test_unread_allocation_is_killed_and_reaped(self):
+        """A dead mailbox claimant must not leave an allocated worker zombie."""
+        self.assertEqual(self.preload("probe"), "OK")
+        dead = subprocess.Popen(["/bin/true"])
+        dead.wait()
+        self.session.request("GET probe {slot}", pid=dead.pid)
+        deadline = time.monotonic() + 5
+        worker = None
+        while worker is None and time.monotonic() < deadline:
+            allocations = [line for line in self.session.read_log().splitlines() if line.startswith("ALLOCATED probe ")]
+            if allocations: worker = int(allocations[-1].split()[-1])
+            time.sleep(.01)
+        self.assertIsNotNone(worker)
+        while time.monotonic() < deadline:
+            try: os.kill(worker, 0)
+            except ProcessLookupError: return
+            time.sleep(.01)
+        self.fail("unread allocation was not reaped")
+
 
 if __name__ == "__main__":
     unittest.main()

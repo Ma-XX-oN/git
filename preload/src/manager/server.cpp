@@ -324,13 +324,17 @@ struct Mailbox {
 		return pid;
 	}
 	/** Drain stale bytes and free claim; kill worker only if its reply was unread. */
-	void release()
+	void release(Manager &manager)
 	{
 		std::lock_guard<std::mutex> guard(mutex);
 		char bytes[4096];
 		bool unread = false;
 		while (preload_connection_read(reader.value, bytes, sizeof(bytes)) > 0) unread = true;
-		if (unread && pending) { log("UNCOLLECTED_WORKER_KILLED pid=" + std::to_string(pending->pid)); pending->kill(); }
+		if (unread && pending) {
+			log("UNCOLLECTED_WORKER_KILLED pid=" + std::to_string(pending->pid));
+			pending->kill();
+			manager.finish(std::to_string(pending->pid));
+		}
 		pending.reset();
 		++generation;
 		std::error_code error;
@@ -387,7 +391,7 @@ class PosixServer final : public Server {
 		auto rest = split(arg.second);
 		if (command.first == "FREE" && arg.second.empty()) {
 			if (auto box = mailbox(arg.first)) {
-				box->release();
+				box->release(manager);
 				if (stop_slot >= 0 && box == slots[stop_slot].get()) stopped = true;
 			}
 			return;
@@ -441,7 +445,7 @@ public:
 		if (Clock::now() >= next_reclaim) {
 			for (auto &box : slots) {
 				auto pid = box->owner();
-				if (pid && ::kill(static_cast<pid_t>(pid), 0) && errno == ESRCH) box->release();
+				if (pid && ::kill(static_cast<pid_t>(pid), 0) && errno == ESRCH) box->release(manager);
 			}
 			next_reclaim = Clock::now() + std::chrono::milliseconds(250);
 		}

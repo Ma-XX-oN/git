@@ -29,11 +29,15 @@ bool parse_pid(const std::string &text, std::uint32_t &pid);
 class Connection {
 public:
 	preload_connection value = -1; /**< Owned handle/descriptor, or -1. */
+	/** Adopt value (-1 means empty); caller relinquishes ownership. */
 	explicit Connection(preload_connection value = -1) : value(value) {}
+	/** Close the owned resource; all I/O users must have joined. */
 	~Connection() { preload_connection_close(value); }
 	Connection(const Connection &) = delete;
 	Connection &operator=(const Connection &) = delete;
+	/** Transfer ownership from other, leaving it empty. */
 	Connection(Connection &&other) noexcept : value(other.value) { other.value = -1; }
+	/** Close current resource and adopt other's resource; return this object. */
 	Connection &operator=(Connection &&other) noexcept;
 	/** Write entire borrowed payload; false on failure/EOF. */
 	bool write(const std::string &payload) const;
@@ -53,6 +57,7 @@ class Tasks {
 public:
 	/** Start count threads; count must be positive. */
 	explicit Tasks(unsigned count);
+	/** Drain queued work and join all task threads. */
 	~Tasks();
 	/** Queue owned task, throwing if shutdown has begun. */
 	void submit(std::function<void()> task);
@@ -88,12 +93,13 @@ class Manager {
 	/** Kill/reap this pool's children and wait for all counted startups. */
 	void close_pool(const std::shared_ptr<Pool> &pool);
 public:
+	/** Own existing session-directory and optional Windows pipe-directory strings. */
 	explicit Manager(std::string directory, std::string pipe_directory) :
 		directory(std::move(directory)), pipe_directory(std::move(pipe_directory)) {}
 	~Manager();
 	/** Register/replace pool; return OK or ERROR text without newline. */
 	std::string preload(const std::string &name, const std::string &executable);
-	/** Allocate owned worker; error receives ERROR text on failure.
+	/** Allocate owned worker; caller supplies empty error, receiving ERROR text on failure.
 	 * With wait=false an empty error and null worker mean not yet READY.
 	 */
 	Worker allocate(const std::string &name, std::string &error, bool wait = true);
