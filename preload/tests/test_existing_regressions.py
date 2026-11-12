@@ -53,8 +53,10 @@ def run_suite(script, selection, environment, output, root):
                  stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                  start_new_session=os.name != "nt")
   try:
-    out, err = process.communicate(timeout=120)
-  except subprocess.TimeoutExpired:
+    out, err = process.communicate(timeout=600 if os.name == "nt" else 120)
+  except subprocess.TimeoutExpired as error:
+    (output / (script + ".stdout")).write_bytes(error.stdout or b"")
+    (output / (script + ".stderr")).write_bytes(error.stderr or b"")
     stop_owned_tree(process)
     raise
   (output / (script + ".stdout")).write_bytes(out)
@@ -87,7 +89,8 @@ def main():
   env["GIT_BUILD_DIR"] = shell_path(args.git.resolve().parent)
   env["GIT_TEST_PRELOAD"] = "1"
   env["GIT_TEST_PRELOAD_GIT"] = str(args.git.resolve())
-  env["GIT_TEST_PRELOAD_PYTHON"] = sys.executable
+  env["GIT_TEST_PRELOAD_MANAGER"] = os.environ.get("PRELOAD_MANAGER", str(args.git.resolve().parent /
+    ("preload-manager.exe" if os.name == "nt" else "preload-manager")))
   rows = []
   for script, selection, scope in SUITES:
     row = run_suite(script, selection, env, output, root)

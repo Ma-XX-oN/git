@@ -1,4 +1,4 @@
-= Preloaded Git workers
+= Preload workers and generic manager
 
 `git --preload-worker <session-directory>` starts a single-use Git process
 that waits for one command. Set `PRELOAD_PID` to the native operating system
@@ -14,9 +14,9 @@ channels are FIFOs in that directory on POSIX, and named pipes
 
 `preload/client/manager.sh` is a Bash library (Bash 4.1 or newer) for
 preloading any executable that supports `--preload-worker`; Git is one such
-executable. It must be sourced. Sourcing starts the session's Python manager
-(`PRELOAD_PYTHON` selects the interpreter; on Git Bash it must be native
-Windows Python) and defines `preload`:
+executable. It must be sourced. Sourcing starts the session's native
+`preload-manager` (`PRELOAD_MANAGER` selects an executable path or command;
+the default is `preload-manager` on `PATH`) and defines `preload`:
 
 ----
 source preload/client/manager.sh
@@ -35,14 +35,14 @@ functions reach child Bash processes; scripts run by `sh` use the executable.
 === PowerShell frontend
 
 `preload/client/manager.ps1` is the PowerShell 7 frontend for Windows. Dot-source
-it and start a session with the native paths of the worker executable and Python
-interpreter, plus a new private session directory. The executable's runtime DLLs
-must be on `PATH`. It uses the same Python manager and worker protocol as Bash:
+it and start a session with the native paths of the worker and manager
+executables, plus a new private session directory. Their runtime DLLs
+must be on `PATH`. It uses the same native manager and worker protocol as Bash:
 
 [source,powershell]
 ----
 . ./preload/client/manager.ps1
-Start-Preload -Executable C:/path/to/git.exe -Python C:/path/to/python.exe `
+Start-Preload -Executable C:/path/to/git.exe -Manager C:/path/to/preload-manager.exe `
     -Directory "$env:TEMP/preload-$([guid]::NewGuid())"
 try {
     $result = Invoke-Preload -Arguments @('status', '--short')
@@ -151,19 +151,29 @@ exited) is killed.
 
 == Modules and ownership
 
+`src/manager/` implements the generic C++17 manager as a separate executable.
+It accepts `--owner-pid <native-pid>` and `--directory <existing-directory>`;
+Windows also requires `--pipe-dir <named-pipe-directory>`. Arguments are UTF-8
+internally, with native Unicode process/path APIs on Windows. Registration
+selects each worker executable; the manager performs no Git initialization.
+
 `src/worker/worker.c` owns dispatch, request framing, command execution and ordered
 completion. `src/worker/worker-win32.c` and `src/worker/worker-posix.c` own native
 endpoint setup, standard-handle adaptation and owner monitoring.
 `src/worker/context.c` validates and applies the command's optional working
 directory. Workers inherit their environment when the manager spawns them.
 
-`include/worker/transport.h` exposes an opaque transport. Start prepares endpoints
+`include/shared/transport.h` exposes an opaque C transport. Start prepares endpoints
 before READY, wait completes connection selection, and release cancels and
 joins pending connection work before freeing storage. Configuration strings
 are borrowed until release. A detached descriptor transfers ownership to the
 caller; all other channels remain owned by the transport. Only the applicable
 Windows or POSIX implementation is built. The unrelated index preloading
 implementation is independent of these modules.
+`include/shared/connection.h` supplies the common native connection operations
+used by manager and worker. Public shared headers support both C and C++;
+native handle/descriptor ownership transfers explicitly, and cancellation is
+followed by joining I/O users before storage or endpoints are released.
 POSIX worker mode requires pthread support for owner monitoring. Builds with
 `NO_PTHREADS` retain ordinary Git commands and reject worker startup explicitly.
 

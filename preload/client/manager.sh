@@ -7,8 +7,8 @@
 # Sourcing starts (or reuses) the session's manager and defines preload().
 # preload <command> starts 3 workers of <command> --preload-worker and defines
 # an exported function named after the command; `command <name>` still runs
-# the executable directly. Set PRELOAD_PYTHON to the Python used for the
-# manager (native Windows Python on Git Bash). Requires Bash 4.1 or newer.
+# the executable directly. PRELOAD_MANAGER selects the native manager
+# executable (default: preload-manager on PATH). Requires Bash 4.1 or newer.
 # See benchmark-results/.../generalizing.md for the specification.
 
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
@@ -552,7 +552,7 @@ _preload_stop() {
 # Start this shell's session, or reuse a live one inherited from a parent.
 # Returns zero once the manager is READY.
 _preload_start_session() {
-  local owner base dir py i script
+  local owner base dir manager i
   if [[ $_PRELOAD_PLATFORM == windows ]]; then
     IFS= read -r owner <"/proc/$BASHPID/winpid" || return 1
   else
@@ -600,16 +600,15 @@ _preload_start_session() {
     mkdir -m 700 -- "$dir" || return 1
   fi
   export PRELOAD_PID=$owner PRELOAD_DIR=$dir
+  manager=${PRELOAD_MANAGER:-preload-manager}
   if [[ $_PRELOAD_PLATFORM == windows ]]; then
     export PRELOAD_WIN_DIR="\\\\.\\pipe\\preload-$owner"
-    py=${PRELOAD_PYTHON:-python}
-    script=$(cygpath -w -- "$_PRELOAD_LIB_DIR/../manager/manager_windows.py") || return 1
-    "$py" "$script" --owner-pid "$owner" --directory "$(cygpath -w -- "$dir")" \
+    [[ $manager != *\\* && $manager != [A-Za-z]:* ]] || manager=$(cygpath -u -- "$manager") || return 1
+    "$manager" --owner-pid "$owner" --directory "$(cygpath -w -- "$dir")" \
       --pipe-dir "$PRELOAD_WIN_DIR" >"$dir/manager.log" 2>&1 </dev/null &
   else
     unset PRELOAD_WIN_DIR
-    py=${PRELOAD_PYTHON:-python3}
-    "$py" "$_PRELOAD_LIB_DIR/../manager/manager_unix.py" --owner-pid "$owner" \
+    "$manager" --owner-pid "$owner" \
       --directory "$dir" >"$dir/manager.log" 2>&1 </dev/null &
   fi
   _PRELOAD_MANAGER_JOB=$!

@@ -1,7 +1,12 @@
 #ifndef PRELOAD_TRANSPORT_H
 #define PRELOAD_TRANSPORT_H
 
-#include "git-compat-util.h"
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /**
  * @file
@@ -65,7 +70,7 @@ int preload_transport_wait(struct preload_transport *transport);
  * @param size Maximum byte count to read.
  * @return Bytes read, zero at EOF, or -1 with errno set; short reads are valid.
  */
-ssize_t preload_transport_read(struct preload_transport *transport, size_t channel,
+ptrdiff_t preload_transport_read(struct preload_transport *transport, size_t channel,
 			       void *buffer, size_t size);
 /**
  * @brief Write application bytes to a connected output channel.
@@ -76,7 +81,7 @@ ssize_t preload_transport_read(struct preload_transport *transport, size_t chann
  * @param size Maximum byte count to write.
  * @return Bytes written, or -1 with errno set; callers handle short writes.
  */
-ssize_t preload_transport_write(struct preload_transport *transport, size_t channel,
+ptrdiff_t preload_transport_write(struct preload_transport *transport, size_t channel,
 				const void *buffer, size_t size);
 /**
  * @brief Finish buffered delivery where the platform requires it.
@@ -113,5 +118,9 @@ void preload_transport_close_channel(struct preload_transport *transport, size_t
  * @param transport Owned prepared or connected state, including partial startup; NULL is safe.
  */
 void preload_transport_release(struct preload_transport *transport);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

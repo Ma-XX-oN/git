@@ -1,5 +1,6 @@
 #include "git-compat-util.h"
-#include "worker/transport.h"
+#include "shared/transport.h"
+#include "shared/connection.h"
 #include "strbuf.h"
 
 /** Owns connected FIFO descriptors and borrows immutable endpoint configuration. */
@@ -82,7 +83,7 @@ int preload_transport_wait(struct preload_transport *transport)
 ssize_t preload_transport_read(struct preload_transport *transport, size_t channel,
 			       void *buffer, size_t size)
 {
-	return xread(transport->fds[channel], buffer, size);
+	return preload_connection_read(transport->fds[channel], buffer, size);
 }
 
 /**
@@ -97,7 +98,7 @@ ssize_t preload_transport_read(struct preload_transport *transport, size_t chann
 ssize_t preload_transport_write(struct preload_transport *transport, size_t channel,
 				const void *buffer, size_t size)
 {
-	return xwrite(transport->fds[channel], buffer, size);
+	return preload_connection_write(transport->fds[channel], buffer, size);
 }
 
 /**

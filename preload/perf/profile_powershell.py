@@ -40,8 +40,6 @@ def instrument(output):
       Generated runner that saves raw stage timestamps with its samples.
   """
   source = (ROOT / "preload/client/manager.ps1").read_text(encoding="utf-8")
-  manager = str(ROOT / "preload/manager/manager_windows.py").replace("'", "''")
-  source = replace_once(source, "Join-Path $PSScriptRoot '../manager/manager_windows.py'", "'" + manager + "'")
   source = replace_once(source, "Join-Path $PSScriptRoot '../src/client/pipe.cs'",
               "'" + str(ROOT / "preload/src/client/pipe.cs").replace("'", "''") + "'")
   source += "\n$script:PreloadProfile = [System.Collections.Generic.List[object]]::new()\n"
@@ -110,7 +108,7 @@ def main():
     if client == "powershell":
       env["PRELOAD_TIMING"] = str(directory / "timing")
       command = [shutil.which("pwsh"), "-NoProfile", "-File", str(runner),
-             "-Git", str(git), "-Python", sys.executable, "-Output", str(directory),
+             "-Git", str(git), "-Manager", os.environ.get("PRELOAD_MANAGER", "preload-manager"), "-Output", str(directory),
              "-Mode", "Preload", "-Count", str(args.count), "-DiscardOutput"]
     else:
       command = [sys.executable, str(ROOT / "preload/perf/stage_timing.py"),

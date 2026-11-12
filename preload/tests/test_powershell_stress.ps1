@@ -4,8 +4,8 @@
 Check serial PowerShell calls, exact version output and client handle counts.
 .PARAMETER Git
 Native path to the built worker executable; its runtime DLLs must be on PATH.
-.PARAMETER Python
-Native Python executable used by the manager.
+.PARAMETER Manager
+Native preload-manager executable path.
 .PARAMETER Output
 New private artifact directory; retained with the summary and manager log.
 .PARAMETER Count
@@ -13,7 +13,7 @@ Positive number of captured calls after fifty warmup calls; default 6000.
 #>
 param(
   [string] $Git,
-  [string] $Python,
+  [string] $Manager = 'preload-manager',
   [string] $Output,
   [ValidateRange(1, 100000)] [int] $Count = 6000
 )
@@ -26,7 +26,7 @@ $expected = (& $Git --version) -join "`n"
 if ($LASTEXITCODE -ne 0) { throw 'Direct version check failed' }
 $process = [System.Diagnostics.Process]::GetCurrentProcess()
 try {
-  Start-Preload -Executable $Git -Python $Python -Directory (Join-Path $Output 'session')
+  Start-Preload -Executable $Git -Manager $Manager -Directory (Join-Path $Output 'session')
   for ($i = -50; $i -lt $Count; $i++) {
     if ($i -eq 0) {
       $process.Refresh()

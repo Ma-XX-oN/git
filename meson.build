@@ -240,6 +240,29 @@ project('git', 'c',
 
 fs = import('fs')
 
+# C++ is needed only for this standalone application, never for Git or its worker.
+if add_languages('cpp', required: get_option('preload_manager'), native: false)
+  preload_manager_dependencies = [dependency('threads')]
+  preload_manager_link_args = []
+  if host_machine.system() == 'windows'
+    preload_manager_dependencies += meson.get_compiler('cpp').find_library('advapi32')
+    if meson.get_compiler('cpp').get_argument_syntax() != 'msvc'
+      preload_manager_link_args += '-municode'
+    endif
+  endif
+  executable('preload-manager',
+    sources: ['preload/src/manager/main.cpp', 'preload/src/manager/manager.cpp',
+              'preload/src/manager/platform.cpp', 'preload/src/manager/server.cpp',
+              'preload/src/shared/connection.c'],
+    include_directories: 'preload/include',
+    override_options: ['cpp_std=c++17'],
+    dependencies: preload_manager_dependencies,
+    link_args: preload_manager_link_args,
+    install: true,
+    install_dir: get_option('bindir'),
+  )
+endif
+
 program_path = []
 if get_option('sane_tool_path').length() != 0
   program_path = get_option('sane_tool_path')
@@ -465,6 +488,7 @@ libgit_sources = [
   'pkt-line.c',
   'preload-index.c',
   'preload/src/worker/context.c',
+  'preload/src/shared/connection.c',
   'preload/src/worker/worker.c',
   'pretty.c',
   'prio-queue.c',
@@ -1305,9 +1329,9 @@ endif
 
 # Configure general compatibility wrappers.
 if host_machine.system() == 'windows'
-  libgit_sources += ['preload/src/worker/worker-win32.c', 'preload/src/worker/transport-win32.c']
+  libgit_sources += ['preload/src/worker/worker-win32.c', 'preload/src/shared/transport-win32.c']
 else
-  libgit_sources += ['preload/src/worker/worker-posix.c', 'preload/src/worker/transport-posix.c']
+  libgit_sources += ['preload/src/worker/worker-posix.c', 'preload/src/shared/transport-posix.c']
 endif
 if host_machine.system() == 'cygwin'
   compat_sources += [

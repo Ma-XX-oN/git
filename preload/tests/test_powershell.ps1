@@ -5,8 +5,8 @@ Validate or time the Windows PowerShell preload client.
 .PARAMETER Git
 Native path to the built Git. Its runtime DLLs must be on PATH. Test mode also
 needs `sh` on PATH for the shell-alias cases.
-.PARAMETER Python
-Native Python executable for the shared manager.
+.PARAMETER Manager
+Native preload-manager executable path.
 .PARAMETER Output
 New artifact directory, containing a report and session logs.
 .PARAMETER Mode
@@ -18,10 +18,11 @@ Time the null-sink path instead of capturing and decoding command output.
 #>
 param(
   [string] $Git,
-  [string] $Python,
+  [string] $Manager = 'preload-manager',
   [string] $Output,
   [ValidateSet('Test', 'Preload', 'Direct')] [string] $Mode = 'Test',
   [ValidateRange(1, 100000)] [int] $Count = 200,
+  [ValidateRange(0, 100000)] [int] $Warmup = 20,
   [switch] $DiscardOutput
 )
 $ErrorActionPreference = 'Stop'
@@ -71,7 +72,7 @@ function Invoke-DirectCapture {
 
 try {
   if ($Mode -ne 'Direct') {
-    Start-Preload -Executable $Git -Python $Python -Directory (Join-Path $Output 'session')
+    Start-Preload -Executable $Git -Manager $Manager -Directory (Join-Path $Output 'session')
   }
   if ($Mode -eq 'Test') {
     $fixture = Join-Path $Output 'space ü repo'
@@ -149,7 +150,7 @@ try {
       $passed += 'killed-worker-status-and-recovery'
     } finally { Pop-Location }
     $rejected = $false
-    try { Start-Preload -Executable $Git -Python $Python -Directory (Join-Path $Output 'duplicate') }
+    try { Start-Preload -Executable $Git -Manager $Manager -Directory (Join-Path $Output 'duplicate') }
     catch { $rejected = $_.Exception.Message -like '*already active*' }
     if (-not $rejected) { throw 'Duplicate session was not rejected' }
     $passed += 'duplicate-start-rejected'
@@ -170,18 +171,18 @@ try {
     $rejected = $false
     try {
       Start-Preload -Executable (Join-Path $env:SystemRoot 'System32/whoami.exe') `
-        -Python $Python -Directory (Join-Path $Output 'rejected-session')
+        -Manager $Manager -Directory (Join-Path $Output 'rejected-session')
     } catch { $rejected = $_.Exception.Message -like '*support --preload-worker*' }
     if (-not $rejected -or $script:PreloadSession) { throw 'Unsupported executable cleanup failed' }
     $passed += 'unsupported-executable-cleanup'
-    Start-Preload -Executable $Git -Python $Python -Directory (Join-Path $Output 'restarted-session')
+    Start-Preload -Executable $Git -Manager $Manager -Directory (Join-Path $Output 'restarted-session')
     $result = Invoke-Preload -Arguments @('--version')
     if ($result.ExitCode -ne 0) { throw 'Session restart failed' }
     $passed += 'restart-after-stop-and-failed-start'
     $report = @{ Mode = $Mode; Passed = $passed; PowerShell = $PSVersionTable.PSVersion.ToString() }
   } else {
     $samples = [System.Collections.Generic.List[double]]::new()
-    for ($i = -20; $i -lt $Count; $i++) {
+    for ($i = -$Warmup; $i -lt $Count; $i++) {
       # Give the same one-command refill interval to both clients.
       & $Git --version > $null
       $watch = [System.Diagnostics.Stopwatch]::StartNew()

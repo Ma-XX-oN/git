@@ -1,5 +1,6 @@
 #include "git-compat-util.h"
-#include "worker/transport.h"
+#include "shared/transport.h"
+#include "shared/connection.h"
 #include "worker/worker.h"
 #include "strbuf.h"
 #include "trace.h"
@@ -372,18 +373,6 @@ static int finish_connections(struct preload_transport *connections)
 }
 
 /**
- * @brief Own the security descriptor's backing allocations during pipe creation.
- * All pointers are released after CreateNamedPipe has copied the descriptor.
- */
-struct preload_pipe_security {
-	HANDLE token; /**< Owned access token for the current process. */
-	TOKEN_USER *user; /**< Owned token information containing the owner's SID. */
-	ACL *acl; /**< Owned ACL granting access to that SID. */
-	SECURITY_DESCRIPTOR descriptor; /**< References acl until endpoint creation ends. */
-	SECURITY_ATTRIBUTES attributes; /**< Borrows descriptor; disables inheritance. */
-};
-
-/**
  * @brief Check endpoint names and the connection-order permutation.
  *
  * @param config Borrowed configuration; must specify 1 through 32 channels.
@@ -435,53 +424,12 @@ static struct preload_transport *allocate_transport(
 }
 
 /**
- * @brief Grant pipe access exclusively to the current process owner.
- *
- * @param security Zero-initialized owned storage, including on partial failure.
- * @return Zero on success, -1 with a Win32 last error on failure.
- *
- * A default pipe descriptor grants Everyone and Anonymous read access.
- * Construct the restricted descriptor before publishing endpoint readiness.
- */
-static int prepare_pipe_security(struct preload_pipe_security *security)
-{
-	DWORD token_size = 0, acl_size;
-
-	if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &security->token))
-		return -1;
-	GetTokenInformation(security->token, TokenUser, NULL, 0, &token_size);
-	if (!token_size || GetLastError() != ERROR_INSUFFICIENT_BUFFER)
-		return -1;
-	security->user = xmalloc(token_size);
-	if (!GetTokenInformation(security->token, TokenUser, security->user,
-				 token_size, &token_size))
-		return -1;
-	acl_size = sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE) -
-		sizeof(DWORD) + GetLengthSid(security->user->User.Sid);
-	security->acl = xmalloc(acl_size);
-	if (!InitializeAcl(security->acl, acl_size, ACL_REVISION) ||
-	    !AddAccessAllowedAce(security->acl, ACL_REVISION, GENERIC_ALL,
-				 security->user->User.Sid) ||
-	    !InitializeSecurityDescriptor(&security->descriptor,
-					  SECURITY_DESCRIPTOR_REVISION) ||
-	    !SetSecurityDescriptorDacl(&security->descriptor, TRUE,
-				       security->acl, FALSE))
-		return -1;
-	security->attributes.nLength = sizeof(security->attributes);
-	security->attributes.lpSecurityDescriptor = &security->descriptor;
-	security->attributes.bInheritHandle = FALSE;
-	return 0;
-}
-
-/**
  * @brief Create two synchronous duplex instances for each logical channel.
  *
  * @param transport Owned endpoint table, retaining partial results on error.
- * @param attributes Borrowed owner-restricted descriptor, valid during this call.
  * @return Zero on success, -1 with a Win32 last error on failure.
  */
-static int create_pipe_instances(struct preload_transport *transport,
-				SECURITY_ATTRIBUTES *attributes)
+static int create_pipe_instances(struct preload_transport *transport)
 {
 	size_t i, j;
 
@@ -492,12 +440,7 @@ static int create_pipe_instances(struct preload_transport *transport,
 		strbuf_addf(&name, "%s\\%s", transport->config.location,
 			    transport->config.channels[i].name);
 		for (j = 0; j < 2; j++) {
-			DWORD mode = PIPE_ACCESS_DUPLEX |
-				(j == 0 ? FILE_FLAG_FIRST_PIPE_INSTANCE : 0);
-
-			transport->pipes[i][j] = CreateNamedPipeA(name.buf, mode,
-				PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-				2, 65536, 65536, 5000, attributes);
+			transport->pipes[i][j] = (HANDLE)preload_connection_listen(name.buf, j == 0, 2);
 			if (transport->pipes[i][j] == INVALID_HANDLE_VALUE) {
 				DWORD error = GetLastError();
 
@@ -521,7 +464,6 @@ static int create_pipe_instances(struct preload_transport *transport,
 int preload_transport_start(struct preload_transport **out,
 			    const struct preload_transport_config *config)
 {
-	struct preload_pipe_security security = { 0 };
 	DWORD error;
 	int result = -1;
 
@@ -531,14 +473,9 @@ int preload_transport_start(struct preload_transport **out,
 		return -1;
 	}
 	*out = allocate_transport(config);
-	if (!prepare_pipe_security(&security) &&
-	    !create_pipe_instances(*out, &security.attributes))
+	if (!create_pipe_instances(*out))
 		result = start_connections(*out);
 	error = result ? GetLastError() : 0;
-	free(security.acl);
-	free(security.user);
-	if (security.token)
-		CloseHandle(security.token);
 	if (result) {
 		errno = err_win_to_posix(error);
 		SetLastError(error);
@@ -569,14 +506,10 @@ int preload_transport_wait(struct preload_transport *transport)
 ssize_t preload_transport_read(struct preload_transport *transport, size_t channel,
 			       void *buffer, size_t size)
 {
-	DWORD count;
-	if (ReadFile(transport->pipes[channel][1], buffer,
-		     size > MAXDWORD ? MAXDWORD : (DWORD)size, &count, NULL))
-		return count;
-	if (GetLastError() == ERROR_BROKEN_PIPE)
-		return 0;
-	errno = err_win_to_posix(GetLastError());
-	return -1;
+	ssize_t count = preload_connection_read((preload_connection)transport->pipes[channel][1], buffer, size);
+	if (count < 0)
+		errno = err_win_to_posix(GetLastError());
+	return count;
 }
 
 /**
@@ -591,12 +524,10 @@ ssize_t preload_transport_read(struct preload_transport *transport, size_t chann
 ssize_t preload_transport_write(struct preload_transport *transport, size_t channel,
 				const void *buffer, size_t size)
 {
-	DWORD count;
-	if (WriteFile(transport->pipes[channel][1], buffer,
-		      size > MAXDWORD ? MAXDWORD : (DWORD)size, &count, NULL))
-		return count;
-	errno = err_win_to_posix(GetLastError());
-	return -1;
+	ssize_t count = preload_connection_write((preload_connection)transport->pipes[channel][1], buffer, size);
+	if (count < 0)
+		errno = err_win_to_posix(GetLastError());
+	return count;
 }
 
 /**

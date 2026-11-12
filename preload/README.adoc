@@ -1,36 +1,45 @@
 = Preload components
 
-This directory contains the worker implementation, Bash and PowerShell clients, Python manager,
+This directory contains the C worker, shared C transports, Bash and PowerShell clients, C++ manager,
 tests, diagnostics and protocol documentation.
 
-From the Git checkout root, source `preload/client/manager.sh` and call
+Build `preload-manager` with Make or Meson and put it on `PATH` (or set
+`PRELOAD_MANAGER` to its executable path). From the Git checkout root, source `preload/client/manager.sh` and call
 `preload /path/to/git`. See link:docs/protocol.adoc[the protocol and usage guide]
 for requirements, supported behavior and limits.
 
 == Layout
 
 * `src/worker/`: worker, context and platform transport implementations.
+* `src/shared/` and `include/shared/`: C transports shared by worker and manager.
+* `src/manager/` and `include/manager/`: generic C++17 manager and platform operations.
 * `src/client/`: shared .NET pipe connector for the PowerShell frontend.
 * `include/worker/`: worker and transport headers; use `include/` as the
   compiler header search path.
 * `client/`: Bash and PowerShell client libraries.
-* `manager/`: Python managers and shared worker pool.
 * `tests/`: lifecycle, framing, concurrency and command regression checks.
 * `perf/`: benchmarks, profilers and plotting tools.
 * `docs/`: protocol, transport contract, performance journals and raw evidence.
 
-Future C manager sources and headers belong in `src/manager/` and
-`include/manager/` respectively.
+`preload-manager` serves any executable supporting `--preload-worker`; Git is
+one host application. The manager and shared connection API have no Git-header
+dependency. Worker extraction and a full code-quality/portability audit are
+tracked in https://github.com/Ma-XX-oN/git/issues/13[issue #13].
 
 == Git integration and validation
 
-The Git Makefile and Meson build select the worker sources and platform backend.
+The Git Makefile and Meson build select the worker sources and platform backend
+and build the separate `preload-manager` executable. Only the manager requires
+a C++17 compiler; the worker and shared transport compile as C. Use
+`NO_PRELOAD_MANAGER=YesPlease` with Make or `-Dpreload_manager=disabled` with
+Meson to omit the manager. An independent worker build remains follow-up work.
 `common-main.c`, `common-exit.c`, and the Git test adapters remain in the host
 repository. The C implementation still uses Git utilities and its application
 entry/exit integration; this layout prepares extraction without changing that
 API or providing an independent build system.
 
-Run `python preload/tests/test_manager_lifecycle.py` for pool lifecycle checks,
+Run `python -m unittest discover -s preload/tests -p test_native_manager.py -v`
+for native pool lifecycle checks (first build `preload/perf/ready-worker`),
 or `python preload/tests/test_many_arguments.py --git /path/to/built/git` for
 parameter-count boundaries. Native worker tests require a matching built Git.
 The `preload-validation.yml` workflow uses these paths for platform validation.
@@ -42,13 +51,13 @@ layouts so historical clients keep their matching manager and worker protocol.
 == PowerShell client
 
 On Windows with PowerShell 7, dot-source `client/manager.ps1` to use the same
-Python manager and worker protocol. The worker executable's runtime DLLs must
+native manager and worker protocol. Both executables' runtime DLLs must
 be available on `PATH`. Use a new private directory for each session:
 
 [source,powershell]
 ----
 . ./preload/client/manager.ps1
-Start-Preload -Executable C:/path/to/git.exe -Python C:/path/to/python.exe `
+Start-Preload -Executable C:/path/to/git.exe -Manager C:/path/to/preload-manager.exe `
     -Directory "$env:TEMP/preload-$([guid]::NewGuid())"
 try {
     $result = Invoke-Preload -Arguments @('status', '--short')
@@ -82,3 +91,13 @@ The comparison defaults to PowerShell discard mode, matching Bash's stdout
 redirection to `/dev/null`; use `--powershell-output capture` to time capture.
 See link:docs/performance/powershell-profile-20261112.md[the stage profile and
 diagnostic controls] for measured client overhead and reproduction commands.
+
+== Comparing managers
+
+Build `preload/perf/manager-protocol` and `preload/perf/ready-worker` with Make,
+then run `python preload/perf/compare_managers.py --git /path/to/git --output /new/results`.
+The harness exports the preserved Python baseline revision and compares it to
+the native manager using the same worker binary. It requires `psutil` and
+`matplotlib` for separate resource sampling and charts. Raw samples, machine
+details, confidence intervals and normalized results are saved in the output.
+See link:docs/MANAGER-MIGRATION.md[the migration checklist and validation status].

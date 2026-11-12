@@ -63,6 +63,7 @@ jobs:
             py="$pythonLocation/bin/python3"
           fi
           "$py" -m pip install meson ninja
+          echo "$GITHUB_WORKSPACE" >> "$GITHUB_PATH"
       - name: Ensure Bash with EPOCHREALTIME on macOS
         if: runner.os == 'macOS'
         shell: bash
@@ -96,8 +97,8 @@ jobs:
             "$py" preload/tests/test_posix_worker.py "$gitbin"
           fi
           "$py" preload/tests/test_transport.py "$helper"
-          "$py" preload/tests/test_manager_lifecycle.py
-          "$py" -m unittest discover -s preload/tests -p test_manager_dispatch.py -v
+          "$py" -m pip install psutil
+          "$py" -m unittest discover -s preload/tests -p test_native_manager.py -v
           "$py" preload/tests/test_manager.py --git "$gitbin" --output preload-results/manager
           "$py" preload/tests/test_owner_death.py --git "$gitbin"
           "$py" preload/tests/test_worker_crash.py --git "$gitbin"
@@ -114,8 +115,8 @@ jobs:
           pwsh="$(command -v pwsh)" || exit 1
           . /etc/profile || exit 1
           cd "$GITHUB_WORKSPACE"
-          "$pwsh" -NoProfile -File preload/tests/test_powershell.ps1 -Git "$(cygpath -w "$PWD/git.exe")" -Python "$pythonLocation/python.exe" -Output "$(cygpath -w "$PWD/preload-results/powershell")"
-          "$pwsh" -NoProfile -File preload/tests/test_powershell_stress.ps1 -Git "$(cygpath -w "$PWD/git.exe")" -Python "$pythonLocation/python.exe" -Output "$(cygpath -w "$PWD/preload-results/powershell-stress")" -Count 6000
+          "$pwsh" -NoProfile -File preload/tests/test_powershell.ps1 -Git "$(cygpath -w "$PWD/git.exe")" -Manager "$(cygpath -w "$PWD/preload-manager.exe")" -Output "$(cygpath -w "$PWD/preload-results/powershell")"
+          "$pwsh" -NoProfile -File preload/tests/test_powershell_stress.ps1 -Git "$(cygpath -w "$PWD/git.exe")" -Manager "$(cygpath -w "$PWD/preload-manager.exe")" -Output "$(cygpath -w "$PWD/preload-results/powershell-stress")" -Count 6000
       - name: Preserve native fast-path evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -145,7 +146,7 @@ jobs:
             export PATH="/usr/bin:$PATH"
             gitbin="$(cygpath -w "$PWD/build-preload/git.exe")"
             "$py" preload/tests/test_windows_worker_lifecycle.py "$gitbin"
-            "$pwsh" -NoProfile -File preload/tests/test_powershell.ps1 -Git "$gitbin" -Python "$pythonLocation/python.exe" -Output "$(cygpath -w "$PWD/preload-results/meson-powershell")"
+            "$pwsh" -NoProfile -File preload/tests/test_powershell.ps1 -Git "$gitbin" -Manager "$(cygpath -w "$PWD/build-preload/preload-manager.exe")" -Output "$(cygpath -w "$PWD/preload-results/meson-powershell")"
           else
             gitbin="$PWD/build-preload/git"
             "$py" preload/tests/test_posix_worker.py "$gitbin"
@@ -334,12 +335,11 @@ jobs:
         run: make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease all
       - name: Validate fixed frames and worker fast path
         run: |
-          python -m unittest discover -s preload/tests -p test_manager_dispatch.py -v
+          python -m unittest discover -s preload/tests -p test_native_manager.py -v
           python -m unittest discover -s preload/tests -p test_pid_reply.py -v
           python -m unittest discover -s preload/tests -p test_benchmark.py -v
           python preload/tests/test_posix_worker.py "$PWD/git"
           python preload/tests/test_transport.py "$PWD/t/helper/test-tool"
-          python preload/tests/test_manager_lifecycle.py
           python preload/tests/test_manager.py --git "$PWD/git" --output pid-results/manager
           python preload/tests/test_owner_death.py --git "$PWD/git"
           python preload/tests/test_shell_environment.py --git "$PWD/git" --output pid-results/environment
@@ -401,7 +401,7 @@ jobs:
           gitbin="$(cygpath -w "$PWD/git.exe")"
           "$py" -m unittest discover -s preload/tests -p test_pid_reply.py -v
           "$py" preload/tests/test_windows_worker_lifecycle.py "$gitbin"
-          "$py" preload/tests/test_manager_lifecycle.py
+          "$py" -m unittest discover -s preload/tests -p test_native_manager.py -v
           for mode in get spawn; do
             export EXP_PRELOAD_CONNECT=$mode
             "$py" preload/tests/test_manager.py --git "$gitbin" --output relay-results/$mode/manager

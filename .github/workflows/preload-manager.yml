@@ -1,0 +1,124 @@
+name: Native preload manager
+on:
+  push:
+    branches: [codex/preload-manager-cpp]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+        if: runner.os == 'Windows'
+        with:
+          flavor: full
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Dependencies
+        shell: bash
+        run: |
+          python -m pip install meson ninja psutil matplotlib
+          if [[ $RUNNER_OS == macOS ]]; then
+            brew list bash >/dev/null 2>&1 || brew install bash
+            echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+          fi
+      - name: Make build
+        shell: bash
+        run: |
+          if [[ $RUNNER_OS == Windows ]]; then
+            . /etc/profile || exit 1
+            cd "$GITHUB_WORKSPACE"
+          fi
+          make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease all
+          make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease preload/perf/ready-worker$([[ $RUNNER_OS == Windows ]] && printf .exe) preload/perf/manager-protocol$([[ $RUNNER_OS == Windows ]] && printf .exe)
+      - name: Validate native manager and worker
+        shell: bash
+        run: |
+          if [[ $RUNNER_OS == Windows ]]; then
+            pwsh="$(command -v pwsh)" || exit 1
+            . /etc/profile || exit 1
+            cd "$GITHUB_WORKSPACE"
+            py="$(cygpath -u "$pythonLocation")/python.exe"
+            gitbin="$(cygpath -w "$PWD/git.exe")"
+            export PRELOAD_MANAGER="$(cygpath -w "$PWD/preload-manager.exe")"
+            "$py" preload/tests/test_windows_worker_lifecycle.py "$gitbin"
+            "$py" preload/tests/test_transport.py "$(cygpath -w "$PWD/t/helper/test-tool.exe")"
+            "$pwsh" -NoProfile -File preload/tests/test_powershell.ps1 -Git "$gitbin" -Manager "$PRELOAD_MANAGER" -Output "$(cygpath -w "$PWD/native-results/powershell")"
+          else
+            py="$pythonLocation/bin/python3"
+            gitbin="$PWD/git"
+            export PRELOAD_MANAGER="$PWD/preload-manager"
+            "$py" preload/tests/test_posix_worker.py "$gitbin"
+            "$py" preload/tests/test_transport.py "$PWD/t/helper/test-tool"
+          fi
+          export PATH="$PWD:$PATH"
+          "$py" -m unittest discover -s preload/tests -p test_native_manager.py -v
+          "$py" preload/tests/test_manager.py --git "$gitbin" --output native-results/protocol
+          "$py" preload/tests/test_owner_death.py --git "$gitbin"
+          "$py" preload/tests/test_worker_crash.py --git "$gitbin"
+          "$py" preload/tests/test_many_arguments.py --git "$gitbin"
+          "$py" preload/tests/test_shell_environment.py --git "$gitbin" --output native-results/environment
+          "$py" preload/tests/test_existing_regressions.py --git "$gitbin" --output native-results/commands
+          "$py" preload/tests/test_shell_output.py --git "$gitbin" --output native-results/output
+          "$py" preload/tests/acceptance.py --git "$gitbin" --count 6000 --trace --output native-results/stress
+      - name: Meson build and parity
+        shell: bash
+        run: |
+          options=()
+          if [[ $RUNNER_OS == Windows ]]; then
+            . /etc/profile || exit 1
+            cd "$GITHUB_WORKSPACE"
+            py="$(cygpath -u "$pythonLocation")/python.exe"
+            export PATH="$(cygpath -u "$pythonLocation")/Scripts:$PWD:$PATH"
+            options+=("-Dsane_tool_path=$(cygpath -am /usr/bin)")
+          else
+            py="$pythonLocation/bin/python3"
+          fi
+          "$py" -m mesonbuild.mesonmain setup build-manager -Dpreload_manager=enabled -Drust=disabled -Dcurl=disabled -Dgettext=disabled -Dgit_gui=disabled -Dgitk=disabled -Dzlib_backend=zlib "${options[@]}"
+          "$py" -m mesonbuild.mesonmain compile -C build-manager -j4
+          if [[ $RUNNER_OS == Windows ]]; then
+            gitbin="$(cygpath -w "$PWD/build-manager/git.exe")"
+            export PRELOAD_MANAGER="$(cygpath -w "$PWD/build-manager/preload-manager.exe")"
+            "$py" preload/tests/test_windows_worker_lifecycle.py "$gitbin"
+          else
+            gitbin="$PWD/build-manager/git"
+            export PRELOAD_MANAGER="$PWD/build-manager/preload-manager"
+            "$py" preload/tests/test_posix_worker.py "$gitbin"
+          fi
+          "$py" -m unittest discover -s preload/tests -p test_native_manager.py -v
+          "$py" preload/tests/test_manager.py --git "$gitbin" --output native-results/meson-protocol
+          "$py" preload/tests/test_existing_regressions.py --git "$gitbin" --output native-results/meson-commands
+      - name: Matched Python and C++ measurements
+        shell: bash
+        run: |
+          if [[ $RUNNER_OS == Windows ]]; then
+            pwsh="$(command -v pwsh)" || exit 1
+            . /etc/profile || exit 1
+            cd "$GITHUB_WORKSPACE"
+            py="$(cygpath -u "$pythonLocation")/python.exe"
+            export PATH="${pwsh%/*}:$PWD:$PATH"
+            gitbin="$(cygpath -w "$PWD/git.exe")"
+          else
+            py="$pythonLocation/bin/python3"
+            gitbin="$PWD/git"
+            export PATH="$PWD:$PATH"
+          fi
+          "$py" preload/perf/compare_managers.py --git "$gitbin" --output native-results/performance
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-manager-${{ runner.os }}-${{ github.sha }}
+          path: |
+            native-results/
+            build-manager/meson-logs/

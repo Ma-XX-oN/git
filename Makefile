@@ -1256,16 +1256,49 @@ LIB_OBJS += path-walk.o
 LIB_OBJS += pathspec.o
 LIB_OBJS += pkt-line.o
 LIB_OBJS += preload/src/worker/context.o
+LIB_OBJS += preload/src/shared/connection.o
 LIB_OBJS += preload-index.o
 LIB_OBJS += preload/src/worker/worker.o
 ifneq ($(filter MINGW Windows,$(uname_S)),)
 LIB_OBJS += preload/src/worker/worker-win32.o
-LIB_OBJS += preload/src/worker/transport-win32.o
+LIB_OBJS += preload/src/shared/transport-win32.o
 else
 LIB_OBJS += preload/src/worker/worker-posix.o
-LIB_OBJS += preload/src/worker/transport-posix.o
+LIB_OBJS += preload/src/shared/transport-posix.o
 endif
-$(filter preload/src/worker/%,$(LIB_OBJS)): EXTRA_CPPFLAGS += -I./preload/include
+$(filter preload/src/worker/% preload/src/shared/%,$(LIB_OBJS)): EXTRA_CPPFLAGS += -I./preload/include
+
+# The manager is a separate C++ application; worker and transport stay C.
+PRELOAD_MANAGER_OBJS = $(patsubst %.cpp,%.o,$(wildcard preload/src/manager/*.cpp))
+PRELOAD_MANAGER_OBJS += preload/src/shared/connection.o
+PRELOAD_CXXFLAGS ?= -O2 -g -Wall -Wextra
+ifndef NO_PRELOAD_MANAGER
+ifndef NO_PTHREADS
+all:: preload-manager$X
+all:: preload/perf/ready-worker$X
+BINDIR_PROGRAMS_NEED_X += preload-manager
+endif
+endif
+
+preload/src/manager/%.o: preload/src/manager/%.cpp $(wildcard preload/include/manager/*.hpp) preload/include/shared/connection.h
+	$(CXX) $(CPPFLAGS) $(PRELOAD_CXXFLAGS) -std=c++17 -Ipreload/include -c -o $@ $<
+
+preload/src/shared/connection.o: preload/src/shared/connection.c preload/include/shared/connection.h
+
+preload-manager$X: $(PRELOAD_MANAGER_OBJS)
+	$(CXX) $(PRELOAD_CXXFLAGS) -o $@ $^ $(PTHREAD_LIBS) $(if $(filter MINGW%,$(uname_S)),-municode -ladvapi32,)
+
+clean-preload-manager:
+	$(RM) $(PRELOAD_MANAGER_OBJS) preload-manager$X preload/perf/ready-worker$X preload/perf/manager-protocol$X
+
+preload/perf/ready-worker$X: preload/perf/ready-worker.c
+	$(CC) $(CFLAGS) -o $@ $<
+
+preload/perf/manager-protocol$X: preload/perf/manager-protocol.cpp preload/src/shared/connection.o
+	$(CXX) $(PRELOAD_CXXFLAGS) -std=c++17 -Ipreload/include -o $@ $^ $(PTHREAD_LIBS) $(if $(filter MINGW%,$(uname_S)),-ladvapi32,)
+
+clean: clean-preload-manager
+.PHONY: clean-preload-manager
 LIB_OBJS += pretty.o
 LIB_OBJS += prio-queue.o
 LIB_OBJS += progress.o

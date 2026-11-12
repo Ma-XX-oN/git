@@ -55,7 +55,7 @@ def powershell(git, output, mode, count, discard=False):
     """
     command = [shutil.which("pwsh"), "-NoProfile", "-File",
                str(ROOT / "preload/tests/test_powershell.ps1"),
-               "-Git", str(git), "-Python", sys.executable,
+               "-Git", str(git), "-Manager", os.environ.get("PRELOAD_MANAGER", "preload-manager"),
                "-Output", str(output), "-Mode", mode, "-Count", str(count)]
     if discard:
         command += ["-DiscardOutput"]
@@ -150,7 +150,7 @@ def main():
         "binary_sha256": hashlib.sha256(git.read_bytes()).hexdigest(),
         "source_sha256": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
                           for name in ("preload/client/manager.ps1", "preload/src/client/pipe.cs", "preload/client/manager.sh",
-                                       "preload/manager/manager_windows.py", "preload/manager/pool.py",
+                                       "preload/src/manager/server.cpp", "preload/src/manager/manager.cpp",
                                        "preload/tests/test_powershell.ps1", "preload/perf/compare_powershell.py")},
         "workload": "--version; serial paced calls; one direct call between samples; 20 warmups per run",
         "powershell_output": args.powershell_output,

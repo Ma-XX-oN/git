@@ -3,7 +3,7 @@
 #include "common-init.h"
 #include "worker/context.h"
 #include "worker/worker.h"
-#include "worker/transport.h"
+#include "shared/transport.h"
 #include "trace.h"
 #include "utf8.h"
 

@@ -1,9 +1,9 @@
 #requires -Version 7.0
 <#
 .SYNOPSIS
-Windows PowerShell frontend for the shared Python preload manager.
+Windows PowerShell frontend for the native preload manager.
 .DESCRIPTION
-Dot-source this file, Start-Preload with executable and Python paths, then call
+Dot-source this file, Start-Preload with executable and manager paths, then call
 Invoke-Preload with a string array. Returns captured UTF-8 Stdout, Stderr and
 ExitCode; this API does not install command overrides or accept stdin.
 By default output is drained concurrently but buffered until completion; use
@@ -95,14 +95,14 @@ function Start-Preload {
   Start one owned manager and register one worker executable; returns no output.
   .PARAMETER Executable
   Native path to an executable supporting --preload-worker.
-  .PARAMETER Python
-  Native Python executable path, used only to start the shared manager.
+  .PARAMETER Manager
+  Native manager executable path or command name; defaults to preload-manager on PATH.
   .PARAMETER Directory
   New private session directory; retained with manager logs after shutdown.
   #>
   param(
     [Parameter(Mandatory)] [string] $Executable,
-    [Parameter(Mandatory)] [string] $Python,
+    [string] $Manager = 'preload-manager',
     [Parameter(Mandatory)] [string] $Directory
   )
   if (-not $IsWindows) { throw 'The PowerShell preload client requires Windows' }
@@ -113,13 +113,12 @@ function Start-Preload {
   $directoryInfo = New-Item -ItemType Directory -Path $Directory -ErrorAction Stop
   $pipeName = 'preload-ps-' + [guid]::NewGuid().ToString('N')
   $info = [System.Diagnostics.ProcessStartInfo]::new()
-  $info.FileName = (Resolve-Path -LiteralPath $Python).ProviderPath
+  $info.FileName = (Get-Command $Manager -CommandType Application -ErrorAction Stop).Source
   $info.UseShellExecute = $false
   $info.CreateNoWindow = $true
   $info.RedirectStandardOutput = $true
   $info.RedirectStandardError = $true
-  foreach ($word in @((Join-Path $PSScriptRoot '../manager/manager_windows.py'),
-      '--owner-pid', "$PID", '--directory', $directoryInfo.FullName,
+  foreach ($word in @('--owner-pid', "$PID", '--directory', $directoryInfo.FullName,
       '--pipe-dir', ('\\.\pipe\' + $pipeName))) {
     $info.ArgumentList.Add($word)
   }

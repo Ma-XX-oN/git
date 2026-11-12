@@ -94,23 +94,22 @@ class Session:
       Empty private session directory.
   """
 
-  def __init__(self, directory):
+  def __init__(self, directory, manager_command=None, startup_poll=.02, environment=None):
     self.directory = directory
     self.pipe_dir = rf"\\.\pipe\preload-test-{uuid.uuid4().hex}"
-    script = ROOT / "preload/manager" / (
-      "manager_windows.py" if WINDOWS else "manager_unix.py")
-    command = [sys.executable, str(script), "--owner-pid", str(os.getpid()),
-               "--directory", str(directory)]
+    command = list(manager_command or [os.environ.get(
+      "PRELOAD_MANAGER", str(ROOT / ("preload-manager.exe" if WINDOWS else "preload-manager")))])
+    command += ["--owner-pid", str(os.getpid()), "--directory", str(directory)]
     if WINDOWS:
       command += ["--pipe-dir", self.pipe_dir]
     self.log = open(directory / "manager.log", "wb")
     self.process = subprocess.Popen(command, stdout=self.log, stderr=subprocess.STDOUT,
-                                    stdin=subprocess.DEVNULL)
+                                    stdin=subprocess.DEVNULL, env=environment)
     deadline = time.monotonic() + 15
     while not (directory / "ready.json").exists():
       assert self.process.poll() is None, self.read_log()
       assert time.monotonic() < deadline, "manager did not become ready"
-      time.sleep(.02)
+      time.sleep(startup_poll)
     self.sequence = 0
 
   def read_log(self):

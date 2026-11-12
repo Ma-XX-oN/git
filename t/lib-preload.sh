@@ -10,7 +10,7 @@ test -n "${BASH_VERSION:-}" || error 'preload regression adapter requires Bash'
 # No arguments. Return zero after READY; a startup failure aborts the test script.
 _git_test_preload_start() {
   local client
-  export PRELOAD_PYTHON=$GIT_TEST_PRELOAD_PYTHON
+  export PRELOAD_MANAGER=${GIT_TEST_PRELOAD_MANAGER:-${PRELOAD_MANAGER:-preload-manager}}
   source "$TEST_DIRECTORY/../preload/client/manager.sh" ||
     error 'preload regression manager failed to start'
   preload "$GIT_TEST_PRELOAD_GIT" ||

@@ -28,8 +28,6 @@ def generate(output):
       Variant name to generated runner path. Production sources are unchanged.
   """
   source = (ROOT / "preload/client/manager.ps1").read_text(encoding="utf-8")
-  source = replace_once(source, "Join-Path $PSScriptRoot '../manager/manager_windows.py'",
-              "'" + str(ROOT / "preload/manager/manager_windows.py").replace("'", "''") + "'")
   source = replace_once(source, "Join-Path $PSScriptRoot '../src/client/pipe.cs'",
               "'" + str(ROOT / "preload/src/client/pipe.cs").replace("'", "''") + "'")
   # Anchors match the client's 2-space indentation.
@@ -89,7 +87,7 @@ def run(runner, git, output, count, mode):
       Correctness results or raw millisecond samples.
   """
   result = subprocess.run([shutil.which("pwsh"), "-NoProfile", "-File", str(runner),
-               "-Git", str(git), "-Python", sys.executable, "-Output", str(output),
+               "-Git", str(git), "-Manager", os.environ.get("PRELOAD_MANAGER", "preload-manager"), "-Output", str(output),
                "-Mode", mode, "-Count", str(count), "-DiscardOutput"],
               capture_output=True, text=True, timeout=180)
   output.mkdir(parents=True, exist_ok=True)
