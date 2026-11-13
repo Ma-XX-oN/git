@@ -47,7 +47,8 @@ must be on `PATH`. It uses the same native manager and worker protocol as Bash:
 Start-Preload -Executable C:/path/to/git.exe -Manager C:/path/to/preload-manager.exe `
     -Directory "$env:TEMP/preload-$([guid]::NewGuid())"
 try {
-    $result = Invoke-Preload -Arguments @('status', '--short')
+    git status --short                       # the generated function streams
+    $result = Invoke-Preload -Capture -Arguments @('status', '--short')
     $result.Stdout
     $result.Stderr
     $result.ExitCode
@@ -57,28 +58,40 @@ try {
 }
 ----
 
-`Start-Preload` registers one executable for the session. `Invoke-Preload` accepts
-zero to 65535 parameters excluding the executable name; empty and Unicode strings
-are preserved. Embedded NULs are rejected. Each invocation supplies the current
-filesystem directory, captures stdout and stderr concurrently as UTF-8 strings,
-and returns an object with `Stdout`, `Stderr` and `ExitCode`. It also sets
-`$LASTEXITCODE`. Captured output is buffered until the command completes. With
-`-DiscardOutput`, both streams drain directly to a null sink without buffering or
-decoding, and the function returns only the integer exit status.
-`-InputBytes` sends exact bytes (NULs included) to the command's stdin and
-`-InputPath` streams a file; input is written while output drains, then stdin
-is closed. Without either, stdin is closed at once and the command reads EOF.
-`Start-Preload -Python` runs the Python manager instead of `preload-manager`,
-with `$env:PRELOAD_PYTHON` or `python` on `PATH`.
+`Start-Preload` registers one executable for the session and defines a
+function named after it (`git.exe` becomes `git`); `Stop-Preload` removes the
+function. The function calls `Invoke-Preload` with its arguments and any
+pipeline input. `Invoke-Preload` accepts zero to 65535 parameters excluding the
+executable name; empty and Unicode strings are preserved and embedded NULs are
+rejected. Each invocation supplies the current filesystem directory. By
+default it behaves like the native command: stdout lines go to the pipeline and
+stderr lines to the error stream as they arrive, decoded with
+`[Console]::OutputEncoding`; `$LASTEXITCODE` is set, and stderr never stops a
+script even with `$ErrorActionPreference = 'Stop'`. There are no deadlines on a
+running command, so long-running commands work. `-Capture` instead returns an
+object with the full UTF-8 `Stdout` and `Stderr` and the `ExitCode`.
+`-DiscardOutput` drains both streams to a null sink without buffering or
+decoding and returns only the integer exit status.
 
-The frontend installs no command overrides: calling the executable directly still
-runs an ordinary process. It does not claim native PowerShell pipeline,
-binary-output or redirection equivalence. Workers inherit
+Stdin is closed at once (the command reads EOF) unless input is supplied:
+`-InputBytes` sends exact bytes (NULs included), `-InputPath` streams a file,
+and `-InputLines` (what the function passes for pipeline input) sends lines
+encoded with `$OutputEncoding`, as for native commands. Input is written while
+output drains, then stdin is closed. `Start-Preload -Python` runs the Python
+manager instead of `preload-manager`, with `$env:PRELOAD_PYTHON` or `python`
+on `PATH`.
+
+`git.exe` (the name with its extension) still runs the executable directly;
+`& git` does not, because functions take precedence. Worker output is a pipe,
+not a console, so Git disables color, the pager, progress and prompts as it
+does for any non-terminal; Git aliases with `--color=always` can opt back into
+color. The preloader itself knows nothing about the program it preloads.
+Byte-exact native piping and redirection, `$PSNativeCommandUseErrorActionPreference`
+and Ctrl+C handling are not yet equivalent to native commands. Workers inherit
 the environment at manager startup. To refresh it, stop and start a session.
 Manager log files remain in the supplied directory after shutdown.
-Connection attempts have a five-second deadline, PID/status reads ten seconds,
-and output draining fifteen seconds. Timeout failures throw terminating errors.
-Use the executable directly for commands that exceed these output-wait limits.
+Connecting to a pipe gives up after five seconds, and manager startup and the
+`PRELOAD`/`STOP` control requests after fifteen; nothing else has a deadline.
 The shared connector in `src/client/pipe.cs` is compiled once per PowerShell
 process by the bundled `Add-Type` compiler; no separate C# build is required.
 

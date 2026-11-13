@@ -152,6 +152,8 @@ jobs:
             make -C "$tree" -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git$([[ $RUNNER_OS == Windows ]] && printf .exe)
           done
           "$py" preload/perf/compare_three_way.py --upstream three-way-upstream --python-tree three-way-python --output native-results/three-way
+          # The tip's Python and C++ managers (and, on Windows, the git function).
+          "$py" preload/perf/compare_tip_managers.py --upstream three-way-upstream --output native-results/tip-managers
       - uses: actions/upload-artifact@v4
         if: always()
         with:

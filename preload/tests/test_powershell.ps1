@@ -15,6 +15,11 @@ Test performs correctness checks; Preload and Direct collect warmed latency.
 Positive number of measured calls, excluding twenty warm-up calls.
 .PARAMETER DiscardOutput
 Time the null-sink path instead of capturing and decoding command output.
+.PARAMETER ViaFunction
+In Preload mode, time the generated command function (`git --version > $null`)
+instead of Invoke-Preload.
+.PARAMETER Python
+Start the Python manager instead of -Manager.
 #>
 param(
   [string] $Git,
@@ -23,7 +28,9 @@ param(
   [ValidateSet('Test', 'Preload', 'Direct')] [string] $Mode = 'Test',
   [ValidateRange(1, 100000)] [int] $Count = 200,
   [ValidateRange(0, 100000)] [int] $Warmup = 20,
-  [switch] $DiscardOutput
+  [switch] $DiscardOutput,
+  [switch] $ViaFunction,
+  [switch] $Python
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '../client/manager.ps1')
@@ -82,7 +89,7 @@ function Invoke-DirectCapture {
 
 try {
   if ($Mode -ne 'Direct') {
-    Start-Preload -Executable $Git -Manager $Manager -Directory (Join-Path $Output 'session')
+    Start-Preload -Executable $Git -Manager $Manager -Directory (Join-Path $Output 'session') -Python:$Python
   }
   if ($Mode -eq 'Test') {
     $fixture = Join-Path $Output 'space ü repo'
@@ -105,7 +112,7 @@ try {
     try {
       foreach ($case in $cases) {
         $expected = Invoke-DirectCapture -Words $case.Words
-        $actual = Invoke-Preload -Arguments $case.Words
+        $actual = Invoke-Preload -Capture -Arguments $case.Words
         if ($actual.Stdout -cne $expected.Stdout -or
           $actual.Stderr -cne $expected.Stderr -or
           $actual.ExitCode -ne $expected.ExitCode -or
@@ -123,18 +130,18 @@ try {
         $passed += ('discard-' + $case.Name)
       }
       $overflow = $false
-      try { $null = Invoke-Preload -Arguments ([string[]]::new(65536)) }
+      try { $null = Invoke-Preload -Capture -Arguments ([string[]]::new(65536)) }
       catch { $overflow = $_.Exception.Message -like '*65535*' }
       if (-not $overflow) { throw 'Argument overflow was not rejected' }
       $passed += 'overflow-rejected'
       $many = @('rev-parse', '--sq-quote') + (@('') * 65533)
-      $actual = Invoke-Preload -Arguments $many
+      $actual = Invoke-Preload -Capture -Arguments $many
       if ($actual.ExitCode -ne 0 -or $actual.Stderr -ne '' -or
         $actual.Stdout -cne ((' ' + "''") * 65533 + "`n")) {
         throw '65535-parameter request failed'
       }
       $passed += '65535-parameters'
-      $null = Invoke-Preload -Arguments @('--version')
+      $null = Invoke-Preload -Capture -Arguments @('--version')
       $passed += 'recovery'
       # A worker killed mid-command reports the process exit code a direct
       # call would: Stop-Process terminates with 0xFFFFFFFF, shown as -1.
@@ -150,12 +157,12 @@ try {
           ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
         $null = New-Item -ItemType File -Path $releasePath
       } -ArgumentList $script:PreloadSession.Process.Id, (Split-Path -Leaf $Git), $release
-      $killed = Invoke-Preload -Arguments @('-c', "alias.hold=$hold", 'hold')
+      $killed = Invoke-Preload -Capture -Arguments @('-c', "alias.hold=$hold", 'hold')
       Receive-Job $killer -Wait -AutoRemoveJob
       if ($killed.ExitCode -ne -1 -or $global:LASTEXITCODE -ne -1) {
         throw "Killed worker status: $($killed | ConvertTo-Json -Compress)"
       }
-      $result = Invoke-Preload -Arguments @('--version')
+      $result = Invoke-Preload -Capture -Arguments @('--version')
       if ($result.ExitCode -ne 0) { throw 'Pool did not recover after killed workers' }
       $passed += 'killed-worker-status-and-recovery'
       # Forwarded stdin: each case matches a direct run fed identical bytes.
@@ -175,7 +182,7 @@ try {
       )
       foreach ($case in $stdinCases) {
         $expected = Invoke-DirectCapture -Words $case.Words -InputBytes $case.Bytes
-        $actual = Invoke-Preload -Arguments $case.Words -InputBytes $case.Bytes
+        $actual = Invoke-Preload -Capture -Arguments $case.Words -InputBytes $case.Bytes
         if ($actual.Stdout -cne $expected.Stdout -or $actual.Stderr -cne $expected.Stderr -or
           $actual.ExitCode -ne $expected.ExitCode) {
           throw ("Stdin mismatch: $($case.Name): expected " +
@@ -186,14 +193,43 @@ try {
       $inputFile = Join-Path $Output 'stdin-input.bin'
       [System.IO.File]::WriteAllBytes($inputFile, $big)
       $expected = Invoke-DirectCapture -Words @('hash-object', '--stdin') -InputBytes $big
-      $actual = Invoke-Preload -Arguments @('hash-object', '--stdin') -InputPath $inputFile
+      $actual = Invoke-Preload -Capture -Arguments @('hash-object', '--stdin') -InputPath $inputFile
       if ($actual.Stdout -cne $expected.Stdout) { throw 'Stdin from -InputPath mismatched' }
       $passed += 'stdin-input-path'
       # Without input, the command still reads end-of-file at once.
       $expected = Invoke-DirectCapture -Words @('hash-object', '--stdin') -InputBytes ([byte[]]@())
-      $actual = Invoke-Preload -Arguments @('hash-object', '--stdin')
+      $actual = Invoke-Preload -Capture -Arguments @('hash-object', '--stdin')
       if ($actual.Stdout -cne $expected.Stdout) { throw 'Call without input did not read EOF' }
       $passed += 'no-input-reads-eof'
+      # The generated function behaves like the executable run directly.
+      $function = $script:PreloadSession.Name
+      if ((Get-Command $function).CommandType -ne 'Function') { throw 'Command function was not defined' }
+      $direct = & $Git version --build-options
+      $fromFunction = & $function version --build-options
+      if (($fromFunction -join "`n") -cne ($direct -join "`n") -or $fromFunction.Count -ne $direct.Count) {
+        throw "Function pipeline output mismatch: $($fromFunction -join '|') vs $($direct -join '|')"
+      }
+      $passed += 'function-pipeline-lines'
+      $direct = 'hello', 'world' | & $Git hash-object --stdin
+      $fromFunction = 'hello', 'world' | & $function hash-object --stdin
+      if ($fromFunction -cne $direct) { throw "Function stdin mismatch: $fromFunction vs $direct" }
+      $passed += 'function-pipeline-stdin'
+      $direct = & $Git rev-parse --verify no-such-ref 2>&1 | ForEach-Object { "$_" }
+      $directCode = $LASTEXITCODE
+      $fromFunction = & $function rev-parse --verify no-such-ref 2>&1 | ForEach-Object { "$_" }
+      if ($LASTEXITCODE -ne $directCode -or ($fromFunction -join '|') -cne ($direct -join '|')) {
+        throw "Function stderr/status mismatch: $($fromFunction -join '|') ($LASTEXITCODE) vs $($direct -join '|') ($directCode)"
+      }
+      $passed += 'function-stderr-and-status'
+      $fromFunction = & $function config --file $config --get test.value
+      if ($fromFunction -cne (& $Git config --file $config --get test.value)) {
+        throw 'Function cwd/Unicode argument mismatch'
+      }
+      $passed += 'function-cwd-and-unicode'
+      # No deadlines: a command outlasting the former 15-second limit completes.
+      $slow = & $function -c 'alias.slow=!sleep 17; echo done' slow
+      if ($slow -cne 'done' -or $LASTEXITCODE -ne 0) { throw "Long-running command failed: $slow" }
+      $passed += 'function-no-deadline'
     } finally { Pop-Location }
     $rejected = $false
     try { Start-Preload -Executable $Git -Manager $Manager -Directory (Join-Path $Output 'duplicate') }
@@ -205,7 +241,7 @@ try {
     try { . $clientPath }
     catch { $rejected = $_.Exception.Message -like '*Stop-Preload before sourcing*' }
     if (-not $rejected) { throw 'Active session was lost on re-source' }
-    $null = Invoke-Preload -Arguments @('--version')
+    $null = Invoke-Preload -Capture -Arguments @('--version')
     $passed += 'active-resourcing-rejected-and-session-retained'
     Stop-Preload
     if (Test-Path -LiteralPath (Join-Path $Output 'session/ready.json')) {
@@ -213,6 +249,10 @@ try {
     }
     Stop-Preload
     $passed += 'stop-and-repeated-stop'
+    if ((Get-Command (Split-Path -LeafBase $Git) -ErrorAction SilentlyContinue).CommandType -eq 'Function') {
+      throw 'Command function survived Stop-Preload'
+    }
+    $passed += 'function-removed-on-stop'
     . $clientPath
     $rejected = $false
     try {
@@ -222,7 +262,7 @@ try {
     if (-not $rejected -or $script:PreloadSession) { throw 'Unsupported executable cleanup failed' }
     $passed += 'unsupported-executable-cleanup'
     Start-Preload -Executable $Git -Manager $Manager -Directory (Join-Path $Output 'restarted-session')
-    $result = Invoke-Preload -Arguments @('--version')
+    $result = Invoke-Preload -Capture -Arguments @('--version')
     if ($result.ExitCode -ne 0) { throw 'Session restart failed' }
     $passed += 'restart-after-stop-and-failed-start'
     $report = @{ Mode = $Mode; Passed = $passed; PowerShell = $PSVersionTable.PSVersion.ToString() }
@@ -232,8 +272,12 @@ try {
       # Give the same one-command refill interval to both clients.
       & $Git --version > $null
       $watch = [System.Diagnostics.Stopwatch]::StartNew()
-      if ($Mode -eq 'Preload') {
-        $result = Invoke-Preload -Arguments @('--version') -DiscardOutput:$DiscardOutput
+      if ($Mode -eq 'Preload' -and $ViaFunction) {
+        # Call the generated function by name, as a user would type `git`.
+        & $script:PreloadSession.Name --version > $null
+        if ($LASTEXITCODE -ne 0) { throw 'Preloaded function benchmark command failed' }
+      } elseif ($Mode -eq 'Preload') {
+        $result = Invoke-Preload -Arguments @('--version') -DiscardOutput:$DiscardOutput -Capture:(-not $DiscardOutput)
         $code = if ($DiscardOutput) { $result } else { $result.ExitCode }
         if ($code -ne 0) { throw 'Preloaded benchmark command failed' }
       } else {
@@ -244,6 +288,7 @@ try {
       if ($i -ge 0) { $samples.Add($watch.Elapsed.TotalMilliseconds) }
     }
     $report = @{ Mode = $Mode; DiscardOutput = [bool]$DiscardOutput
+      ViaFunction = [bool]$ViaFunction; PythonManager = [bool]$Python
       SamplesMs = $samples.ToArray(); PowerShell = $PSVersionTable.PSVersion.ToString() }
   }
   $report | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $Output 'report.json') -Encoding utf8

@@ -130,7 +130,10 @@ def draw_bars(axis, labels, series, title, unit, reference=None, styles=None):
   labels : list of str
       Machine labels, top to bottom.
   series : list of tuple
-      (style key, list of (median, low, high)) per bar group member.
+      (style key, list of (median, low, high)) per bar group member. A None
+      entry is unmeasured: it keeps its slot and shows a note. A False entry
+      does not apply to that group: it takes no slot, so each group's bars
+      stay contiguous and centered.
   title, unit : str
       Panel title and x-axis label.
   reference : float, optional
@@ -139,15 +142,20 @@ def draw_bars(axis, labels, series, title, unit, reference=None, styles=None):
       (legend name, color, hatch) per style key; defaults to SERIES.
   """
   styles = styles or SERIES
-  height = .8 / len(series)
+  slots = [[index for index, (_, rows) in enumerate(series) if rows[p] is not False]
+       for p in range(len(labels))]
+  height = .8 / max(len(row) for row in slots)
   top = max([row[2] for _, rows in series for row in rows if row] + [reference or 0])
+
+  def center(p, index):
+    """Return the bar center of series index within group p."""
+    return p + (slots[p].index(index) - (len(slots[p]) - 1) / 2) * height
+
   for index, (key, rows) in enumerate(series):
     name, color, hatch = styles[key]
-    offset = (index - (len(series) - 1) / 2) * height
-    # A None row is an unmeasured value: no bar, and a note in its place.
-    placed = [(p + offset, row) for p, row in enumerate(rows) if row]
-    for position in (p + offset for p, row in enumerate(rows) if not row):
-      axis.text(top * .02, position, "not measured", va="center", fontsize=8,
+    placed = [(center(p, index), row) for p, row in enumerate(rows) if row]
+    for p in (p for p, row in enumerate(rows) if row is None):
+      axis.text(top * .02, center(p, index), "not measured", va="center", fontsize=8,
             color="#52514e", style="italic")
     positions = [p for p, _ in placed]
     medians = [m for _, (m, _, _) in placed]

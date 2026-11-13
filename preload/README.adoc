@@ -62,27 +62,23 @@ be available on `PATH`. Use a new private directory for each session:
 Start-Preload -Executable C:/path/to/git.exe -Manager C:/path/to/preload-manager.exe `
     -Directory "$env:TEMP/preload-$([guid]::NewGuid())"
 try {
-    $result = Invoke-Preload -Arguments @('status', '--short')
-    $result.Stdout
-    $result.Stderr
-    $result.ExitCode
+    git status --short          # function defined by Start-Preload
 } finally {
     Stop-Preload
 }
 ----
 
-The result contains captured UTF-8 stdout, stderr and exit status; invocation
-also sets `$LASTEXITCODE`. Both output channels drain concurrently and are
-buffered until completion. Pass `-InputBytes` or `-InputPath` to send the
-command stdin; otherwise it reads EOF. `Start-Preload -Python` uses the Python
-manager instead of `preload-manager`. This API installs no command overrides. PowerShell pipeline and redirection equivalence with native
-commands is outside its tested contract. Workers inherit the startup environment.
-Pass `-DiscardOutput` to drain directly to a null sink without buffering or
-decoding output; that mode returns only the integer exit status.
+`Start-Preload` defines a function named after the executable (`git`) that
+runs through the worker like the native command: output streams to the
+pipeline and error stream with no deadlines, pipeline input goes to stdin and
+`$LASTEXITCODE` is set; `git.exe` still runs the executable directly. The
+function calls `Invoke-Preload`, which also offers `-Capture` (returns `Stdout`,
+`Stderr` and `ExitCode`), `-DiscardOutput` (returns only the exit status) and
+`-InputBytes`/`-InputPath` for stdin. `Start-Preload -Python` uses the Python
+manager instead of `preload-manager`. Workers inherit the startup environment.
 The client compiles `src/client/pipe.cs` once per PowerShell process with the
-bundled `Add-Type` compiler. All pipe opens share that typed connector.
-See link:docs/protocol.adoc[the API contract] for connection/read deadlines and
-the fifteen-second output-drain deadline; longer-running commands use the executable.
+bundled `Add-Type` compiler. See link:docs/protocol.adoc[the API contract] for
+details and current limits.
 
 Run `tests/test_powershell.ps1` for correctness (it also needs `sh` on `PATH`,
 e.g. `C:\msys64\usr\bin`, for its shell-alias cases), or

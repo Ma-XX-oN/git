@@ -32,7 +32,7 @@ try {
       $process.Refresh()
       $handlesBefore = $process.HandleCount
     }
-    $result = Invoke-Preload -Arguments @('--version')
+    $result = Invoke-Preload -Capture -Arguments @('--version')
     if ($result.ExitCode -ne 0 -or $result.Stderr -ne '' -or
       $result.Stdout -cne ($expected + "`n")) {
       throw "Incorrect output/status at call $i"
