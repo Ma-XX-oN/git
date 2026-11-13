@@ -94,7 +94,7 @@ static int hook_fclose(FILE *file);
 
 /*
  * The ABI is the public Dobby C API at pinned revision
- * 5dfc8546954ce3b3198132ab13fddb89ee92cdd7.
+ * 9d271803881f467aabfc24593c7dcaeb710fe861.
  */
 typedef int (*dobby_hook_fn)(void *target, void *replacement,
 			     void **trampoline);
