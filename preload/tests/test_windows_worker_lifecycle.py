@@ -121,7 +121,9 @@ def run_case(git, name, arguments, expected_status, expected_output,
       handles["duplicate-control"] = duplicate
       write(duplicate, b"1")
       write(handles[ORDER[-2]], b"1")
-    elif "params-cwd" in handles:
+    elif "params-cwd" in handles and stdin_marker == b"1":
+      # A rejected stdin marker ends the worker during connection, before it
+      # reads the request, so writing the request could find no reader.
       frame = struct.pack("<I", len(arguments)) + b"git\0"
       frame += b"".join((arg.encode() if isinstance(arg, str) else arg) + b"\0"
                 for arg in arguments) + context + b"end\0"
@@ -269,6 +271,10 @@ if __name__ == "__main__":
        0, b"preload-worker-inherited-editor\n")
   for bad in (b"\xff", b"\xc0\x80", b"\xed\xa0\x80"):
     run_case(git, "invalid-utf8-argv-" + bad.hex(), [bad], 128, b"")
+  from test_posix_worker import environment_cases
+  inherited = dict(os.environ, GIT_EDITOR="preload-worker-inherited-editor")
+  for name, arguments, context, status, output in environment_cases(git, inherited):
+    run_case(git, name, arguments, status, output, context=context)
   for iteration in range(10):
     run_case(git, f"duplicate-status-markers-{iteration}", [], 122, b"",
          duplicate_control=True)

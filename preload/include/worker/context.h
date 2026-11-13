@@ -4,14 +4,25 @@
 #include <stddef.h>
 
 /**
- * @brief Validate and apply the optional working-directory field.
+ * @brief Identify a context field tag.
  *
- * The caller retains ownership of the length-bounded UTF-8 frame. Return zero
- * on success or -1 for malformed fields or a chdir failure.
+ * @param tag Borrowed NUL-terminated tag.
+ * @return Non-negative field index for `cwd`, `env-del` or `env-add`;
+ *   -1 for any other tag.
+ */
+int preload_context_field(const char *tag);
+
+/**
+ * @brief Validate and apply the optional cwd, env-del and env-add fields.
  *
- * @param buf Borrowed cwd field, excluding argv and the request end tag.
- * @param len Number of readable bytes; zero retains the inherited working directory.
- * @return Zero on success, -1 on invalid fields or chdir failure.
+ * The caller retains ownership of the length-bounded UTF-8 frame. Each field
+ * appears at most once, in any order. Every field is validated before any is
+ * applied; then the working directory changes, the env-del names are deleted
+ * and the env-add assignments are set.
+ *
+ * @param buf Borrowed context fields, excluding argv and the request end tag.
+ * @param len Number of readable bytes; zero retains the inherited context.
+ * @return Zero on success, -1 on invalid fields or a failed change.
  */
 int preload_context_apply(const char *buf, size_t len);
 

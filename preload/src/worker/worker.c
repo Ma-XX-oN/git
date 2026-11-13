@@ -44,7 +44,7 @@ static uint32_t request_u32(const char *bytes)
 }
 
 /**
- * Skip the NUL-terminated working-directory value.
+ * Skip the NUL-terminated value of a cwd, env-del or env-add field.
  * @param frame Borrowed request bytes, bounded by used.
  * @param used Number of available bytes.
  * @param tag Borrowed, already terminated context field name.
@@ -56,7 +56,7 @@ static int skip_context_value(const char *frame, size_t used,
 {
 	const char *end;
 
-	if (strcmp(tag, "cwd"))
+	if (preload_context_field(tag) < 0)
 		return -1;
 	end = memchr(frame + *pos, '\0', used - *pos);
 	if (!end)

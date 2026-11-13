@@ -15,6 +15,69 @@ def frame(arguments, context=b""):
     argument.encode("utf-8") + b"\0" for argument in arguments) + context + b"end\0"
 
 
+def environment_cases(git, inherited):
+  """Return env-del/env-add cases shared by the POSIX and Windows worker tests.
+
+  Parameters
+  ----------
+  git : str
+      Worker executable, also run directly to compute expected results.
+  inherited : dict
+      Environment the worker is spawned with; it sets GIT_EDITOR.
+
+  Returns
+  -------
+  list of tuple
+      (name, arguments, context fields, exit status, stdout). Deletion and
+      empty-value results are what git prints when run directly with the
+      environment the worker should end up with.
+  """
+  def direct(changes, removed=()):
+    environment = {k: v for k, v in inherited.items() if k not in removed}
+    environment.update(changes)
+    result = subprocess.run([git, "var", "GIT_EDITOR"], env=environment,
+                capture_output=True)
+    return result.returncode, result.stdout
+
+  ident = {"GIT_AUTHOR_NAME": "Zoë=x", "GIT_AUTHOR_EMAIL": "z@example.com",
+       "GIT_AUTHOR_DATE": "1700000000 +0000"}
+  add_ident = "".join(f"{k}={v}\n" for k, v in ident.items()).encode("utf-8")
+  editor = ["var", "GIT_EDITOR"]
+  cases = [
+    ("env-add-replaces", editor, b"env-add\0GIT_EDITOR=added-editor\n\0",
+     0, b"added-editor\n"),
+    ("env-add-unicode-and-equals", ["var", "GIT_AUTHOR_IDENT"],
+     b"env-add\0" + add_ident + b"\0", 0,
+     "Zoë=x <z@example.com> 1700000000 +0000\n".encode("utf-8")),
+    # Deletions apply before additions whatever the wire order.
+    ("env-del-then-add", editor,
+     b"env-add\0GIT_EDITOR=again\n\0env-del\0GIT_EDITOR\n\0", 0, b"again\n"),
+    ("env-fields-empty", ["--version"], b"env-del\0\0env-add\0\0",
+     0, subprocess.check_output([git, "--version"])),
+  ]
+  cases.append(("env-del-removes", editor, b"env-del\0GIT_EDITOR\n\0")
+         + direct({}, ("GIT_EDITOR",)))
+  # Commands git starts (here a shell alias running git) see the changes.
+  child = ["-c", "alias.child-editor=!git var GIT_EDITOR", "child-editor"]
+  cases.append(("env-add-reaches-children", child,
+         b"env-add\0GIT_EDITOR=added-editor\n\0", 0, b"added-editor\n"))
+  cases.append(("env-del-reaches-children", child, b"env-del\0GIT_EDITOR\n\0")
+         + direct({}, ("GIT_EDITOR",)))
+  cases.append(("env-add-empty-value", editor, b"env-add\0GIT_EDITOR=\n\0")
+         + direct({"GIT_EDITOR": ""}))
+  # Malformed fields are rejected before any change, like invalid argv.
+  for name, context in (
+      ("env-add-missing-newline", b"env-add\0GIT_EDITOR=x\0"),
+      ("env-add-empty-name", b"env-add\0=x\n\0"),
+      ("env-add-without-equals", b"env-add\0GIT_EDITOR\n\0"),
+      ("env-del-with-equals", b"env-del\0GIT_EDITOR=x\n\0"),
+      ("env-del-empty-entry", b"env-del\0\n\0"),
+      ("env-add-invalid-utf8", b"env-add\0GIT_EDITOR=\xff\n\0"),
+      ("env-add-duplicate-field", b"env-add\0A=1\n\0env-add\0B=2\n\0")):
+    cases.append((name, editor, context, 128, b""))
+  return cases
+
+
 def request_timeout(signum, frame):
   """Interrupt a stalled FIFO operation so fixture cleanup can kill its worker.
 
@@ -114,6 +177,10 @@ def main():
   for bad in (b"\xff", b"\xc0\x80", b"\xed\xa0\x80"):
     run_case(git, "invalid-utf8-argv-" + bad.hex(),
          struct.pack("<I", 1) + b"git\0" + bad + b"\0end\0", 128, b"")
+  inherited = dict(os.environ, PRELOAD_PID=str(os.getpid()),
+           GIT_EDITOR="preload-worker-inherited-editor")
+  for name, arguments, context, status, output in environment_cases(git, inherited):
+    run_case(git, name, frame(arguments, context), status, output)
   # The caller's stdin FIFO is the command's stdin.
   for name, data in (("stdin-text", b"hello\n"), ("stdin-empty", b""),
              ("stdin-binary-nul", bytes(range(256)) * 4),

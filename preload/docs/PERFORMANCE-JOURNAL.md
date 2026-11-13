@@ -623,6 +623,17 @@ subshell 30.0375 versus 29.737 ms (99.00%). PowerShell
 round medians overlap (3.41-3.61 versus 3.48-3.63 ms), so no regression is
 established. Evidence: [stdin-ack-20261113](performance/evidence/stdin-ack-20261113/).
 
+Per-call `env-del`/`env-add` fields, on top of `10219ce7e8` on the same
+laptop with the C++ manager. A temporary trace timed `preload_context_apply()`
+in the worker for `git var GIT_EDITOR`: `cwd` alone took 227.6 us median;
+replacing one existing variable added under 1 us, deleting one 15 us, adding
+4 new variables 127 us and 16 new variables 361 us. An end-to-end ABBA run of
+1000 calls per arm could not resolve the difference (+60 us, 95% interval
+-218 to +368 us). Calls without environment fields gain only the tag lookup;
+they were not compared against the previous binary. Linux and macOS were not
+measured. Evidence:
+[env-delta-20261113](performance/evidence/env-delta-20261113/).
+
 For each entry, retain the code commit or prototype patch, baseline identity,
 machine/run ID, compiler/runtime flags, worker count, workload, instrumentation,
 round order, raw paired samples, correctness checks and rejected alternatives.

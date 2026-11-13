@@ -182,7 +182,8 @@ selects each worker executable; the manager performs no Git initialization.
 completion. `src/worker/worker-win32.c` and `src/worker/worker-posix.c` own native
 endpoint setup, standard-handle adaptation and owner monitoring.
 `src/worker/context.c` validates and applies the command's optional working
-directory. Workers inherit their environment when the manager spawns them.
+directory and environment changes. Workers inherit their environment when the
+manager spawns them.
 
 `include/shared/transport.h` exposes an opaque C transport. Start prepares endpoints
 before READY, wait completes connection selection, and release cancels and
@@ -243,11 +244,33 @@ using a builtin. Remove exactly that last newline when decoding the path.
 Argument count
 and frame size are bounded by the worker.
 
+Two more optional fields change the environment of one call. `env-del` holds
+variable names and `env-add` holds `NAME=value` assignments, each entry ending
+with a newline, for example `env-add` NUL `GIT_INDEX_FILE=x` LF `A=` LF NUL.
+There is no escaping: names and values cannot contain a newline or NUL, a name
+cannot be empty or contain `=`, and an assignment splits at its first `=`, so
+values may contain `=`. An empty value sets the variable to the empty string,
+unlike deletion. Fields may appear in any order, each at most once; an empty
+field is allowed. The worker validates every field first, then changes the
+working directory, deletes the `env-del` names and sets the `env-add`
+assignments, so a name in both ends up set. Invalid fields end the worker with
+status 128. Changes use Git's own `setenv`/`unsetenv`, so Git and the commands
+it starts see them. Only the listed variables are sent, so the cost grows with
+the changes, not with the environment: on the Windows laptop, replacing an
+existing variable cost under 1 us and each new name about 22-32 us (see
+`PERFORMANCE-JOURNAL.md`). The managers relay these fields unchanged; the Bash
+and PowerShell clients do not send them.
+
 All callers supply environment values when launching the manager. Replacement
-workers inherit that same startup environment; updating it requires restarting
-the manager. On Windows, launching the native manager from the owning Bash
+workers inherit that same startup environment; changing it for every call
+requires restarting the manager, and `env-del`/`env-add` change it for one
+call. On Windows, launching the native manager from the owning Bash
 runtime supplies the runtime's converted native environment directly.
-The optional working directory is applied before ordinary Git initialization.
+The optional working directory and environment changes are applied before
+ordinary Git initialization. On Windows, Git's startup code (before `main`)
+derives a few variables such as `HOME`, `TMPDIR` and `LC_CTYPE` from the
+manager's environment when they are unset; a per-call change does not redo
+that derivation.
 
 Completion flushes and closes stdout and stderr before writing `EXIT n` plus
 newline on the status channel. Windows flushes the status pipe before closing
