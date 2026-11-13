@@ -60,27 +60,33 @@ struct Process::Impl {
 Process::Process(const std::string &executable, const std::string &directory) : impl(new Impl)
 {
 	SECURITY_ATTRIBUTES security{sizeof(security), NULL, TRUE};
-	Handle writer, input;
+	Handle writer, input, errors;
 	if (!CreatePipe(&impl->output.value, &writer.value, &security, 0) ||
 	    !SetHandleInformation(impl->output.value, HANDLE_FLAG_INHERIT, 0))
 		throw std::runtime_error("CreatePipe(READY) failed");
 	input.value = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
 		&security, OPEN_EXISTING, 0, NULL);
 	if (input.value == INVALID_HANDLE_VALUE) throw std::runtime_error("open NUL failed");
+	/* CRT descriptors own their handles independently. Reusing input's handle
+	 * for stderr lets later dup2/close operations invalidate another stream.
+	 */
+	if (!DuplicateHandle(GetCurrentProcess(), input.value, GetCurrentProcess(),
+		&errors.value, 0, TRUE, DUPLICATE_SAME_ACCESS))
+		throw std::runtime_error("duplicate stderr NUL handle failed");
 	STARTUPINFOEXW startup{};
 	startup.StartupInfo.cb = sizeof(startup);
 	startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
 	startup.StartupInfo.wShowWindow = SW_HIDE;
 	startup.StartupInfo.hStdInput = input.value;
 	startup.StartupInfo.hStdOutput = writer.value;
-	startup.StartupInfo.hStdError = input.value;
+	startup.StartupInfo.hStdError = errors.value;
 	SIZE_T size = 0;
 	InitializeProcThreadAttributeList(NULL, 1, 0, &size);
 	std::vector<unsigned char> storage(size);
 	startup.lpAttributeList = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(storage.data());
 	if (!InitializeProcThreadAttributeList(startup.lpAttributeList, 1, 0, &size))
 		throw std::runtime_error("initialize handle whitelist failed");
-	HANDLE inherited[] = {input.value, writer.value};
+	HANDLE inherited[] = {input.value, writer.value, errors.value};
 	bool configured = UpdateProcThreadAttribute(startup.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
 		inherited, sizeof(inherited), NULL, NULL);
 	auto path = wide(executable);

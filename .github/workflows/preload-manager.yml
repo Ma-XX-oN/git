@@ -56,6 +56,8 @@ jobs:
             gitbin="$(cygpath -w "$PWD/git.exe")"
             export PRELOAD_MANAGER="$(cygpath -w "$PWD/preload-manager.exe")"
             "$py" preload/tests/test_windows_worker_lifecycle.py "$gitbin"
+            # Stdin through manager-launched workers, under both managers.
+            "$py" preload/tests/test_manager_stdin.py --git "$gitbin" --output native-results/manager-stdin
             "$py" preload/tests/test_transport.py "$(cygpath -w "$PWD/t/helper/test-tool.exe")"
             "$pwsh" -NoProfile -File preload/tests/test_powershell.ps1 -Git "$gitbin" -Manager "$PRELOAD_MANAGER" -Output "$(cygpath -w "$PWD/native-results/powershell")"
           else
