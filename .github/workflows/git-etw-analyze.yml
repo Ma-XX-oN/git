@@ -35,6 +35,7 @@ jobs:
           import collections
           import csv
           import json
+          import statistics
           from pathlib import Path
 
           root = Path("etw-input")
@@ -45,6 +46,10 @@ jobs:
           direct = collections.Counter()
           examples = []
           total = 0
+          inflight = {}
+          durations = collections.defaultdict(list)
+          file_costs = collections.defaultdict(list)
+          failure_status = collections.Counter()
           with Path("etw-analysis/events.csv").open(encoding="utf-8-sig", errors="replace", newline="") as f:
             reader = csv.reader(f)
             header = [x.strip() for x in next(reader)]
@@ -68,8 +73,38 @@ jobs:
                 pid = None
               if pid in pids:
                 direct[key] += 1
+                if category == "FileIo" and len(row) > 22:
+                  ticks = int(row[idx["Clock-Time"]].strip())
+                  irp = row[19].strip()
+                  if typ == "OperationEnd":
+                    preceding = inflight.pop((pid, irp), None)
+                    if preceding:
+                      operation, begin_ticks, filename = preceding
+                      delta_ticks = ticks - begin_ticks
+                      if 0 <= delta_ticks <= 100000000:
+                        elapsed_ms = delta_ticks / 10000
+                        durations[operation].append(elapsed_ms)
+                        if operation == "Create":
+                          leaf = filename.replace(chr(92), "/").rsplit("/", 1)[-1].lower()
+                          file_costs[leaf].append(elapsed_ms)
+                          status = row[22].strip()
+                          if status != "0":
+                            failure_status[(leaf, status)] += 1
+                  elif typ in ("Create", "Read", "Write", "QueryInfo", "Close", "Cleanup", "DirEnum", "FSControl"):
+                    filename = row[25].strip().strip('"') if typ == "Create" and len(row) > 25 else ""
+                    inflight[(pid, irp)] = (typ, ticks, filename)
                 if len(examples) < 15 and category in ("FileIo", "DiskIo"):
                   examples.append({"key": key, "pid": pid, "fields": row[:30]})
+          def aggregate(values):
+            ordered = sorted(values)
+            return {
+              "count": len(ordered),
+              "total_ms_inclusive": round(sum(ordered), 4),
+              "median_ms": round(statistics.median(ordered), 5),
+              "p95_ms": round(ordered[(95 * (len(ordered) - 1)) // 100], 5),
+              "max_ms": round(ordered[-1], 5),
+            }
+          assert sum(len(v) for v in durations.values()) > 1000, "Too few matched start/end file operations"
           report = {
             "source_git_sha256": manifest["git_sha256"],
             "source_revision": manifest["revision"],
@@ -78,13 +113,27 @@ jobs:
             "all_event_counts": dict(counts.most_common()),
             "direct_git_pid_events": dict(direct.most_common()),
             "direct_git_event_examples": examples,
-            "warning": "PID-only counts exclude kernel-context events. ETW file object/IRP and TID correlation is required for per-operation durations."
+            "matched_file_operation_durations": {
+              key: aggregate(values) for key, values in sorted(durations.items())
+            },
+            "most_expensive_created_filenames": [
+              {"name": name, **aggregate(values)}
+              for name, values in sorted(file_costs.items(), key=lambda item: sum(item[1]), reverse=True)[:35]
+            ],
+            "failed_create_status_by_filename": [
+              {"name": name, "ntstatus": status, "count": count}
+              for (name, status), count in failure_status.most_common(30)
+            ],
+            "warning": "Matched start/end events correlate by (PID, IRP pointer); times include ETW overhead and may overlap. Kernel-context PID=0 events and physical DiskIo requests are not attributed."
           }
           Path("etw-analysis/summary.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
           print("ETW_TOTAL", total)
           print("ETW_EXACT_GIT_PID", sum(direct.values()))
           print("ETW_GIT_IO", json.dumps({key: value for key, value in direct.items() if key.startswith(("FileIo/", "DiskIo/"))}))
           print("ETW_EXAMPLES", json.dumps(examples[:6])[:6000])
+          print("ETW_OPERATION_LATENCY", json.dumps(report["matched_file_operation_durations"]))
+          print("ETW_EXPENSIVE_FILES", json.dumps(report["most_expensive_created_filenames"][:20]))
+          print("ETW_FAILED_CREATES", json.dumps(report["failed_create_status_by_filename"][:15]))
           PY
           rm etw-analysis/events.csv
       - uses: actions/upload-artifact@v4
