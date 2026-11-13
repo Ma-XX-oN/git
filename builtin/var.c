@@ -280,7 +280,7 @@ static void list_vars(int nul_term)
 
 	for (ptr = git_vars; ptr->read || ptr->multiread; ptr++) {
 		if (ptr->read) {
-			char *val = ptr->read(0);
+			char *val = (ptr->read)(0);
 
 			if (val) {
 				printf("%s%c%s%c", ptr->name, delim, val, term);
@@ -366,7 +366,7 @@ int cmd_var(int argc,
 			usage_with_options(var_usage, options);
 
 		if (git_var->read) {
-			char *val = git_var->read(IDENT_STRICT);
+			char *val = (git_var->read)(IDENT_STRICT);
 
 			if (!val) {
 				if (argc == 1)
