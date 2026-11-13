@@ -2,14 +2,6 @@ name: Windows Dobby Git I/O trace
 on:
   push:
     branches: [investigation/io-dobby-trampoline-20261113]
-    paths:
-      - 'io-trace.c'
-      - 'io-trace.h'
-      - 'common-main.c'
-      - 'Makefile'
-      - 'contrib/io-trace/**'
-      - 'Documentation/technical/io-trace.adoc'
-      - '.github/workflows/git-io-dobby.yml'
   workflow_dispatch:
 permissions:
   contents: read
