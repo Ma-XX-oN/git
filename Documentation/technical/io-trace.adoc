@@ -50,6 +50,11 @@ the resolved target functions are those used in the build. No
 global function-name macros are defined. This avoids collisions with
 Git structure members such as read and close.
 
+On macOS builds with PRECOMPOSE_UNICODE, Git redirects directory
+operations to precompose_utf8_opendir/readdir/closedir. The three
+trampolines must hook those functions using their PREC_DIR and
+precomposed dirent types, rather than raw POSIX DIR/dirent symbols.
+
 Each synchronous call uses two stack records, timestamping immediately
 before and after the call. No log write happens between these timestamps.
 Nested calls in the same thread are *not* separately logged: they remain
