@@ -27,21 +27,25 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Build native Dobby trampoline library and instrumented Git
+      # The pinned Windows fork's documented/CI-supported build uses MSVC.
+      # Build a C ABI DLL with MSVC; Git itself is built by its native SDK.
+      - uses: microsoft/setup-msbuild@v2
+      - name: Build pinned Dobby with the Windows-native MSVC toolchain
+        shell: pwsh
+        run: |
+          cmake -S dobby-source -B dobby-build -A x64 `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DPlugin.SymbolResolver=OFF `
+            -DPlugin.GlobalOffsetTableHook=OFF `
+            -DDynamicBinaryInstrument=OFF
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build dobby-build --config Release --target dobby --parallel 4
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build instrumented Git in the Git-for-Windows SDK
         shell: bash
         run: |
           . /etc/profile || exit 1
           cd "$GITHUB_WORKSPACE"
-          command -v cmake
-          command -v ninja
-          command -v gcc
-          command -v g++
-          cmake -S dobby-source -B dobby-build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DPlugin.SymbolResolver=OFF \
-            -DPlugin.GlobalOffsetTableHook=OFF \
-            -DDynamicBinaryInstrument=OFF
-          cmake --build dobby-build --target dobby --parallel 4
           make -j4 GIT_IO_TRACE=1 NO_RUST=YesPlease \
             NO_CURL=YesPlease NO_GETTEXT=YesPlease git.exe
       - name: Validate real trampolines, file ops and binary decoder
