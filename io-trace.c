@@ -73,9 +73,21 @@ static int (*orig_close)(int) = close;
 static int (*orig_stat)(const char *, struct stat *) = stat;
 static int (*orig_lstat)(const char *, struct stat *) = lstat;
 static int (*orig_fstat)(int, struct stat *) = fstat;
+/*
+ * macOS Git rewrites directory operations through precompose_utf8_*.
+ * Hook the same API Git calls, with the PREC_DIR/dirent_prec_psx types.
+ * The underlying POSIX functions have different types and are wrong
+ * trampoline targets for these declarations.
+ */
+#ifdef PRECOMPOSE_UNICODE
+static DIR *(*orig_opendir)(const char *) = precompose_utf8_opendir;
+static struct dirent *(*orig_readdir)(DIR *) = precompose_utf8_readdir;
+static int (*orig_closedir)(DIR *) = precompose_utf8_closedir;
+#else
 static DIR *(*orig_opendir)(const char *) = opendir;
 static struct dirent *(*orig_readdir)(DIR *) = readdir;
 static int (*orig_closedir)(DIR *) = closedir;
+#endif
 static FILE *(*orig_fopen)(const char *, const char *) = fopen;
 static size_t (*orig_fread)(void *, size_t, size_t, FILE *) = fread;
 static size_t (*orig_fwrite)(const void *, size_t, size_t, FILE *) = fwrite;
@@ -126,13 +138,20 @@ struct io_hook_spec {
 
 #define IO_HOOK(name) { (void *)name, (void *)hook_ ## name, \
 			(void **)&orig_ ## name, #name }
+#ifdef PRECOMPOSE_UNICODE
+#define IO_DIR_HOOK(name) { (void *)precompose_utf8_ ## name, \
+			(void *)hook_ ## name, (void **)&orig_ ## name, #name }
+#else
+#define IO_DIR_HOOK(name) IO_HOOK(name)
+#endif
 
 static struct io_hook_spec io_hooks[] = {
 	IO_HOOK(open), IO_HOOK(read), IO_HOOK(write), IO_HOOK(close),
 	IO_HOOK(stat), IO_HOOK(lstat), IO_HOOK(fstat),
-	IO_HOOK(opendir), IO_HOOK(readdir), IO_HOOK(closedir),
+	IO_DIR_HOOK(opendir), IO_DIR_HOOK(readdir), IO_DIR_HOOK(closedir),
 	IO_HOOK(fopen), IO_HOOK(fread), IO_HOOK(fwrite), IO_HOOK(fclose)
 };
+#undef IO_DIR_HOOK
 #undef IO_HOOK
 
 
