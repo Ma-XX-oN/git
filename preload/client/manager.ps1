@@ -190,19 +190,21 @@ function Invoke-Preload {
     # $request stays open for the call: disposing it ends the call, so the
     # manager forgets the worker (about 0.15 ms faster per call than a
     # separate end-of-call request on a new connection).
-    foreach ($channel in @('stdout', 'stderr', 'exit-code', 'stdin')) {
+    # The manager has already connected params-cwd; open the rest in the
+    # worker's order.
+    foreach ($channel in @('stdin', 'stdout', 'stderr', 'exit-code')) {
       $pipe = [Preload.Client.PipeConnector]::Open($script:PreloadSession.PipeName + "\worker-$workerId\$channel")
       $channels += $pipe
       $pipe.WriteByte(48)
     }
-    $stdout = $channels[0].CopyToAsync($output)
-    $stderr = $channels[1].CopyToAsync($errors)
+    $stdout = $channels[1].CopyToAsync($output)
+    $stderr = $channels[2].CopyToAsync($errors)
     if (-not [System.Threading.Tasks.Task]::WaitAll(
         [System.Threading.Tasks.Task[]]@($stdout, $stderr), 15000)) {
       throw 'Worker output timed out'
     }
-    $channels[3].Dispose()
-    $reader = [System.IO.StreamReader]::new($channels[2], $script:PreloadEncoding)
+    $channels[0].Dispose()
+    $reader = [System.IO.StreamReader]::new($channels[3], $script:PreloadEncoding)
     try {
       $read = $reader.ReadLineAsync()
       if (-not $read.Wait(10000)) { throw 'Worker status timed out' }

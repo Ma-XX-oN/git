@@ -39,7 +39,7 @@ static int transport_fixture(const char *location)
 	};
 	static const size_t order[] = { 0, 1 };
 	struct preload_transport_config config = {
-		location, channels, order, ARRAY_SIZE(channels), 2000, '0'
+		location, channels, order, ARRAY_SIZE(channels), '0'
 	};
 	struct preload_transport *transport = NULL;
 	char buffer[64];

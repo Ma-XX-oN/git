@@ -143,7 +143,7 @@ static int write_status(struct preload_transport *transport,
 			size_t channel, int status)
 {
 	char record[64];
-	int length = xsnprintf(record, sizeof(record), "EXIT %d\n", status);
+	size_t length = xsnprintf(record, sizeof(record), "EXIT %d\n", status);
 	size_t offset = 0;
 
 	while (offset < length) {
@@ -204,8 +204,12 @@ static int start_worker_transport(struct preload_worker *worker)
 		{ "stdin", 0 }, { "stdout", 1 }, { "stderr", 1 },
 		{ "exit-code", 1 }, { "params-cwd", 0 }
 	};
+	/*
+	 * The request comes first: it tells the worker what to run. The standard
+	 * streams follow in descriptor order, then the status channel.
+	 */
 	static const size_t order[] = {
-		WORKER_STDOUT, WORKER_STDERR, WORKER_STATUS, WORKER_STDIN, WORKER_CONTEXT
+		WORKER_CONTEXT, WORKER_STDIN, WORKER_STDOUT, WORKER_STDERR, WORKER_STATUS
 	};
 	struct preload_transport_config config = { 0 };
 	int status = preload_worker_platform_prepare(worker->directory, &worker->location);
@@ -216,7 +220,6 @@ static int start_worker_transport(struct preload_worker *worker)
 	config.channels = channels;
 	config.order = order;
 	config.nr = ARRAY_SIZE(channels);
-	config.timeout_ms = 2000;
 	if (preload_transport_start(&worker->transport, &config))
 		return 121;
 	printf("READY %lu\n", (unsigned long)getpid());

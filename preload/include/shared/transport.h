@@ -11,7 +11,7 @@ extern "C" {
 /**
  * @file
  * Blocking preload channels. start prepares endpoints before READY; wait
- * connects them in the supplied order. The transport owns all channels until
+ * connects them in the supplied order, with no time limit. The transport owns all channels until
  * detach_fd transfers one descriptor, close_channel closes one, or release
  * cancels/joins connection operations and closes the remaining channels.
  *
@@ -23,7 +23,6 @@ struct preload_transport;
 
 enum preload_transport_result {
 	PRELOAD_TRANSPORT_OK,
-	PRELOAD_TRANSPORT_TIMEOUT,
 	PRELOAD_TRANSPORT_INVALID_MARKER,
 	PRELOAD_TRANSPORT_DUPLICATE_MARKER,
 	PRELOAD_TRANSPORT_SYSTEM_ERROR
@@ -41,7 +40,6 @@ struct preload_transport_config {
 	const struct preload_channel_spec *channels; /**< Borrowed array of nr specs. */
 	const size_t *order; /**< Borrowed permutation of channel indices, length nr. */
 	size_t nr; /**< Number of channels, from one through 32. */
-	unsigned int timeout_ms; /**< Windows per-channel deadline, 1 through INT_MAX milliseconds. */
 	int expected_marker; /**< ASCII digit, or zero to learn the worker's digit. */
 };
 

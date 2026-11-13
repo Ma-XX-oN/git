@@ -4,6 +4,7 @@
 /git-shell
 /git-upload-archive
 /git-upload-pack
+/preload-manager
 /scalar
 /test-fake-ssh
 /test-tool

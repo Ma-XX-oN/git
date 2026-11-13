@@ -37,7 +37,6 @@ struct preload_transport {
 	LONG arrived[2]; /**< Atomic per-thread completed operation generation. */
 	LONG completed; /**< Atomic generation validated by the winning connector. */
 	LONG failure; /**< Atomic first preload_transport_result failure, or zero. */
-	LONG deadline; /**< Atomic wrapping GetTickCount deadline in milliseconds. */
 	char expected_marker; /**< Configured digit or first valid consumed marker. */
 };
 
@@ -182,8 +181,6 @@ static void finish_channel(struct preload_transport *connections,
 			connections->expected_marker = marker;
 			connections->accepted[channel] =
 				connections->pipes[channel][chosen];
-			InterlockedExchange(&connections->deadline,
-					    (LONG)(GetTickCount() + connections->config.timeout_ms));
 		}
 	} else {
 		result = PRELOAD_TRANSPORT_SYSTEM_ERROR;
@@ -257,12 +254,12 @@ static DWORD WINAPI connect_channels(LPVOID data)
 	struct preload_transport_connector *connector = data;
 	struct preload_transport *connections = connector->connections;
 	const size_t *order = connections->config.order;
-	int step;
+	size_t step;
 
 	for (step = 0; step < connections->config.nr; step++) {
 		connect_candidate(connections, order[step], connector->index);
 		if (atomic_read(&connections->failure) ||
-		    rendezvous(connections, order[step], step + 1,
+		    rendezvous(connections, order[step], (int)step + 1,
 						 connector->index))
 			break;
 	}
@@ -277,11 +274,11 @@ static DWORD WINAPI connect_channels(LPVOID data)
  */
 static int start_connections(struct preload_transport *connections)
 {
+	size_t channel;
 	int index;
 
-	connections->deadline = (LONG)(GetTickCount() + connections->config.timeout_ms);
-	for (index = 0; index < connections->config.nr; index++)
-		connections->accepted[index] = INVALID_HANDLE_VALUE;
+	for (channel = 0; channel < connections->config.nr; channel++)
+		connections->accepted[channel] = INVALID_HANDLE_VALUE;
 	for (index = 0; index < 2; index++) {
 		connections->connectors[index].connections = connections;
 		connections->connectors[index].index = index;
@@ -300,10 +297,12 @@ static int start_connections(struct preload_transport *connections)
 /**
  * @brief Wait for connector completion, retrying handle cancellation on failure.
  *
- * Main waits for final completion. A deadline recheck is needed only if a wait
- * expires after the workers have advanced to another channel. On failure, retry
- * handle-targeted cancellation until both threads exit; storage and handles stay
- * alive throughout cancellation, including a call submitted just after a retry.
+ * Main waits without a time limit: an idle worker keeps listening until a
+ * client connects or its owner exits. A connector exits after its last channel
+ * or after recording a failure, so main wakes whenever either thread exits. On
+ * failure, retry handle-targeted cancellation until both threads exit; storage
+ * and handles stay alive throughout cancellation, including a call submitted
+ * just after a retry.
  *
  * @param connections Borrowed live state; all handles remain owned until threads stop.
  */
@@ -311,35 +310,27 @@ static void join_connector_threads(struct preload_transport *connections)
 {
 	HANDLE threads[2];
 	DWORD count = 0;
-	int channel, index;
+	size_t channel;
+	int index;
 
 	for (index = 0; index < 2; index++)
 		if (connections->threads[index])
 			threads[count++] = connections->threads[index];
 	while (count) {
-		DWORD wait, timeout = 1;
+		DWORD wait, timeout = INFINITE;
 
 		if (atomic_read(&connections->failure)) {
 			for (channel = 0; channel < connections->config.nr; channel++)
 				for (index = 0; index < 2; index++)
 					CancelIoEx(connections->pipes[channel][index], NULL);
-		} else {
-			LONG remaining = (LONG)((DWORD)atomic_read(
-							&connections->deadline) -
-						GetTickCount());
-
-			if (remaining <= 0) {
-				trace_printf_key(&preload_worker_trace,
-						 "pid=%lu connection timeout\n", GetCurrentProcessId());
-				InterlockedCompareExchange(&connections->failure,
-							   PRELOAD_TRANSPORT_TIMEOUT, 0);
-				continue;
-			}
-			timeout = remaining;
+			timeout = 1;
 		}
-		wait = WaitForMultipleObjects(count, threads, TRUE, timeout);
-		if (wait == WAIT_OBJECT_0)
-			break;
+		wait = WaitForMultipleObjects(count, threads, FALSE, timeout);
+		if (wait < WAIT_OBJECT_0 + count) {
+			/* Stop waiting on the exited thread; it is closed later. */
+			threads[wait - WAIT_OBJECT_0] = threads[--count];
+			continue;
+		}
 		if (wait != WAIT_TIMEOUT)
 			BUG("cannot join Git IPC connection threads: %lu", GetLastError());
 	}
@@ -352,7 +343,8 @@ static void join_connector_threads(struct preload_transport *connections)
  */
 static int finish_connections(struct preload_transport *connections)
 {
-	int channel, index;
+	size_t channel;
+	int index;
 
 	join_connector_threads(connections);
 	for (index = 0; index < 2; index++) {
@@ -383,8 +375,7 @@ static int is_valid_config(const struct preload_transport_config *config)
 	size_t i, j;
 
 	if (!config || !config->location || !config->nr || config->nr > 32 ||
-	    !config->channels || !config->order || !config->timeout_ms ||
-	    config->timeout_ms > INT_MAX ||
+	    !config->channels || !config->order ||
 	    (config->expected_marker &&
 	     (config->expected_marker < '0' || config->expected_marker > '9')))
 		return 0;

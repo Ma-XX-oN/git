@@ -1266,7 +1266,9 @@ else
 LIB_OBJS += preload/src/worker/worker-posix.o
 LIB_OBJS += preload/src/shared/transport-posix.o
 endif
-$(filter preload/src/worker/% preload/src/shared/%,$(LIB_OBJS)): EXTRA_CPPFLAGS += -I./preload/include
+PRELOAD_LIB_OBJS = $(filter preload/src/worker/% preload/src/shared/%,$(LIB_OBJS))
+# Sparse (.sp) and assembly (.s) targets need the same include path as objects.
+$(PRELOAD_LIB_OBJS) $(PRELOAD_LIB_OBJS:.o=.sp) $(PRELOAD_LIB_OBJS:.o=.s): EXTRA_CPPFLAGS += -I./preload/include
 
 # The manager is a separate C++ application; worker and transport stay C.
 PRELOAD_MANAGER_OBJS = $(patsubst %.cpp,%.o,$(wildcard preload/src/manager/*.cpp))

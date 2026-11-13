@@ -51,10 +51,10 @@ def instrument(output):
     "    $frame = $script:PreloadEncoding.GetString((Read-PreloadBytes $request 8))",
     "    if ($frame -notmatch '^[0-9a-f]{8}$' -or $frame -eq '00000000') {",
     "    # $request stays open for the call",
-    "    foreach ($channel in @('stdout', 'stderr', 'exit-code', 'stdin')) {",
-    "    $stdout = $channels[0].CopyToAsync($output)",
+    "    foreach ($channel in @('stdin', 'stdout', 'stderr', 'exit-code')) {",
+    "    $stdout = $channels[1].CopyToAsync($output)",
     "    if (-not [System.Threading.Tasks.Task]::WaitAll(",
-    "    $channels[3].Dispose()",
+    "    $channels[0].Dispose()",
     "    if ($DiscardOutput) { return $global:LASTEXITCODE }",
     "    $errors.Dispose()\n  }\n}",
   ]

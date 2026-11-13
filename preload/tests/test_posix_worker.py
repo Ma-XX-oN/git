@@ -42,18 +42,20 @@ def run_case(git, name, payload, status, output, hold_request=False):
     signal.alarm(10)
     try:
       assert worker.stdout.readline() == f"READY {worker.pid}\n".encode()
-      for channel, mode in (("stdout", "rb"), ("stderr", "rb"), ("exit-code", "rb"),
-                  ("stdin", "wb"), ("params-cwd", "wb")):
+      # Open in the worker's order; each FIFO open waits for the worker's.
+      for channel, mode in (("params-cwd", "wb"), ("stdin", "wb"), ("stdout", "rb"),
+                  ("stderr", "rb"), ("exit-code", "rb")):
         streams.append(open(worker_directory / channel, mode, buffering=0))
-      streams[3].close()
-      streams[4].write(payload)
+      request, stdin, stdout, stderr, exit_code = streams
+      stdin.close()
+      request.write(payload)
       if not hold_request:
-        streams[4].close()
-      assert streams[0].read() == output, name
-      errors = streams[1].read()
+        request.close()
+      assert stdout.read() == output, name
+      errors = stderr.read()
       if status == 0:
         assert errors == b"", (name, errors)
-      assert streams[2].read() == f"EXIT {status}\n".encode(), name
+      assert exit_code.read() == f"EXIT {status}\n".encode(), name
       assert worker.wait(timeout=5) == status, name
       assert not worker_directory.exists(), "worker retained FIFO endpoints"
       print("PRELOAD_POSIX_WORKER_PASS", name, flush=True)

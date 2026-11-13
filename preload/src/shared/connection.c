@@ -1,4 +1,5 @@
-#ifndef _WIN32
+/* Git's build force-includes git-compat-util.h, which already selects features. */
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
 #define _POSIX_C_SOURCE 200809L
 #endif
 #include "shared/connection.h"

@@ -40,7 +40,7 @@ static void preload_worker_remove_fifos(const char *directory)
 	static const char *const names[5] = {
 		"stdout", "stderr", "exit-code", "stdin", "params-cwd"
 	};
-	int i;
+	size_t i;
 
 	for (i = 0; i < ARRAY_SIZE(names); i++) {
 		char *path = xstrfmt("%s/%s", directory, names[i]);
@@ -131,7 +131,7 @@ static int preload_worker_start_owner_watch(const char *directory)
 		unsigned char ch = raw[i];
 
 		if (ch < '0' || ch > '9' ||
-		    value > (LONG_MAX - (ch - '0')) / 10)
+		    value > (unsigned long)(LONG_MAX - (ch - '0')) / 10)
 			return -1;
 		value = value * 10 + ch - '0';
 	}

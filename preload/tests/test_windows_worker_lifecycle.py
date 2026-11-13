@@ -30,6 +30,8 @@ K.FlushFileBuffers.restype = W.BOOL
 K.CloseHandle.argtypes = [W.HANDLE]
 K.CloseHandle.restype = W.BOOL
 INVALID = C.c_void_p(-1).value
+# The worker accepts channels in this order: request, standard streams, status.
+ORDER = ("params-cwd", "stdin", "stdout", "stderr", "exit-code")
 
 
 def write(handle, data):
@@ -67,7 +69,7 @@ def run_case(git, name, arguments, expected_status, expected_output,
        missing_end=False, delayed_request=False, delayed_output=False,
        abandoned_probes=False, duplicate_control=False, held_probes=False,
        marker_order=None, status_after_output=False, delayed_status=False,
-       expected_errors=b"", context=b""):
+       expected_errors=b"", context=b"", idle_before_connect=0):
   """Run a worker with stdin held open while output and status are drained."""
   env = os.environ.copy()
   env["PRELOAD_PID"] = str(os.getpid())
@@ -81,7 +83,11 @@ def run_case(git, name, arguments, expected_status, expected_output,
   try:
     assert worker.stdout.readline() == f"READY {worker.pid}\n".encode()
     worker.stdout.close()
-    for index, channel in enumerate(("stdout", "stderr", "exit-code", "stdin", "params-cwd")):
+    if idle_before_connect:
+      # An idle READY worker has no deadline; it waits for its client.
+      time.sleep(idle_before_connect)
+      assert worker.poll() is None, "idle worker exited before its client connected"
+    for index, channel in enumerate(ORDER):
       address = rf"{pipe_dir}\worker-{worker.pid}\{channel}"
       if abandoned_probes or held_probes or marker_order is not None:
         probe = K.CreateFileW(address, 0xc0000000, 0, None, 3, 0, None)
@@ -96,18 +102,19 @@ def run_case(git, name, arguments, expected_status, expected_output,
       if marker_order is not None and marker_order[index] == 0:
         handle, handles[channel + "-probe"] = handles[channel + "-probe"], handle
       handles[channel] = handle
-      if channel != "stdin" or not duplicate_control:
+      if channel != ORDER[-2] or not duplicate_control:
         write(handle, stdin_marker if channel == "stdin" else b"1")
       if channel == "stdin" and stdin_marker != b"1":
         break
     if duplicate_control:
-      # Hold the preceding channel so both markers precede selection.
-      address = rf"{pipe_dir}\worker-{worker.pid}\params-cwd"
+      # Hold the preceding channel unmarked so both markers of the last
+      # channel arrive before its selection.
+      address = rf"{pipe_dir}\worker-{worker.pid}\{ORDER[-1]}"
       duplicate = K.CreateFileW(address, 0xc0000000, 0, None, 3, 0, None)
       assert duplicate != INVALID
       handles["duplicate-control"] = duplicate
       write(duplicate, b"1")
-      write(handles["stdin"], b"1")
+      write(handles[ORDER[-2]], b"1")
     elif "params-cwd" in handles:
       frame = struct.pack("<I", len(arguments)) + b"git\0"
       frame += b"".join((arg.encode() if isinstance(arg, str) else arg) + b"\0"
@@ -128,6 +135,11 @@ def run_case(git, name, arguments, expected_status, expected_output,
       if malformed or missing_end:
         assert K.FlushFileBuffers(handles["params-cwd"])
         K.CloseHandle(handles.pop("params-cwd"))
+    if "stdout" not in handles:
+      # Connection failed before the output and status channels existed.
+      assert worker.wait(timeout=5) == expected_status
+      print("GIT_PRELOAD_WORKER_LIFECYCLE_PASS", name, flush=True)
+      return
     if delayed_output:
       time.sleep(.1)
     if status_after_output:
@@ -154,33 +166,14 @@ def run_case(git, name, arguments, expected_status, expected_output,
     status = read_to_eof(handles["exit-code"])
     assert output == expected_output, (name, output)
     assert errors == expected_errors, (name, errors)
-    assert status == f"EXIT {expected_status}\n".encode(), (name, status)
+    # A failed status-channel selection leaves no channel for the record.
+    record = b"" if duplicate_control else f"EXIT {expected_status}\n".encode()
+    assert status == record, (name, status)
     assert worker.wait(timeout=5) == expected_status
     print("GIT_PRELOAD_WORKER_LIFECYCLE_PASS", name, flush=True)
   finally:
     for handle in handles.values():
       K.CloseHandle(handle)
-    if worker.poll() is None:
-      worker.kill()
-    worker.wait(timeout=5)
-    worker.stdout.close()
-    directory.cleanup()
-
-
-def test_marker_timeout(git):
-  """A missing marker must cancel both connection threads and exit promptly."""
-  env = os.environ.copy()
-  env["PRELOAD_PID"] = str(os.getpid())
-  env["PRELOAD_WIN_DIR"] = rf"\\.\pipe\preload-test-{uuid.uuid4().hex}"
-  directory = tempfile.TemporaryDirectory(prefix="preload-worker-")
-  worker = subprocess.Popen([git, "--preload-worker", directory.name], env=env,
-                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL)
-  try:
-    assert worker.stdout.readline() == f"READY {worker.pid}\n".encode()
-    assert worker.wait(timeout=4) == 122
-    print("GIT_PRELOAD_WORKER_LIFECYCLE_PASS missing-marker-timeout", flush=True)
-  finally:
     if worker.poll() is None:
       worker.kill()
     worker.wait(timeout=5)
@@ -250,6 +243,7 @@ if __name__ == "__main__":
   for bad in (b"\xff", b"\xc0\x80", b"\xed\xa0\x80"):
     run_case(git, "invalid-utf8-argv-" + bad.hex(), [bad], 128, b"")
   for iteration in range(10):
-    run_case(git, f"duplicate-control-markers-{iteration}", [], 122, b"",
+    run_case(git, f"duplicate-status-markers-{iteration}", [], 122, b"",
          duplicate_control=True)
-  test_marker_timeout(git)
+  run_case(git, "idle-worker-serves-late-client", ["--version"], 0, version,
+       idle_before_connect=3)

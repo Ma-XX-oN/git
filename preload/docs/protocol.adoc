@@ -119,7 +119,7 @@ per `read()`, but a fixed-length frame in bulk.
   from the same connection. It holds that connection until the call ends; see
   worker completion.
   The manager forwards the marker and request to the worker's `params-cwd`
-  channel. The caller opens and marks only stdout, stderr, exit-code and stdin.
+  channel. The caller opens and marks only stdin, stdout, stderr and exit-code.
   Each manager connection is a private reply channel, so concurrent callers
   never see each other's replies. Bash names the session pipe directory with
   `$PRELOAD_WIN_DIR`; PowerShell keeps a unique pipe name in its session state.
@@ -179,9 +179,18 @@ POSIX worker mode requires pthread support for owner monitoring. Builds with
 
 == Worker request and completion
 
-Each worker exposes stdin, stdout, stderr, exit-code and params-cwd
-channels. The client opens stdout, stderr, status, stdin and context in that
-order. The context request begins with a little-endian 32-bit parameter count
+Each worker exposes params-cwd, stdin, stdout, stderr and exit-code
+channels and accepts connections in that order on both platforms: first the
+request, which tells the worker what to run, then the standard streams in
+descriptor order, then the status channel. The connection that writes the
+request (the manager on Windows, the client on Linux/macOS) opens params-cwd;
+the client opens the rest in order. A READY worker waits for its connections
+with no time limit; owner death or the manager ends an idle worker. A failure
+while connecting ends the worker with status 122 before the status channel
+exists, so no `EXIT` record is written: the caller reports a connection
+failure or, if its channels were already open, recovers the code as for a
+worker that died mid-command.
+The context request begins with a little-endian 32-bit parameter count
 excluding `git`, ranging from 0 to 65,535. It is followed by the NUL-terminated
 UTF-8 executable name and then that many NUL-terminated UTF-8 parameters.
 The worker allocates one argv entry for the executable, one per parameter,

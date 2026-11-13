@@ -276,7 +276,8 @@ _preload_lost_status() {
 # the command's exit status, or 255 for a preload failure.
 # The worker request (arguments and cwd) follows `GET <name> <marker>` on the
 # manager connection; the manager forwards it to the worker's params-cwd
-# channel with the same marker, so this function opens only the other four.
+# channel with the same marker, so this function opens only the other four,
+# in the worker's order: stdin, stdout, stderr, exit-code.
 # Capturing `pwd -W` with $(...) or a pipeline forks, so the Windows cwd is
 # obtained without a fork in one of two ways (experiment: EXP_PRELOAD_CWD_MODE;
 # not PRELOAD_*, which the benchmark harnesses strip):
@@ -328,11 +329,12 @@ _preload_template_windows() {
     return 255
   fi
   pid=${wdir##*worker-}
-  # Open in the order the worker accepts connections.
-  if ! _preload_open_marked fd_out "$wdir\\stdout" "$marker" 40 ||
+  # Open in the order the worker accepts connections; the manager has
+  # already connected params-cwd, which comes first.
+  if ! _preload_open_marked fd_in "$wdir\\stdin" "$marker" 40 ||
+     ! _preload_open_marked fd_out "$wdir\\stdout" "$marker" 40 ||
      ! _preload_open_marked fd_err "$wdir\\stderr" "$marker" 40 ||
-     ! _preload_open_marked fd_exit "$wdir\\exit-code" "$marker" 40 ||
-     ! _preload_open_marked fd_in "$wdir\\stdin" "$marker" 40; then
+     ! _preload_open_marked fd_exit "$wdir\\exit-code" "$marker" 40; then
     for rc in $fd_out $fd_err $fd_exit $fd_in; do eval "exec $rc>&-"; done
     _preload_done "$pid" "$req"
     printf 'PRELOAD ERROR: cannot connect to worker %s\n' "$wdir" >&2
@@ -407,13 +409,14 @@ _preload_template_unix() {
     return 255
   fi
   pid=${wdir##*worker-}
-  if ! exec {fd_out}<"$wdir/stdout"; then
+  # Open in the order the worker accepts connections (left to right).
+  if ! exec {fd_ctl}>"$wdir/params-cwd"; then
     _preload_done "$pid"
-    printf 'PRELOAD ERROR: stdout open failed\n' >&2; return 255
+    printf 'PRELOAD ERROR: params-cwd open failed\n' >&2; return 255
   fi
-  exec {fd_err}<"$wdir/stderr" {fd_exit}<"$wdir/exit-code" \
-       {fd_in}>"$wdir/stdin" {fd_ctl}>"$wdir/params-cwd" || {
-    exec {fd_out}<&-
+  exec {fd_in}>"$wdir/stdin" {fd_out}<"$wdir/stdout" \
+       {fd_err}<"$wdir/stderr" {fd_exit}<"$wdir/exit-code" || {
+    exec {fd_ctl}>&-
     _preload_done "$pid"
     printf 'PRELOAD ERROR: worker channel open failed\n' >&2; return 255
   }
