@@ -9,6 +9,7 @@
 #include "shared/connection.h"
 #include <chrono>
 #include <atomic>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
@@ -158,8 +159,16 @@ int main(int argc, char **argv)
 				};
 #ifndef _WIN32
 				auto lock = directory + "/slot." + std::to_string(slot) + ".lock";
-				int fd = open(lock.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);
-				if (fd < 0) throw std::runtime_error("claim failed");
+				/* The registering client's FREE is asynchronous: the manager may not
+				 * have deleted its lock on this slot yet, so wait for the release.
+				 */
+				auto claim_deadline = Clock::now() + std::chrono::seconds(5);
+				int fd;
+				while ((fd = open(lock.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600)) < 0) {
+					if (errno != EEXIST || Clock::now() >= claim_deadline)
+						throw std::runtime_error("claim failed");
+					std::this_thread::sleep_for(std::chrono::milliseconds(1));
+				}
 				auto pid = std::to_string(getpid());
 				::write(fd, pid.data(), pid.size()); ::close(fd);
 #endif

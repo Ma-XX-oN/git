@@ -120,7 +120,7 @@ def summarize(report):
   return summary
 
 
-def draw_bars(axis, labels, series, title, unit, reference=None):
+def draw_bars(axis, labels, series, title, unit, reference=None, styles=None):
   """Draw grouped horizontal bars with confidence-interval error bars.
 
   Parameters
@@ -130,24 +130,32 @@ def draw_bars(axis, labels, series, title, unit, reference=None):
   labels : list of str
       Machine labels, top to bottom.
   series : list of tuple
-      (SERIES key, list of (median, low, high)) per bar group member.
+      (style key, list of (median, low, high)) per bar group member.
   title, unit : str
       Panel title and x-axis label.
   reference : float, optional
       X position of a dashed reference line.
+  styles : dict, optional
+      (legend name, color, hatch) per style key; defaults to SERIES.
   """
+  styles = styles or SERIES
   height = .8 / len(series)
-  top = max([high for _, rows in series for _, _, high in rows] + [reference or 0])
+  top = max([row[2] for _, rows in series for row in rows if row] + [reference or 0])
   for index, (key, rows) in enumerate(series):
-    name, color, hatch = SERIES[key]
+    name, color, hatch = styles[key]
     offset = (index - (len(series) - 1) / 2) * height
-    positions = [p + offset for p in range(len(labels))]
-    medians = [m for m, _, _ in rows]
-    errors = [[m - low for m, low, _ in rows], [high - m for m, _, high in rows]]
+    # A None row is an unmeasured value: no bar, and a note in its place.
+    placed = [(p + offset, row) for p, row in enumerate(rows) if row]
+    for position in (p + offset for p, row in enumerate(rows) if not row):
+      axis.text(top * .02, position, "not measured", va="center", fontsize=8,
+            color="#52514e", style="italic")
+    positions = [p for p, _ in placed]
+    medians = [m for _, (m, _, _) in placed]
+    errors = [[m - low for _, (m, low, _) in placed], [high - m for _, (m, _, high) in placed]]
     axis.barh(positions, medians, height=height * .95, label=name, color=color,
           hatch=hatch, edgecolor="#475569", linewidth=0,
           xerr=errors, error_kw={"ecolor": "#0f172a", "capsize": 4, "elinewidth": 1})
-    for position, (median, _, high) in zip(positions, rows):
+    for position, (median, _, high) in placed:
       axis.text(high + top * .02, position, f"{median:.2f}", va="center", fontsize=9)
   axis.set_yticks(range(len(labels)), labels)
   axis.invert_yaxis()
