@@ -1,0 +1,75 @@
+name: Windows binary Git I/O trace
+on:
+  push:
+    branches: [investigation/io-binary-trace-20261113]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+        with:
+          flavor: full
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Compile binary tracer in native Git-for-Windows SDK
+        shell: bash
+        run: |
+          . /etc/profile || exit 1
+          cd "$GITHUB_WORKSPACE"
+          make -j4 GIT_IO_TRACE=1 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git.exe
+      - name: Verify direct calls, trace structure, and failures
+        shell: bash
+        run: |
+          . /etc/profile || exit 1
+          cd "$GITHUB_WORKSPACE"
+          py="$(cygpath -u "$pythonLocation")/python.exe"
+          gitbin="$(cygpath -w "$PWD/git.exe")"
+          mkdir -p io-trace-results
+          "$gitbin" --version
+          "$gitbin" init -q io-trace-results/repo
+          cd io-trace-results/repo
+          for i in $(seq -w 1 100); do
+            printf 'sample file %s\n' "$i" > "file-$i.txt"
+          done
+          "$gitbin" add .
+          "$gitbin" -c user.name=Trace -c user.email=trace@example.invalid commit -qm seed
+          "$gitbin" --log-id 0000000000000001 status --porcelain > status.txt
+          "$gitbin" --log-fn "$(cygpath -w "$PWD/second.log")" rev-parse HEAD > head.txt
+          if "$gitbin" --log-id 0000000000000001 --version; then
+            echo "ERROR: repeated ID overwrote a log"
+            exit 1
+          fi
+          if "$gitbin" --log-id BAD --version; then
+            echo "ERROR: invalid hex ID accepted"
+            exit 1
+          fi
+          "$py" "$GITHUB_WORKSPACE/contrib/io-trace/decode.py" \
+            git-0000000000000001.log second.log > "$GITHUB_WORKSPACE/io-trace-results/summary.json"
+          "$py" - <<'PY'
+          import json
+          from pathlib import Path
+          results = json.loads(Path("../summary.json").read_text(encoding="utf-8"))
+          assert len(results) == 2
+          for row in results:
+            assert row["process_ms"] > 0, row
+            count = sum(i["count"] for i in row["by_operation"].values())
+            assert count > 5, row
+            assert row["io_union_ms"] <= row["process_ms"], row
+            print("VALIDATED_BINARY_TRACE", row["pid"], count,
+                  row["process_ms"], row["by_operation"])
+          PY
+      - name: Preserve native logs and decode report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git-io-binary-windows-${{ github.sha }}
+          path: io-trace-results/
+          if-no-files-found: warn

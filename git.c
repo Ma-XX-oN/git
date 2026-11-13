@@ -175,6 +175,16 @@ static int handle_options(const char ***argv, int *argc, int *envchanged)
 		/*
 		 * Check remaining flags.
 		 */
+#ifdef GIT_IO_TRACE
+    if (!strcmp(cmd, "--log-id") || !strcmp(cmd, "--log-fn")) {
+      if (*argc < 2)
+        die("missing value for %s", cmd);
+      if (io_trace_begin(cmd, (*argv)[1]))
+        die_errno("unable to initialize binary I/O trace");
+      (*argv)++;
+      (*argc)--;
+    } else
+#endif
 		if (skip_prefix(cmd, "--exec-path", &cmd)) {
 			if (*cmd == '=')
 				git_set_exec_path(cmd + 1);

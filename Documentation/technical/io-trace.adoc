@@ -1,0 +1,64 @@
+= Git binary I/O probe (investigation only)
+
+The I/O probe is disabled by default. To enable, build with
+\`make GIT_IO_TRACE=1 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git\`.
+This experimental Makefile build flag is not used for Meson.
+
+Launch a *separate* Git invocation for each log:
+
+  ./git --log-id 000000000000002a status
+  ./git --log-fn /tmp/git-status.bin status
+
+The first produces \`git-000000000000002a.log\` in the current directory.
+The 16-digit hexadecimal ID is required. The second takes an explicit
+filename. Both are pre-existing-file safe (\`O_EXCL\`); the arguments
+cannot be repeated. Logs remain per process; run separate invocations
+rather than sharing a log.
+
+Version 1 binary layout is little endian on the three target platforms:
+40-byte header (magic GITIO001, version, endian marker, record size,
+reserved, clock ticks/second, PID), followed by 64-byte event records.
+Each operation emits adjacent ENTER (even enum) and EXIT (odd enum)
+records plus at most 1024 raw UTF-8 filename bytes in one locked stdio
+\`fwrite\`. On READDIR, the returned name is attached to EXIT. PROCESS
+ENTER and EXIT are each one record. \`event & ~1\` groups operation pairs.
+
+Each event record contains timestamp, return/result, argument, handle,
+64-bit thread identity, PID, error/status, event enum, flags, path
+length and a reserved word. The latter is zero. The event flag bit 0
+marks truncated filenames; the decoder rejects these traces. Clock
+timestamps use QueryPerformanceCounter on Windows and CLOCK_MONOTONIC
+nanoseconds on Linux/macOS. Convert using the header's frequency.
+
+READ/WRITE results and requests are in bytes. FREAD/FWRITE result and
+requests are also normalized to bytes. Failure status is errno from the
+underlying call, not a platform-independent error category. The helper
+wraps open/read/write/close, stat/lstat/fstat, opendir/readdir/closedir,
+and fopen/fread/fwrite/fclose at Git source call sites. Direct Windows
+kernel calls, stdio-internal reads, DLL loads, child processes and code
+that bypasses these wrappers are NOT captured. These coverage gaps must
+be reported rather than assuming complete process-level attribution.
+
+The implementation captures timestamps immediately adjacent to the
+underlying call, then writes both entries. Logger output does not fall
+inside the measured operation. Synchronous logging still changes
+subsequent operation timing, and each log is timestamped only for its
+own process. A trace is invalid if the process END event is missing,
+the record stream is malformed, or any filename was truncated. Abrupt
+termination and exec replacement do not provide a complete END event.
+
+Decode with:
+
+  python3 contrib/io-trace/decode.py git-000000000000002a.log
+
+Add \`--events\` for per-operation intervals and identifiers. Summary
+includes operation counts and inclusive medians/P95/max, per-file
+cumulative duration, failed operations, the union of timed intervals,
+and unmeasured process time. Neither summed durations nor time spent
+outside the instrumented calls is synonymous with CPU usage or disk
+activity. The start event occurs only after Git parses \`--log-id\` or
+\`--log-fn\`; earlier initialization is excluded.
+
+Expected validation: Windows first (native Git-for-Windows SDK), then
+Linux and macOS with the identical tracer version, workload and decoder.
+Do not infer final root cause from source-level I/O coverage alone.

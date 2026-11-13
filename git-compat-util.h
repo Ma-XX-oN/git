@@ -1137,6 +1137,10 @@ extern int not_supposed_to_survive;
 #define assert(expr) ((void)(not_supposed_to_survive || (expr)))
 #endif /* CHECK_ASSERTION_SIDE_EFFECTS */
 
+#ifdef GIT_IO_TRACE
+#include "io-trace.h"
+#endif
+
 #endif
 
 #ifdef DISABLE_SIGN_COMPARE_WARNINGS
