@@ -326,7 +326,7 @@ void odb_source_release(struct odb_source *source);
  */
 static inline void odb_source_close(struct odb_source *source)
 {
-	source->close(source);
+	(source->close)(source);
 }
 
 /*

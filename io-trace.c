@@ -394,6 +394,7 @@ struct dirent *io_trace_readdir(DIR *dir)
     return readdir(dir);
   io_trace_prepare(&pair, IO_READDIR_ENTER, NULL, (uintptr_t)dir, 0);
   pair.event[0].ticks = io_trace_ticks();
+  errno = 0;
   result = readdir(dir);
   saved_errno = errno;
   pair.event[1].ticks = io_trace_ticks();
