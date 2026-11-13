@@ -72,7 +72,8 @@ def parse(path):
     if flags & PATH_TRUNCATED or exit_flags & PATH_TRUNCATED:
       raise ValueError("truncated filename: trace is not fully attributable")
     op = NAMES[kind // 2]
-    if op in ("OPEN", "FOPEN", "OPENDIR") and not status and exit_handle:
+    if op in ("OPEN", "FOPEN", "OPENDIR") and not status and (
+        op == "OPEN" or exit_handle):
       target = (fd_paths if op == "OPEN" else
                 stream_paths if op == "FOPEN" else dir_paths)
       target[exit_handle] = filename

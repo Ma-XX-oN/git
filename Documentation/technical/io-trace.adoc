@@ -58,6 +58,16 @@ The logger's own file operations are excluded. This is not a kernel
 syscall capture: direct Win32/NT operations, mmap, library load, and
 third-party code outside the hooked entrypoints are not attributed.
 
+The native read() trampoline uses the Windows CRT ABI (int return and
+unsigned-int byte count) on Windows, and the POSIX ABI (ssize_t return
+and size_t byte count) on Linux/macOS. An ABI mismatch invalidates the
+trace, even if it appears to record data.
+
+An incomplete binary log is not acceptable evidence: short fwrite()
+results set an atomic failure indicator, and PROCESS_EXIT is not
+emitted after a logging error. The decoder must then reject the log.
+Decoder regression tests are invoked directly, not through discovery.
+
 Binary format version 1:
 * 40-byte little-endian header: 8-byte magic GITIO001, u32 version,
   u32 endian marker 0x01020304, u32 record length (64),

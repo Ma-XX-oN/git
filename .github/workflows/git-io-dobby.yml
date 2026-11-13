@@ -5,6 +5,9 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: git-io-dobby-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   windows:
     runs-on: windows-latest
@@ -30,6 +33,13 @@ jobs:
       # The pinned Windows fork's documented/CI-supported build uses MSVC.
       # Build a C ABI DLL with MSVC; Git itself is built by its native SDK.
       - uses: microsoft/setup-msbuild@v2
+      - name: Verify binary format with deterministic direct tests
+        shell: pwsh
+        run: |
+          python -m py_compile contrib/io-trace/decode.py contrib/io-trace/test_decode.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python contrib/io-trace/test_decode.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build pinned Dobby with the Windows-native MSVC toolchain
         shell: pwsh
         run: |

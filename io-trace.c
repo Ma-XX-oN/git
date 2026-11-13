@@ -1,5 +1,6 @@
 #include "git-compat-util.h"
 #include "io-trace.h"
+#include <stdatomic.h>
 #ifndef GIT_WINDOWS_NATIVE
 #include <dlfcn.h>
 #endif
@@ -50,10 +51,23 @@ typedef char io_trace_record_must_be_64_bytes[
   sizeof(struct io_trace_record) == 64 ? 1 : -1];
 
 static FILE *io_trace_file;
+static atomic_int io_trace_failed;
 
 /* Dobby returns the unmodified function trampoline in each orig_* slot. */
 static int (*orig_open)(const char *, int, ...) = open;
-static ssize_t (*orig_read)(int, void *, size_t) = read;
+/*
+ * The Windows CRT read() ABI returns int and accepts unsigned int.
+ * POSIX read() returns ssize_t and accepts size_t.
+ */
+#ifdef GIT_WINDOWS_NATIVE
+typedef int io_trace_read_result_t;
+typedef unsigned int io_trace_read_size_t;
+#else
+typedef ssize_t io_trace_read_result_t;
+typedef size_t io_trace_read_size_t;
+#endif
+static io_trace_read_result_t (*orig_read)(int, void *,
+                                            io_trace_read_size_t) = read;
 static ssize_t (*orig_write)(int, const void *, size_t) = write;
 static int (*orig_close)(int) = close;
 static int (*orig_stat)(const char *, struct stat *) = stat;
@@ -78,7 +92,8 @@ static IO_TRACE_TLS unsigned io_trace_call_depth;
 static int io_trace_active;
 
 static int hook_open(const char *path, int flags, ...);
-static ssize_t hook_read(int fd, void *buf, size_t size);
+static io_trace_read_result_t hook_read(int fd, void *buf,
+                                         io_trace_read_size_t size);
 static ssize_t hook_write(int fd, const void *buf, size_t size);
 static int hook_close(int fd);
 static int hook_stat(const char *path, struct stat *st);
@@ -172,7 +187,8 @@ static void io_trace_single(enum io_trace_event_type kind)
   record.tid = io_trace_thread();
   record.ticks = io_trace_ticks();
   io_trace_in_logger++;
-  fwrite(&record, 1, sizeof(record), io_trace_file);
+  if (fwrite(&record, 1, sizeof(record), io_trace_file) != sizeof(record))
+    atomic_store_explicit(&io_trace_failed, 1, memory_order_relaxed);
   io_trace_in_logger--;
 }
 
@@ -186,10 +202,13 @@ static void io_trace_shutdown(void)
     return;
 
   io_trace_active = 0;
-  io_trace_single(IO_PROCESS_EXIT);
+  /* A prior short write must not produce a valid-looking complete trace. */
+  if (!atomic_load_explicit(&io_trace_failed, memory_order_relaxed))
+    io_trace_single(IO_PROCESS_EXIT);
   io_trace_file = NULL;
   io_trace_in_logger++;
-  failed = fflush(file) != 0 || ferror(file);
+  failed = atomic_load_explicit(&io_trace_failed, memory_order_relaxed) ||
+           fflush(file) != 0 || ferror(file);
   if (fclose(file) || failed)
     fputs("git: binary I/O trace output was incomplete\n", stderr);
   io_trace_in_logger--;
@@ -335,6 +354,13 @@ int io_trace_begin(const char *option, const char *value)
 	}
 	io_trace_file = file;
 	io_trace_single(IO_PROCESS_ENTER);
+	if (atomic_load_explicit(&io_trace_failed, memory_order_relaxed)) {
+		io_trace_file = NULL;
+		fclose(file);
+		unlink(filename);
+		errno = EIO;
+		return -1;
+	}
 	if (io_trace_install_hooks()) {
 		int saved_errno = errno;
 		io_trace_file = NULL;
@@ -411,7 +437,9 @@ static void io_trace_record_pair(struct io_trace_pair *pair,
    * No log write occurs between the two timestamps.
    */
   io_trace_in_logger++;
-  fwrite(pair, 1, sizeof(pair->event) + len, io_trace_file);
+  if (fwrite(pair, 1, sizeof(pair->event) + len, io_trace_file) !=
+      sizeof(pair->event) + len)
+    atomic_store_explicit(&io_trace_failed, 1, memory_order_relaxed);
   io_trace_in_logger--;
 }
 
@@ -446,10 +474,11 @@ static int hook_open(const char *path, int flags, ...)
   return result;
 }
 
-static ssize_t hook_read(int fd, void *buf, size_t size)
+static io_trace_read_result_t hook_read(int fd, void *buf,
+                                         io_trace_read_size_t size)
 {
   struct io_trace_pair pair;
-  ssize_t result;
+  io_trace_read_result_t result;
   int saved_errno;
 
   if (!io_trace_active || io_trace_in_logger || io_trace_call_depth)
@@ -597,9 +626,8 @@ static struct dirent *hook_readdir(DIR *dir)
     return orig_readdir(dir);
   io_trace_call_depth++;
   io_trace_prepare(&pair, IO_READDIR_ENTER, NULL, (uintptr_t)dir, 0);
+  errno = 0;
   pair.event[0].ticks = io_trace_ticks();
-  errno = 0;
-  errno = 0;
   result = orig_readdir(dir);
   saved_errno = errno;
   pair.event[1].ticks = io_trace_ticks();
