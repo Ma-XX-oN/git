@@ -44,6 +44,8 @@ jobs:
         shell: pwsh
         run: |
           cmake -S dobby-source -B dobby-build -A x64 `
+            -DCMAKE_SYSTEM_PROCESSOR=amd64 `
+            -DCMAKE_SYSTEM_NAME=Windows `
             -DCMAKE_BUILD_TYPE=Release `
             '-DPlugin.SymbolResolver=OFF' `
             '-DPlugin.GlobalOffsetTableHook=OFF' `
