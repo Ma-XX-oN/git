@@ -1,0 +1,96 @@
+= Git cross-platform binary I/O investigation tracer
+
+This is an opt-in diagnostic using the Dobby inline trampoline library,
+not preprocessor substitution and not a Git production feature.
+Untraced builds contain no tracing code.
+
+== Dependency
+
+Dobby is Apache-2.0 licensed. The verified C API contains
+DobbyHook(target, replacement, &original_trampoline) and DobbyDestroy.
+For reproducible experiments build revision
+5dfc8546954ce3b3198132ab13fddb89ee92cdd7 from
+https://github.com/jmpews/Dobby at that exact commit.
+
+The resulting shared library must be supplied by its *absolute path*
+using GIT_IO_TRACE_DOBBY. Git refuses to start tracing if the runtime
+or any requested trampoline cannot be installed; it never silently
+reports incomplete hook coverage. No dynamic library is loaded unless
+--log-id/--log-fn is explicitly requested.
+
+== Build and invoke
+
+    make -j4 GIT_IO_TRACE=1 NO_RUST=YesPlease NO_CURL=YesPlease \
+      NO_GETTEXT=YesPlease git
+
+    GIT_IO_TRACE_DOBBY=/absolute/path/to/libdobby.so \
+      ./git --log-id 000000000000002a status
+
+Or supply --log-fn /absolute/path/to/trace.bin instead of --log-id.
+The log-id must be exactly 16 hexadecimal digits and produces
+git-000000000000002a.log in the *invocation's original directory*.
+The output file must not already exist. A new process has its own log;
+forked/external Git commands require separate invocations to trace them.
+Use a native absolute Windows DLL path for Windows runners.
+
+The command-line trace options are recognized before init_git(), but
+not before the operating system loader, CRT, or the C main() entry.
+Only top-level options, not subcommand arguments, are scanned.
+
+== Hooks and event format
+
+The native Dobby code patches the target *function bodies*, allowing
+existing calls, including those from non-Git code linked in the process,
+to reach the replacement and then the original trampoline.
+
+Hooks: open/read/write/close, stat/lstat/fstat,
+opendir/readdir/closedir, and fopen/fread/fwrite/fclose. Windows
+native Git maps open/stat/fopen etc. to its mingw_* implementations;
+the resolved target functions are those used in the build. No
+global function-name macros are defined. This avoids collisions with
+Git structure members such as read and close.
+
+Each synchronous call uses two stack records, timestamping immediately
+before and after the call. No log write happens between these timestamps.
+Nested calls in the same thread are *not* separately logged: they remain
+part of the outer API call, preventing reentrant self-instrumentation.
+The logger's own file operations are excluded. This is not a kernel
+syscall capture: direct Win32/NT operations, mmap, library load, and
+third-party code outside the hooked entrypoints are not attributed.
+
+Binary format version 1:
+* 40-byte little-endian header: 8-byte magic GITIO001, u32 version,
+  u32 endian marker 0x01020304, u32 record length (64),
+  u32 reserved, u64 ticks/sec, u64 PID
+* 64-byte event record: u64 ticks, u64 result, u64 requested/flags,
+  u64 handle, u64 TID, u32 PID, i32 errno/status,
+  u16 event enum, u16 flags, u32 UTF-8 path-byte count, u32 reserved,
+  4 padding bytes.
+* For each I/O operation: 64-byte ENTER (even enum), 64-byte EXIT
+  (odd enum), and optional pathname bytes. Both records and pathname
+  are emitted together in one locked fwrite.
+* PROCESS_ENTER (0) and PROCESS_EXIT (1) use one record each.
+  The mask event & ~1 identifies the operation type, event ^ 1
+  flips between its entry and exit enums.
+
+QueryPerformanceCounter is used on Windows. CLOCK_MONOTONIC ticks
+converted to nanoseconds are used on Linux/macOS. The frequency is
+stored in the header. Result/status and handle values are captured
+before logging. Errors are original errno values. The decoder rejects
+missing process-end records, malformed pairs, and truncated paths.
+
+== Decode
+
+    python3 contrib/io-trace/decode.py git-000000000000002a.log
+
+Use --events for individual operation timestamps. Summary contains
+counts, inclusive median/P95/max, per-filename cumulative durations,
+failed operations, the union of overlapping timed intervals, and
+unattributed process time. Since hooks are synchronous and *nested*
+calls are excluded, the union reflects distinct blocked intervals.
+The residual is not necessarily CPU time.
+
+Validation priority is Windows native, followed by Linux and macOS
+at the same Git and Dobby revisions. Dobby installation must succeed,
+the Git command must succeed, and the decoded log must demonstrate
+file, metadata, and directory events with no malformed records.

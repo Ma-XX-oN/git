@@ -1,6 +1,9 @@
 #include "git-compat-util.h"
 #include "common-init.h"
 #include "preload/include/worker/worker.h"
+#ifdef GIT_IO_TRACE
+#include "io-trace.h"
+#endif
 
 int main(int argc, const char **argv)
 {
@@ -10,6 +13,48 @@ int main(int argc, const char **argv)
 		result = preload_worker_main(argc, argv, cmd_main);
 		return result;
 	}
+
+#ifdef GIT_IO_TRACE
+	/*
+	 * Accept trace controls only among top-level Git options, never after
+	 * the command. Remove them before ordinary option processing.
+	 */
+	for (int i = 1; i < argc; i++) {
+		if (!strcmp(argv[i], "--log-id") ||
+		    !strcmp(argv[i], "--log-fn")) {
+			if (i + 1 >= argc) {
+				fprintf(stderr, "git: missing value for %s\n", argv[i]);
+				return 1;
+			}
+			if (io_trace_begin(argv[i], argv[i + 1])) {
+				fprintf(stderr, "git: binary trace setup failed: %s\n",
+					strerror(errno));
+				return 1;
+			}
+			for (int j = i; j + 2 < argc; j++)
+				argv[j] = argv[j + 2];
+			argc -= 2;
+			argv[argc] = NULL;
+			break;
+		}
+		if (!strcmp(argv[i], "-C") || !strcmp(argv[i], "-c") ||
+		    !strcmp(argv[i], "--git-dir") ||
+		    !strcmp(argv[i], "--work-tree") ||
+		    !strcmp(argv[i], "--namespace") ||
+		    !strcmp(argv[i], "--config-env") ||
+		    !strcmp(argv[i], "--attr-source") ||
+		    !strcmp(argv[i], "--shallow-file")) {
+			i++;
+			continue;
+		}
+		if (!strcmp(argv[i], "--version") ||
+		    !strcmp(argv[i], "-v") ||
+		    !strcmp(argv[i], "--help") ||
+		    !strcmp(argv[i], "-h") ||
+		    argv[i][0] != '-')
+			break;
+	}
+#endif
 
 	init_git(argv);
 	result = cmd_main(argc, argv);

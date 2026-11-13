@@ -1,0 +1,111 @@
+name: Windows Dobby Git I/O trace
+on:
+  push:
+    branches: [investigation/io-dobby-trampoline-20261113]
+    paths:
+      - 'io-trace.c'
+      - 'io-trace.h'
+      - 'common-main.c'
+      - 'Makefile'
+      - 'contrib/io-trace/**'
+      - 'Documentation/technical/io-trace.adoc'
+      - '.github/workflows/git-io-dobby.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact Git candidate
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Checkout pinned Dobby source
+        uses: actions/checkout@v4
+        with:
+          repository: jmpews/Dobby
+          ref: 5dfc8546954ce3b3198132ab13fddb89ee92cdd7
+          path: dobby-source
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+        with:
+          flavor: full
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Build native Dobby trampoline library and instrumented Git
+        shell: bash
+        run: |
+          . /etc/profile || exit 1
+          cd "$GITHUB_WORKSPACE"
+          command -v cmake
+          command -v ninja
+          command -v gcc
+          command -v g++
+          cmake -S dobby-source -B dobby-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DPlugin.SymbolResolver=OFF \
+            -DPlugin.ImportTableReplace=OFF
+          cmake --build dobby-build --target dobby --parallel 4
+          make -j4 GIT_IO_TRACE=1 NO_RUST=YesPlease \
+            NO_CURL=YesPlease NO_GETTEXT=YesPlease git.exe
+      - name: Validate real trampolines, file ops and binary decoder
+        shell: bash
+        run: |
+          . /etc/profile || exit 1
+          cd "$GITHUB_WORKSPACE"
+          py="$(cygpath -u "$pythonLocation")/python.exe"
+          "$py" -m py_compile contrib/io-trace/decode.py
+          dll="$(find dobby-build -type f -iname '*dobby*.dll' -print -quit)"
+          test -n "$dll" && test -f "$dll"
+          export GIT_IO_TRACE_DOBBY="$(cygpath -aw "$dll")"
+          gitbin="$(cygpath -w "$PWD/git.exe")"
+          mkdir -p io-trace-results
+          "$gitbin" --version
+          "$gitbin" init -q io-trace-results/repo
+          cd io-trace-results/repo
+          for i in $(seq -w 1 100); do
+            printf 'file %s\n' "$i" > "file-$i.txt"
+          done
+          "$gitbin" add .
+          "$gitbin" -c user.name=Probe \
+            -c user.email=probe@example.invalid commit -qm seed
+          "$gitbin" --log-id 0000000000000001 status --porcelain > status.txt
+          "$gitbin" --log-fn "$(cygpath -w "$PWD/other.bin")" rev-parse HEAD > head.txt
+          checksum="$(sha256sum git-0000000000000001.log)"
+          if "$gitbin" --log-id 0000000000000001 status; then
+            echo "FAIL: duplicate log ID accepted"
+            exit 1
+          fi
+          test "$checksum" = "$(sha256sum git-0000000000000001.log)"
+          if "$gitbin" --log-id WRONG status; then
+            echo "FAIL: invalid log ID accepted"
+            exit 1
+          fi
+          "$py" "$GITHUB_WORKSPACE/contrib/io-trace/decode.py" \
+            --events git-0000000000000001.log other.bin > "$GITHUB_WORKSPACE/io-trace-results/summary.json"
+          "$py" - <<'PY'
+          import json
+          from pathlib import Path
+          results = json.loads(Path("../summary.json").read_text(encoding="utf-8"))
+          assert len(results) == 2
+          for item in results:
+            assert item["process_ms"] > 0, item
+            assert item["io_union_ms"] <= item["process_ms"], item
+            events = item["events"]
+            assert len(events) > 5, item
+            kinds = {event["operation"] for event in events}
+            assert kinds & {"STAT", "LSTAT", "FSTAT", "OPENDIR", "READDIR"}, kinds
+            assert kinds & {"OPEN", "READ", "FOPEN", "FREAD"}, kinds
+            assert all(event["end_ticks"] >= event["start_ticks"] for event in events)
+            print("DOBBY_WINDOWS_VALIDATED", item["pid"], len(events), sorted(kinds))
+          PY
+      - name: Preserve source-run evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git-io-dobby-windows-${{ github.sha }}
+          path: io-trace-results/
+          if-no-files-found: warn

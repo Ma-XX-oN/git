@@ -1130,6 +1130,10 @@ LIB_OBJS += commit-graph.o
 LIB_OBJS += commit-reach.o
 LIB_OBJS += commit.o
 LIB_OBJS += common-exit.o
+ifdef GIT_IO_TRACE
+BASIC_CFLAGS += -DGIT_IO_TRACE
+LIB_OBJS += io-trace.o
+endif
 LIB_OBJS += common-init.o
 LIB_OBJS += compat/nonblock.o
 LIB_OBJS += compat/obstack.o
