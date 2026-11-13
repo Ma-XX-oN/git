@@ -40,9 +40,6 @@ jobs:
             --git "$(cygpath -w "$PWD/git.exe")" \
             --control "$(cygpath -w "$PWD/preload/perf/launch_control.exe")" \
             --count 120 --output probe-results
-          "$py" preload/perf/process_io_probe.py \
-            --git "$PWD/git" --control "$PWD/preload/perf/launch_control" \
-            --count 120 --output probe-results
           cp GIT-CFLAGS probe-results/git-build-flags.txt
       - uses: actions/upload-artifact@v4
         if: always()
@@ -75,6 +72,9 @@ jobs:
         run: |
           py="$pythonLocation/bin/python3"
           "$py" preload/perf/process_breakdown.py \
+            --git "$PWD/git" --control "$PWD/preload/perf/launch_control" \
+            --count 120 --output probe-results
+          "$py" preload/perf/process_io_probe.py \
             --git "$PWD/git" --control "$PWD/preload/perf/launch_control" \
             --count 120 --output probe-results
           cp GIT-CFLAGS probe-results/git-build-flags.txt
