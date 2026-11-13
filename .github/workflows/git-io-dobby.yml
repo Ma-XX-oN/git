@@ -45,8 +45,8 @@ jobs:
         run: |
           cmake -S dobby-source -B dobby-build -A x64 `
             -DCMAKE_BUILD_TYPE=Release `
-            -DPlugin.SymbolResolver=OFF `
-            -DPlugin.GlobalOffsetTableHook=OFF `
+            '-DPlugin.SymbolResolver=OFF' `
+            '-DPlugin.GlobalOffsetTableHook=OFF' `
             -DDynamicBinaryInstrument=OFF
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build dobby-build --config Release --target dobby --parallel 4
