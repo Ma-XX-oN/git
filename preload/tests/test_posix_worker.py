@@ -32,11 +32,10 @@ def environment_cases(git, inherited):
       empty-value results are what git prints when run directly with the
       environment the worker should end up with.
   """
-  def direct(changes, removed=()):
+  def direct(arguments, changes, removed=()):
     environment = {k: v for k, v in inherited.items() if k not in removed}
     environment.update(changes)
-    result = subprocess.run([git, "var", "GIT_EDITOR"], env=environment,
-                capture_output=True)
+    result = subprocess.run([git, *arguments], env=environment, capture_output=True)
     return result.returncode, result.stdout
 
   ident = {"GIT_AUTHOR_NAME": "Zoë=x", "GIT_AUTHOR_EMAIL": "z@example.com",
@@ -56,15 +55,16 @@ def environment_cases(git, inherited):
      0, subprocess.check_output([git, "--version"])),
   ]
   cases.append(("env-del-removes", editor, b"env-del\0GIT_EDITOR\n\0")
-         + direct({}, ("GIT_EDITOR",)))
+         + direct(editor, {}, ("GIT_EDITOR",)))
   # Commands git starts (here a shell alias running git) see the changes.
   child = ["-c", "alias.child-editor=!git var GIT_EDITOR", "child-editor"]
   cases.append(("env-add-reaches-children", child,
          b"env-add\0GIT_EDITOR=added-editor\n\0", 0, b"added-editor\n"))
+  # The alias's git is the first on PATH, so the direct run uses the alias too.
   cases.append(("env-del-reaches-children", child, b"env-del\0GIT_EDITOR\n\0")
-         + direct({}, ("GIT_EDITOR",)))
+         + direct(child, {}, ("GIT_EDITOR",)))
   cases.append(("env-add-empty-value", editor, b"env-add\0GIT_EDITOR=\n\0")
-         + direct({"GIT_EDITOR": ""}))
+         + direct(editor, {"GIT_EDITOR": ""}))
   # Malformed fields are rejected before any change, like invalid argv.
   for name, context in (
       ("env-add-missing-newline", b"env-add\0GIT_EDITOR=x\0"),
