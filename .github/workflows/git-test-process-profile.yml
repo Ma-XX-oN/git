@@ -1,0 +1,105 @@
+name: RepoWorkflow Git process-profile investigation
+on:
+  push:
+    branches: [investigation/git-execution-bottlenecks-20261113]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-gate:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: Ma-XX-oN/RepoWorkflow
+          ref: c5e258db7918696fe87810d2546368227e29eb31
+          path: rwf-reference
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Profile registered RWF Git-intensive aggregate group
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p trace-results process-profile
+          py="$(cygpath -u "$pythonLocation")/python.exe"
+          trace_dir="$(cygpath -w "$PWD/trace-results")"
+          export PRELOAD_PROCESS_TRACE_DIR="$trace_dir"
+          export PYTHONPATH="$(cygpath -w "$PWD/preload/perf/process_trace")"
+          "$py" -c 'import sitecustomize; assert "process_trace" in sitecustomize.__file__, sitecustomize.__file__'
+          cd rwf-reference
+          "$py" -c 'import json; j=json.load(open(".ci/tests.json")); assert any(x.get("issue-545-all-acceptance", {}).get("name") == "tests.test_issue_545_acceptance" for x in j["tests"])'
+          started="$(date +%s)"
+          set +e
+          "$py" -m unittest tests.test_issue_545_acceptance -v > ../process-profile/group.log 2>&1
+          result=$?
+          set -e
+          ended="$(date +%s)"
+          echo "TEST_GROUP_RC=$result TEST_GROUP_SECONDS=$((ended-started))"
+          cd ..
+          "$py" preload/perf/process_trace/aggregate.py trace-results --output process-profile/summary.json
+          "$py" -c 'import glob; assert len(glob.glob("trace-results/proc-*.json")) > 1, "missing child-process trace"'
+          test "$result" -eq 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rwf-process-profile-windows-${{ github.sha }}
+          path: |
+            process-profile/
+            trace-results/
+  other-native-platforms:
+    needs: [windows-gate]
+    if: ${{ needs.windows-gate.result == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: Ma-XX-oN/RepoWorkflow
+          ref: c5e258db7918696fe87810d2546368227e29eb31
+          path: rwf-reference
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Profile registered RWF Git-intensive aggregate group
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p trace-results process-profile
+          py="$pythonLocation/bin/python3"
+          export PRELOAD_PROCESS_TRACE_DIR="$PWD/trace-results"
+          export PYTHONPATH="$PWD/preload/perf/process_trace"
+          "$py" -c 'import sitecustomize; assert "process_trace" in sitecustomize.__file__, sitecustomize.__file__'
+          cd rwf-reference
+          "$py" -c 'import json; j=json.load(open(".ci/tests.json")); assert any(x.get("issue-545-all-acceptance", {}).get("name") == "tests.test_issue_545_acceptance" for x in j["tests"])'
+          started="$(date +%s)"
+          set +e
+          "$py" -m unittest tests.test_issue_545_acceptance -v > ../process-profile/group.log 2>&1
+          result=$?
+          set -e
+          ended="$(date +%s)"
+          echo "TEST_GROUP_RC=$result TEST_GROUP_SECONDS=$((ended-started))"
+          cd ..
+          "$py" preload/perf/process_trace/aggregate.py trace-results --output process-profile/summary.json
+          "$py" -c 'import glob; assert len(glob.glob("trace-results/proc-*.json")) > 1, "missing child-process trace"'
+          test "$result" -eq 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rwf-process-profile-${{ runner.os }}-${{ github.sha }}
+          path: |
+            process-profile/
+            trace-results/
