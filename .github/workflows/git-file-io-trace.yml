@@ -1,0 +1,64 @@
+name: Git kernel file I/O trace (Windows diagnostic)
+on:
+  push:
+    branches: [investigation/git-execution-bottlenecks-20261113]
+    paths:
+      - '.github/workflows/git-file-io-trace.yml'
+      - 'preload/perf/trace_fileio.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-fileio:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+        with:
+          flavor: full
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Build Git and prove probe syntax
+        shell: bash
+        run: |
+          . /etc/profile || exit 1
+          cd "$GITHUB_WORKSPACE"
+          make -j4 USE_PRELOAD_MANAGER=YesPlease NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git.exe
+          py="$(cygpath -u "$pythonLocation")/python.exe"
+          "$py" -m py_compile preload/perf/trace_fileio.py
+      - name: Record WPR FileIO and DiskIO binary ETL
+        shell: bash
+        run: |
+          . /etc/profile || exit 1
+          cd "$GITHUB_WORKSPACE"
+          py="$(cygpath -u "$pythonLocation")/python.exe"
+          "$py" preload/perf/trace_fileio.py \
+            --git "$(cygpath -w "$PWD/git.exe")" \
+            --output fileio-results
+      - name: Inspect ETW event counts
+        if: always()
+        shell: pwsh
+        run: |
+          $etl = Join-Path $env:GITHUB_WORKSPACE 'fileio-results/file-io-trace.etl'
+          if (Test-Path $etl) {
+            $out = Join-Path $env:GITHUB_WORKSPACE 'fileio-results/events.csv'
+            $summary = Join-Path $env:GITHUB_WORKSPACE 'fileio-results/events-summary.txt'
+            & tracerpt.exe $etl -o $out -of CSV -summary $summary -y
+            Write-Host "ETW conversion exit: $LASTEXITCODE"
+            if (Test-Path $summary) { Get-Content $summary | Select-Object -First 60 }
+            if (Test-Path $out) {
+              Write-Host 'ETW converted sample:'
+              Get-Content $out | Select-Object -First 8
+              Remove-Item $out -Force
+            }
+          }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: git-file-io-etw-${{ github.sha }}
+          path: fileio-results/
+          if-no-files-found: warn
