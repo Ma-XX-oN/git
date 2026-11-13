@@ -28,8 +28,12 @@ def request_timeout(signum, frame):
   raise TimeoutError("preload worker FIFO case exceeded ten seconds")
 
 
-def run_case(git, name, payload, status, output, hold_request=False):
-  """Send one FIFO request and require output EOF before status consumption."""
+def run_case(git, name, payload, status, output, hold_request=False, stdin_data=None):
+  """Send one FIFO request and require output EOF before status consumption.
+
+  With stdin_data, the bytes are written to the stdin FIFO concurrently with
+  output draining, then it closes; otherwise it closes at once (end-of-file).
+  """
   with tempfile.TemporaryDirectory(prefix="preload-worker-") as directory:
     environment = os.environ.copy()
     environment["PRELOAD_PID"] = str(os.getpid())
@@ -47,10 +51,22 @@ def run_case(git, name, payload, status, output, hold_request=False):
                   ("stderr", "rb"), ("exit-code", "rb")):
         streams.append(open(worker_directory / channel, mode, buffering=0))
       request, stdin, stdout, stderr, exit_code = streams
-      stdin.close()
+      if stdin_data is None:
+        stdin.close()
       request.write(payload)
       if not hold_request:
         request.close()
+      if stdin_data is not None:
+        import threading
+
+        def feed():
+          """Write the input while output drains, then signal EOF."""
+          try:
+            stdin.write(stdin_data)
+          finally:
+            stdin.close()
+
+        threading.Thread(target=feed, daemon=True).start()
       assert stdout.read() == output, name
       errors = stderr.read()
       if status == 0:
@@ -98,6 +114,15 @@ def main():
   for bad in (b"\xff", b"\xc0\x80", b"\xed\xa0\x80"):
     run_case(git, "invalid-utf8-argv-" + bad.hex(),
          struct.pack("<I", 1) + b"git\0" + bad + b"\0end\0", 128, b"")
+  # The caller's stdin FIFO is the command's stdin.
+  for name, data in (("stdin-text", b"hello\n"), ("stdin-empty", b""),
+             ("stdin-binary-nul", bytes(range(256)) * 4),
+             ("stdin-exceeds-pipe-buffer", b"x" * (1024 * 1024 + 7))):
+    expected = subprocess.check_output([git, "hash-object", "--stdin"], input=data)
+    run_case(git, name, frame(["hash-object", "--stdin"]), 0, expected, stdin_data=data)
+  data = b"preload stdin line\n" * 60000
+  run_case(git, "stdin-and-stdout-exceed-pipe-buffers", frame(["stripspace"]),
+       0, subprocess.check_output([git, "stripspace"], input=data), stdin_data=data)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 #include "git-compat-util.h"
 #include "worker/worker.h"
+#include "shared/transport.h"
 #include "trace.h"
 
 /* Owned process-lifetime path; owner monitoring remains active through CRT exit. */
@@ -114,13 +115,21 @@ int preload_worker_platform_prepare(const char *directory, char **location)
 }
 
 /**
- * @brief Open an EOF-producing command input descriptor.
+ * @brief Write the stdin ACK byte back to the client on its duplex pipe.
  *
- * @return Owned binary NUL descriptor, or -1 with errno set.
+ * Every call marker has been read when the transport finishes connecting, so
+ * the client may then close stdin (end-of-file) or write input safely. The
+ * byte is buffered, not flushed, so this never waits for the client.
+ *
+ * @param transport Borrowed connected transport, still owning the channel.
+ * @param channel Configured index of the stdin channel.
+ * @return Zero on success, -1 with errno set on failure.
  */
-int preload_worker_open_input(void)
+int preload_worker_acknowledge_stdin(struct preload_transport *transport, size_t channel)
 {
-	return _open("NUL", _O_RDONLY | _O_BINARY);
+	static const char ack = 0x06;
+
+	return preload_transport_write(transport, channel, &ack, 1) == 1 ? 0 : -1;
 }
 
 /**

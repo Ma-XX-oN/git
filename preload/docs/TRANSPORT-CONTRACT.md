@@ -46,10 +46,12 @@ Linux/macOS use ordinary unidirectional FIFOs, with **no** `T` marker.
 
 The `stdin` logical channel remains separately established, and on Windows
 the Git worker consumes the initial decimal marker before application I/O.
-However, **application stdin forwarding is not implemented**. On Unix the
-Bash client closes the stdin writer after connection setup. On Windows the
-client keeps it open through output EOF so the connection marker cannot be
-discarded before consumption; the native worker supplies stdin EOF from NUL.
+The worker always makes the channel the command's stdin. **Stdin forwarding
+is PowerShell-only** (`Invoke-Preload -InputBytes`/`-InputPath`). The Bash
+clients forward nothing: on Unix they close the stdin writer after connection
+setup; on Windows they first wait for the worker's ACK byte (0x06) on the
+stdin pipe, sent once every marker has been read, then close it so no marker
+can be discarded before consumption. Either way the command reads EOF.
 The Windows command/context frame ends with an `end` NUL-terminated tag after
 argv and context fields. The worker recognizes this tag at a field boundary;
 the client keeps the control writer open through output EOF instead of using
@@ -61,7 +63,7 @@ That design has been removed because `cat` is an external executable and
 a new process per Git invocation defeats the experiment's startup-performance
 objective. The client must not spawn a helper process to forward stdin.
 Do not claim that `git hash-object --stdin` or interactive Git commands
-work through this experimental transport.
+work through the Bash clients.
 
 A future process-free implementation requires transfer of the caller's
 actual standard handles to the prestarted worker, or a demonstrated

@@ -5,7 +5,8 @@ tests, diagnostics and protocol documentation.
 
 Build `preload-manager` with Make or Meson and put it on `PATH` (or set
 `PRELOAD_MANAGER` to its executable path). From the Git checkout root, source `preload/client/manager.sh` and call
-`preload /path/to/git`. See link:docs/protocol.adoc[the protocol and usage guide]
+`preload /path/to/git`; source it with `--python` to use the Python manager in
+`manager/` instead. See link:docs/protocol.adoc[the protocol and usage guide]
 for requirements, supported behavior and limits.
 
 == Layout
@@ -72,8 +73,9 @@ try {
 
 The result contains captured UTF-8 stdout, stderr and exit status; invocation
 also sets `$LASTEXITCODE`. Both output channels drain concurrently and are
-buffered until completion. This API accepts no stdin and installs no
-command overrides. PowerShell pipeline and redirection equivalence with native
+buffered until completion. Pass `-InputBytes` or `-InputPath` to send the
+command stdin; otherwise it reads EOF. `Start-Preload -Python` uses the Python
+manager instead of `preload-manager`. This API installs no command overrides. PowerShell pipeline and redirection equivalence with native
 commands is outside its tested contract. Workers inherit the startup environment.
 Pass `-DiscardOutput` to drain directly to a null sink without buffering or
 decoding output; that mode returns only the integer exit status.

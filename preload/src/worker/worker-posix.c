@@ -174,10 +174,17 @@ int preload_worker_platform_prepare(const char *directory, char **location)
 #endif
 }
 
-/** @return Owned EOF-producing input descriptor, or -1 with errno set. */
-int preload_worker_open_input(void)
+/**
+ * @brief POSIX needs no stdin acknowledgement: FIFO opens already rendezvous.
+ *
+ * @param transport Unused connected transport.
+ * @param channel Unused stdin channel index.
+ * @return Zero.
+ */
+int preload_worker_acknowledge_stdin(struct preload_transport *transport UNUSED,
+				     size_t channel UNUSED)
 {
-	return open("/dev/null", O_RDONLY);
+	return 0;
 }
 
 /**

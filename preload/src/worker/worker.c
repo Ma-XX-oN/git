@@ -225,7 +225,10 @@ static int start_worker_transport(struct preload_worker *worker)
 	printf("READY %lu\n", (unsigned long)getpid());
 	fflush(stdout);
 	trace_printf_key(&preload_worker_trace, "pid=%lu ready\n", (unsigned long)getpid());
-	return preload_transport_wait(worker->transport) == PRELOAD_TRANSPORT_OK ? 0 : 122;
+	if (preload_transport_wait(worker->transport) != PRELOAD_TRANSPORT_OK)
+		return 122;
+	/* Every marker has been read: the client may now close or write stdin. */
+	return preload_worker_acknowledge_stdin(worker->transport, WORKER_STDIN) ? 122 : 0;
 }
 
 /**
@@ -290,6 +293,9 @@ static int apply_worker_request(struct preload_worker *worker)
 /**
  * @brief Install command stdio, tracking each successful descriptor transfer.
  *
+ * The caller's stdin channel becomes fd 0. A caller with no input closes its
+ * end (after the Windows ACK), so the command reads end-of-file.
+ *
  * @param worker Owned selected transport; redirected records partial progress.
  * @return Zero on success, -1 on descriptor or platform-handle failure.
  */
@@ -298,10 +304,8 @@ static int install_worker_stdio(struct preload_worker *worker)
 	static const size_t channels[] = { WORKER_STDIN, WORKER_STDOUT, WORKER_STDERR };
 	int target;
 
-	preload_transport_close_channel(worker->transport, WORKER_STDIN);
 	for (target = 0; target < 3; target++) {
-		int fd = target ? preload_transport_detach_fd(worker->transport, channels[target]) :
-			preload_worker_open_input();
+		int fd = preload_transport_detach_fd(worker->transport, channels[target]);
 		int result;
 
 		if (fd < 0)

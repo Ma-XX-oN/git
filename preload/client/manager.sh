@@ -1,14 +1,16 @@
 # Generic preload manager library for Bash (Git Bash, Linux, macOS).
 #
-# Usage:  source manager.sh
+# Usage:  source manager.sh [--python]
 #         preload git             # or: preload /path/to/git
 #         git status              # served by a preloaded `git --preload-worker`
 #
 # Sourcing starts (or reuses) the session's manager and defines preload().
 # preload <command> starts 3 workers of <command> --preload-worker and defines
 # an exported function named after the command; `command <name>` still runs
-# the executable directly. PRELOAD_MANAGER selects the native manager
-# executable (default: preload-manager on PATH). Requires Bash 4.1 or newer.
+# the executable directly. By default the C++ manager runs: PRELOAD_MANAGER
+# selects its executable (default: preload-manager on PATH). --python runs the
+# Python manager (preload/manager/) with PRELOAD_PYTHON (default: python on
+# Windows, python3 elsewhere). Requires Bash 4.1 or newer.
 # See benchmark-results/.../generalizing.md for the specification.
 
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
@@ -27,6 +29,13 @@ esac
 # Exported with the helper functions so child Bash processes can use them.
 export _PRELOAD_PLATFORM
 _PRELOAD_LIB_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) || return 1
+# A source without arguments sees the caller's positional parameters, so only
+# the exact option is recognized and anything else is ignored.
+if [[ ${1:-} == --python ]]; then
+  _PRELOAD_USE_PYTHON=1
+else
+  _PRELOAD_USE_PYTHON=
+fi
 declare -gA _PRELOAD_COMMANDS 2>/dev/null || declare -A _PRELOAD_COMMANDS
 
 # Busy-wait without a child process; /dev/zero's NUL bytes are discarded, so
@@ -288,7 +297,7 @@ _preload_lost_status() {
 #         slower per call on CI (run 43133247916).
 _preload_template_windows() {
   local req wdir pid rc marker header chunk status out_open=1 err_open=1 _pt=
-  local fd_in fd_out fd_err fd_exit format cwd= cwd_mode=${EXP_PRELOAD_CWD_MODE:-write}
+  local fd_in fd_out fd_err fd_exit ack format cwd= cwd_mode=${EXP_PRELOAD_CWD_MODE:-write}
   [[ -z ${PRELOAD_TIMING:-} ]] || _pt=$EPOCHREALTIME
   if (( $# > 65535 )); then
     printf '__PRELOAD_NAME__: preload supports at most 65535 parameters\n' >&2
@@ -340,11 +349,17 @@ _preload_template_windows() {
     printf 'PRELOAD ERROR: cannot connect to worker %s\n' "$wdir" >&2
     return 255
   fi
+  # The worker writes one ACK byte (0x06) on stdin once it has read every
+  # marker; read it only now, after opening all channels, so it never waits.
+  # Closing stdin then cannot discard a marker, and the command reads EOF.
+  # The read waits for the ACK or EOF. EOF means the worker closed its end of
+  # the pipe, as its failure paths do before exiting (e.g. a rejected
+  # request); the status below then reports what happened.
+  IFS= read -r -N 1 -u "$fd_in" ack
+  exec {fd_in}>&-
   # Stage timestamps for PRELOAD_TIMING: channels, then request (already sent).
   [[ -z ${PRELOAD_TIMING:-} ]] || _pt+=" $EPOCHREALTIME $EPOCHREALTIME"
-  # Keep stdin open until output EOF so closing it cannot discard a marker
-  # before the worker reads it. Alternate between stdout and stderr so
-  # neither stream blocks the other.
+  # Alternate between stdout and stderr so neither stream blocks the other.
   while (( out_open || err_open )); do
     if (( out_open )); then
       chunk=
@@ -353,7 +368,7 @@ _preload_template_windows() {
       [[ -z $chunk ]] || printf '%s' "$chunk"
       if (( rc == 1 )); then out_open=0; exec {fd_out}<&-
       elif (( rc != 0 && rc <= 128 )); then
-        exec {fd_out}<&- {fd_err}<&- {fd_exit}<&- {fd_in}>&-
+        exec {fd_out}<&- {fd_err}<&- {fd_exit}<&-
         _preload_done "$pid" "$req"
         printf 'PRELOAD ERROR: stdout read failed\n' >&2; return 255
       fi
@@ -365,14 +380,13 @@ _preload_template_windows() {
       [[ -z $chunk ]] || printf '%s' "$chunk" >&2
       if (( rc == 1 )); then err_open=0; exec {fd_err}<&-
       elif (( rc != 0 && rc <= 128 )); then
-        exec {fd_out}<&- {fd_err}<&- {fd_exit}<&- {fd_in}>&-
+        exec {fd_out}<&- {fd_err}<&- {fd_exit}<&-
         _preload_done "$pid" "$req"
         printf 'PRELOAD ERROR: stderr read failed\n' >&2; return 255
       fi
     fi
   done
   [[ -z ${PRELOAD_TIMING:-} ]] || _pt+=" $EPOCHREALTIME"
-  exec {fd_in}>&-
   IFS= read -r status <&"$fd_exit"
   rc=$?
   exec {fd_exit}<&-
@@ -555,7 +569,8 @@ _preload_stop() {
 # Start this shell's session, or reuse a live one inherited from a parent.
 # Returns zero once the manager is READY.
 _preload_start_session() {
-  local owner base dir manager i
+  local owner base dir i
+  local -a manager
   if [[ $_PRELOAD_PLATFORM == windows ]]; then
     IFS= read -r owner <"/proc/$BASHPID/winpid" || return 1
   else
@@ -603,15 +618,24 @@ _preload_start_session() {
     mkdir -m 700 -- "$dir" || return 1
   fi
   export PRELOAD_PID=$owner PRELOAD_DIR=$dir
-  manager=${PRELOAD_MANAGER:-preload-manager}
+  # manager is the command prefix: the C++ executable, or Python and its script.
+  if [[ -n $_PRELOAD_USE_PYTHON && $_PRELOAD_PLATFORM == windows ]]; then
+    i=$(cygpath -w -- "$_PRELOAD_LIB_DIR/../manager/manager_windows.py") || return 1
+    manager=("${PRELOAD_PYTHON:-python}" "$i")
+  elif [[ -n $_PRELOAD_USE_PYTHON ]]; then
+    manager=("${PRELOAD_PYTHON:-python3}" "$_PRELOAD_LIB_DIR/../manager/manager_unix.py")
+  else
+    manager=("${PRELOAD_MANAGER:-preload-manager}")
+  fi
   if [[ $_PRELOAD_PLATFORM == windows ]]; then
     export PRELOAD_WIN_DIR="\\\\.\\pipe\\preload-$owner"
-    [[ $manager != *\\* && $manager != [A-Za-z]:* ]] || manager=$(cygpath -u -- "$manager") || return 1
-    "$manager" --owner-pid "$owner" --directory "$(cygpath -w -- "$dir")" \
+    [[ ${manager[0]} != *\\* && ${manager[0]} != [A-Za-z]:* ]] ||
+      manager[0]=$(cygpath -u -- "${manager[0]}") || return 1
+    "${manager[@]}" --owner-pid "$owner" --directory "$(cygpath -w -- "$dir")" \
       --pipe-dir "$PRELOAD_WIN_DIR" >"$dir/manager.log" 2>&1 </dev/null &
   else
     unset PRELOAD_WIN_DIR
-    "$manager" --owner-pid "$owner" \
+    "${manager[@]}" --owner-pid "$owner" \
       --directory "$dir" >"$dir/manager.log" 2>&1 </dev/null &
   fi
   _PRELOAD_MANAGER_JOB=$!

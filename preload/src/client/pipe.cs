@@ -1,4 +1,6 @@
+using System.IO;
 using System.IO.Pipes;
+using System.Threading.Tasks;
 
 namespace Preload.Client
 {
@@ -23,6 +25,37 @@ namespace Preload.Client
       {
         pipe.Dispose();
         throw;
+      }
+    }
+
+    /// <summary>
+    /// Copy caller input to a worker's stdin channel, then close it so the command
+    /// reads end-of-file. Runs concurrently with output draining, so input and
+    /// output larger than the pipe buffers cannot deadlock.
+    /// </summary>
+    /// <param name="source">Owned input stream; disposed when the copy ends.</param>
+    /// <param name="destination">Owned stdin channel; disposed when the copy ends.</param>
+    /// <returns>A task that completes once both streams are disposed.</returns>
+    /// <remarks>
+    /// A command that exits without reading all its input breaks the pipe. That
+    /// ends the copy quietly, as for a native command; the exit status still
+    /// comes from the worker.
+    /// </remarks>
+    public static async Task Feed(Stream source, Stream destination)
+    {
+      try
+      {
+        await source.CopyToAsync(destination).ConfigureAwait(false);
+        await destination.FlushAsync().ConfigureAwait(false);
+      }
+      catch (IOException)
+      {
+        // The command closed its stdin before reading everything.
+      }
+      finally
+      {
+        destination.Dispose();
+        source.Dispose();
       }
     }
   }

@@ -7,7 +7,10 @@
  * common_exit() calls preload_worker_on_exit(). A worker owns its transport
  * until command completion; an ordinary Git process has no active worker.
  */
+#include <stddef.h>
+
 struct trace_key;
+struct preload_transport;
 extern struct trace_key preload_worker_trace;
 
 /**
@@ -53,8 +56,19 @@ int preload_worker_flush_output(int fd);
  * @return Zero on success, nonzero startup status on failure.
  */
 int preload_worker_platform_prepare(const char *directory, char **location);
-/** @return Owned EOF-producing input descriptor, or -1 with errno set. */
-int preload_worker_open_input(void);
+/**
+ * @brief Tell the client its stdin channel is attached, where the platform needs it.
+ *
+ * On Windows the worker writes one ACK byte (0x06) back on the duplex stdin
+ * pipe once every channel's call marker has been read; the client waits for it
+ * before closing or writing stdin, so an early close cannot discard a marker.
+ * POSIX FIFO opens already rendezvous, so this is a no-op there.
+ *
+ * @param transport Borrowed connected transport, still owning the channel.
+ * @param channel Configured index of the stdin channel.
+ * @return Zero on success, -1 with errno set on failure.
+ */
+int preload_worker_acknowledge_stdin(struct preload_transport *transport, size_t channel);
 /** @return Zero after installing platform standard handles, -1 on failure. */
 int preload_worker_platform_stdio(void);
 /**

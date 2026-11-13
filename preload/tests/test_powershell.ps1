@@ -41,8 +41,12 @@ function Invoke-DirectCapture {
   Capture a native Git invocation concurrently as the correctness oracle.
   .PARAMETER Words
   Exact argument array, excluding the executable; empty strings preserved.
+  .PARAMETER InputBytes
+  Optional exact stdin bytes, written concurrently and then closed; without
+  them stdin is not redirected.
   #>
-  param([AllowEmptyCollection()] [AllowEmptyString()] [string[]] $Words)
+  param([AllowEmptyCollection()] [AllowEmptyString()] [string[]] $Words,
+    [AllowEmptyCollection()] [byte[]] $InputBytes)
   $info = [System.Diagnostics.ProcessStartInfo]::new()
   $info.FileName = $Git
   $info.UseShellExecute = $false
@@ -50,6 +54,8 @@ function Invoke-DirectCapture {
   $info.WorkingDirectory = (Get-Location).ProviderPath
   $info.RedirectStandardOutput = $true
   $info.RedirectStandardError = $true
+  $feedInput = $PSBoundParameters.ContainsKey('InputBytes')
+  $info.RedirectStandardInput = $feedInput
   # Decode as the client does; the default is the console code page.
   $info.StandardOutputEncoding = [System.Text.UTF8Encoding]::new($false)
   $info.StandardErrorEncoding = [System.Text.UTF8Encoding]::new($false)
@@ -58,6 +64,10 @@ function Invoke-DirectCapture {
   try {
     $stdout = $process.StandardOutput.ReadToEndAsync()
     $stderr = $process.StandardError.ReadToEndAsync()
+    if ($feedInput) {
+      $source = [System.IO.MemoryStream]::new([byte[]]@($InputBytes), $false)
+      $feed = [Preload.Client.PipeConnector]::Feed($source, $process.StandardInput.BaseStream)
+    }
     if (-not $process.WaitForExit(15000)) {
       $process.Kill($true)
       throw 'Direct command timed out'
@@ -148,6 +158,42 @@ try {
       $result = Invoke-Preload -Arguments @('--version')
       if ($result.ExitCode -ne 0) { throw 'Pool did not recover after killed workers' }
       $passed += 'killed-worker-status-and-recovery'
+      # Forwarded stdin: each case matches a direct run fed identical bytes.
+      $utf8 = [System.Text.UTF8Encoding]::new($false)
+      $blob = $utf8.GetBytes("batch content`n")
+      $oid = (Invoke-DirectCapture -Words @('hash-object', '-w', '--stdin') -InputBytes $blob).Stdout
+      $big = $utf8.GetBytes('preload stdin line' + "`n") * 60000
+      $stdinCases = @(
+        @{ Name = 'stdin-text'; Words = @('hash-object', '--stdin'); Bytes = $utf8.GetBytes("hello`n") },
+        @{ Name = 'stdin-empty'; Words = @('hash-object', '--stdin'); Bytes = [byte[]]@() },
+        @{ Name = 'stdin-binary-nul'; Words = @('hash-object', '--stdin'); Bytes = [byte[]](0..255) * 4 },
+        @{ Name = 'stdin-cat-file-batch'; Words = @('cat-file', '--batch'); Bytes = $utf8.GetBytes($oid) },
+        # A shell alias proves child processes inherit the forwarded stdin.
+        @{ Name = 'stdin-and-both-outputs-exceed-pipe-buffers'
+           Words = @('-c', 'alias.tee2=!tee /dev/stderr', 'tee2'); Bytes = $big },
+        @{ Name = 'stdin-not-read'; Words = @('--version'); Bytes = $big }
+      )
+      foreach ($case in $stdinCases) {
+        $expected = Invoke-DirectCapture -Words $case.Words -InputBytes $case.Bytes
+        $actual = Invoke-Preload -Arguments $case.Words -InputBytes $case.Bytes
+        if ($actual.Stdout -cne $expected.Stdout -or $actual.Stderr -cne $expected.Stderr -or
+          $actual.ExitCode -ne $expected.ExitCode) {
+          throw ("Stdin mismatch: $($case.Name): expected " +
+            "$($expected | ConvertTo-Json -Compress), actual $($actual | ConvertTo-Json -Compress)")
+        }
+        $passed += $case.Name
+      }
+      $inputFile = Join-Path $Output 'stdin-input.bin'
+      [System.IO.File]::WriteAllBytes($inputFile, $big)
+      $expected = Invoke-DirectCapture -Words @('hash-object', '--stdin') -InputBytes $big
+      $actual = Invoke-Preload -Arguments @('hash-object', '--stdin') -InputPath $inputFile
+      if ($actual.Stdout -cne $expected.Stdout) { throw 'Stdin from -InputPath mismatched' }
+      $passed += 'stdin-input-path'
+      # Without input, the command still reads end-of-file at once.
+      $expected = Invoke-DirectCapture -Words @('hash-object', '--stdin') -InputBytes ([byte[]]@())
+      $actual = Invoke-Preload -Arguments @('hash-object', '--stdin')
+      if ($actual.Stdout -cne $expected.Stdout) { throw 'Call without input did not read EOF' }
+      $passed += 'no-input-reads-eof'
     } finally { Pop-Location }
     $rejected = $false
     try { Start-Preload -Executable $Git -Manager $Manager -Directory (Join-Path $Output 'duplicate') }

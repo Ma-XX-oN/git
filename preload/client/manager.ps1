@@ -5,7 +5,8 @@ Windows PowerShell frontend for the native preload manager.
 .DESCRIPTION
 Dot-source this file, Start-Preload with executable and manager paths, then call
 Invoke-Preload with a string array. Returns captured UTF-8 Stdout, Stderr and
-ExitCode; this API does not install command overrides or accept stdin.
+ExitCode; this API does not install command overrides. Stdin is forwarded only
+with -InputBytes or -InputPath; otherwise the command reads end-of-file.
 By default output is drained concurrently but buffered until completion; use
 -DiscardOutput to drain to a null sink and return only status. Call Stop-Preload
 in finally. Workers inherit the environment at manager startup, as in Bash.
@@ -96,14 +97,19 @@ function Start-Preload {
   .PARAMETER Executable
   Native path to an executable supporting --preload-worker.
   .PARAMETER Manager
-  Native manager executable path or command name; defaults to preload-manager on PATH.
+  Native C++ manager executable path or command name; defaults to
+  preload-manager on PATH. Ignored with -Python.
   .PARAMETER Directory
   New private session directory; retained with manager logs after shutdown.
+  .PARAMETER Python
+  Run the Python manager (preload/manager/manager_windows.py) instead, with
+  $env:PRELOAD_PYTHON or python on PATH.
   #>
   param(
     [Parameter(Mandatory)] [string] $Executable,
     [string] $Manager = 'preload-manager',
-    [Parameter(Mandatory)] [string] $Directory
+    [Parameter(Mandatory)] [string] $Directory,
+    [switch] $Python
   )
   if (-not $IsWindows) { throw 'The PowerShell preload client requires Windows' }
   if ($script:PreloadSession) { throw 'A preload session is already active' }
@@ -113,7 +119,14 @@ function Start-Preload {
   $directoryInfo = New-Item -ItemType Directory -Path $Directory -ErrorAction Stop
   $pipeName = 'preload-ps-' + [guid]::NewGuid().ToString('N')
   $info = [System.Diagnostics.ProcessStartInfo]::new()
-  $info.FileName = (Get-Command $Manager -CommandType Application -ErrorAction Stop).Source
+  if ($Python) {
+    $interpreter = if ($env:PRELOAD_PYTHON) { $env:PRELOAD_PYTHON } else { 'python' }
+    $info.FileName = (Get-Command $interpreter -CommandType Application -ErrorAction Stop |
+      Select-Object -First 1).Source
+    $info.ArgumentList.Add((Join-Path $PSScriptRoot '../manager/manager_windows.py'))
+  } else {
+    $info.FileName = (Get-Command $Manager -CommandType Application -ErrorAction Stop).Source
+  }
   $info.UseShellExecute = $false
   $info.CreateNoWindow = $true
   $info.RedirectStandardOutput = $true
@@ -157,15 +170,32 @@ function Invoke-Preload {
   .PARAMETER DiscardOutput
   Drain both output pipes directly to Stream.Null, skipping capture, copying
   into memory and UTF-8 decoding. Return only the integer exit status.
+  .PARAMETER InputBytes
+  Bytes for the command's stdin, sent exactly (NUL bytes included); an empty
+  array gives immediate end-of-file. Without -InputBytes or -InputPath stdin is
+  closed at once, so the command reads end-of-file.
+  .PARAMETER InputPath
+  File whose contents are streamed to the command's stdin.
   #>
   param(
     [AllowEmptyCollection()] [AllowEmptyString()] [string[]] $Arguments = @(),
-    [switch] $DiscardOutput
+    [switch] $DiscardOutput,
+    [AllowEmptyCollection()] [byte[]] $InputBytes,
+    [string] $InputPath
   )
   if (-not $script:PreloadSession) { throw 'No active preload session' }
   if ($Arguments.Count -gt 65535) { throw 'At most 65535 parameters are supported' }
   foreach ($word in $Arguments) {
     if ($null -eq $word -or $word.Contains([char]0)) { throw 'Invalid NUL/null argument' }
+  }
+  if ($PSBoundParameters.ContainsKey('InputBytes') -and $InputPath) {
+    throw 'Supply either -InputBytes or -InputPath, not both'
+  }
+  # Opened before GET, so a missing file fails without allocating a worker.
+  $source = if ($InputPath) {
+    [System.IO.File]::OpenRead((Resolve-Path -LiteralPath $InputPath).ProviderPath)
+  } elseif ($PSBoundParameters.ContainsKey('InputBytes')) {
+    [System.IO.MemoryStream]::new([byte[]]@($InputBytes), $false)
   }
   $cwd = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath('.')
   $name = $script:PreloadSession.Name
@@ -173,6 +203,7 @@ function Invoke-Preload {
   $payload = $script:PreloadEncoding.GetBytes([string]::Join([char]0, $fields))
   $request = $null
   $channels = @()
+  $feed = $null
   $output = if ($DiscardOutput) { [System.IO.Stream]::Null } else { [System.IO.MemoryStream]::new() }
   $errors = if ($DiscardOutput) { [System.IO.Stream]::Null } else { [System.IO.MemoryStream]::new() }
   try {
@@ -197,13 +228,32 @@ function Invoke-Preload {
       $channels += $pipe
       $pipe.WriteByte(48)
     }
+    # The worker writes one ACK byte (0x06) on stdin once it has read every
+    # marker; reading it after opening all channels never waits on the opens.
+    # Only then may stdin be written or closed without losing a marker. Wait
+    # without a deadline, like Bash: the read ends with the ACK or with EOF.
+    # EOF means the worker closed its end of the pipe, as its failure paths do
+    # before exiting; the status below then reports what happened.
+    $ackBuffer = [byte[]]::new(1)
+    $null = $channels[0].Read($ackBuffer, 0, 1)
+    if ($source) {
+      # Input is written while output drains; Feed closes stdin at the end,
+      # which the command reads as end-of-file.
+      $feed = [Preload.Client.PipeConnector]::Feed($source, $channels[0])
+      $source = $null
+    } else {
+      $channels[0].Dispose()  # No input: the command reads end-of-file.
+    }
     $stdout = $channels[1].CopyToAsync($output)
     $stderr = $channels[2].CopyToAsync($errors)
     if (-not [System.Threading.Tasks.Task]::WaitAll(
         [System.Threading.Tasks.Task[]]@($stdout, $stderr), 15000)) {
       throw 'Worker output timed out'
     }
-    $channels[0].Dispose()
+    if ($feed) {
+      # Output EOF means the command has finished; the copy ends with it.
+      try { $feed.Wait() } catch [System.AggregateException] { }
+    }
     $reader = [System.IO.StreamReader]::new($channels[3], $script:PreloadEncoding)
     try {
       $read = $reader.ReadLineAsync()
@@ -233,6 +283,9 @@ function Invoke-Preload {
   } finally {
     if ($request) { $request.Dispose() }  # Ends the call.
     foreach ($pipe in $channels) { $pipe.Dispose() }
+    # Disposing the stdin channel ends a still-running copy; Feed absorbs that.
+    if ($feed) { try { $feed.Wait() } catch [System.AggregateException] { } }
+    if ($source) { $source.Dispose() }
     $output.Dispose()
     $errors.Dispose()
   }

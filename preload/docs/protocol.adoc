@@ -16,7 +16,9 @@ channels are FIFOs in that directory on POSIX, and named pipes
 preloading any executable that supports `--preload-worker`; Git is one such
 executable. It must be sourced. Sourcing starts the session's native
 `preload-manager` (`PRELOAD_MANAGER` selects an executable path or command;
-the default is `preload-manager` on `PATH`) and defines `preload`:
+the default is `preload-manager` on `PATH`) and defines `preload`. Sourcing
+with `--python` runs the Python manager in `preload/manager/` instead, with
+`PRELOAD_PYTHON` (default `python` on Windows, `python3` elsewhere):
 
 ----
 source preload/client/manager.sh
@@ -63,10 +65,15 @@ and returns an object with `Stdout`, `Stderr` and `ExitCode`. It also sets
 `$LASTEXITCODE`. Captured output is buffered until the command completes. With
 `-DiscardOutput`, both streams drain directly to a null sink without buffering or
 decoding, and the function returns only the integer exit status.
+`-InputBytes` sends exact bytes (NULs included) to the command's stdin and
+`-InputPath` streams a file; input is written while output drains, then stdin
+is closed. Without either, stdin is closed at once and the command reads EOF.
+`Start-Preload -Python` runs the Python manager instead of `preload-manager`,
+with `$env:PRELOAD_PYTHON` or `python` on `PATH`.
 
 The frontend installs no command overrides: calling the executable directly still
-runs an ordinary process. It accepts no caller stdin and does not claim native
-PowerShell pipeline, binary-output or redirection equivalence. Workers inherit
+runs an ordinary process. It does not claim native PowerShell pipeline,
+binary-output or redirection equivalence. Workers inherit
 the environment at manager startup. To refresh it, stop and start a session.
 Manager log files remain in the supplied directory after shutdown.
 Connection attempts have a five-second deadline, PID/status reads ten seconds,
@@ -119,7 +126,8 @@ per `read()`, but a fixed-length frame in bulk.
   from the same connection. It holds that connection until the call ends; see
   worker completion.
   The manager forwards the marker and request to the worker's `params-cwd`
-  channel. The caller opens and marks only stdin, stdout, stderr and exit-code.
+  channel. The caller opens and marks only stdin, stdout, stderr and exit-code,
+  then reads the worker's stdin ACK before writing or closing stdin.
   Each manager connection is a private reply channel, so concurrent callers
   never see each other's replies. Bash names the session pipe directory with
   `$PRELOAD_WIN_DIR`; PowerShell keeps a unique pipe name in its session state.
@@ -190,6 +198,19 @@ while connecting ends the worker with status 122 before the status channel
 exists, so no `EXIT` record is written: the caller reports a connection
 failure or, if its channels were already open, recovers the code as for a
 worker that died mid-command.
+
+The stdin channel is always the command's stdin; the worker never closes it.
+The client either writes its input and then closes stdin, or closes it at once
+so the command reads EOF; otherwise it closes when the worker process ends.
+On Windows the worker writes one ACK byte (0x06) back on the duplex stdin pipe
+once it has read every channel's marker. The client opens all its channels,
+then waits for the ACK without a deadline before writing or closing stdin, so
+closing cannot discard an unread marker. The read ends with the ACK, or with
+EOF only if the worker process has ended; the status read then reports what
+happened. POSIX FIFO opens already rendezvous, so there is no ACK there.
+The Bash clients forward no caller input; the PowerShell client forwards
+`-InputBytes` or `-InputPath`.
+
 The context request begins with a little-endian 32-bit parameter count
 excluding `git`, ranging from 0 to 65,535. It is followed by the NUL-terminated
 UTF-8 executable name and then that many NUL-terminated UTF-8 parameters.
@@ -304,7 +325,8 @@ The Bash client supports text output and commands that do not consume caller
 stdin. Relaying arbitrary streams needs an executable with the available Bash
 builtins; its process startup would undermine the speedup. A stream-copy builtin
 is a proposed follow-up to enable forwarding without that startup cost.
-Workers receive EOF on stdin. Bash variables cannot preserve embedded NUL
+The Bash clients close stdin right after connecting (after the Windows ACK),
+so commands receive EOF on stdin. Bash variables cannot preserve embedded NUL
 output, so arbitrary binary streams need a client that transfers bytes directly.
 
 The Windows Bash client can hang when stderr fills its pipe buffer while the

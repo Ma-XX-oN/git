@@ -611,6 +611,18 @@ comparisons agreed with the original regexes with extglob disabled. This remains
 a prototype; it is not part of `4d4fd64486` or its same-job CI measurement.
 Evidence: [rounds, samples and identities](performance/evidence/status-validation-prototype.json).
 
+Stdin forwarding (#10) and the Windows stdin ACK, against `9201eddf50`
+(working-version-4) on the Ryzen 7 5700U laptop, both built with identical
+flags and the C++ manager. The timed path gains one 1-byte ACK read per
+Windows call, after all channels are open, and closes stdin immediately
+instead of at output EOF. Bash (`compare_dispatch.py`, 3 ABBA blocks, each
+tree with its own client and worker): shell 3.722 versus 3.6905 ms (99.15%),
+subshell 30.0375 versus 29.737 ms (99.00%). PowerShell
+(`compare_powershell_versions.py`, `Invoke-Preload --version -DiscardOutput`,
+3 ABBA blocks of 300 calls): 3.5183 versus 3.5501 ms pooled (100.90%); the
+round medians overlap (3.41-3.61 versus 3.48-3.63 ms), so no regression is
+established. Evidence: [stdin-ack-20261113](performance/evidence/stdin-ack-20261113/).
+
 For each entry, retain the code commit or prototype patch, baseline identity,
 machine/run ID, compiler/runtime flags, worker count, workload, instrumentation,
 round order, raw paired samples, correctness checks and rejected alternatives.

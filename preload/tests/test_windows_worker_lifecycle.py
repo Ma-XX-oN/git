@@ -69,8 +69,14 @@ def run_case(git, name, arguments, expected_status, expected_output,
        missing_end=False, delayed_request=False, delayed_output=False,
        abandoned_probes=False, duplicate_control=False, held_probes=False,
        marker_order=None, status_after_output=False, delayed_status=False,
-       expected_errors=b"", context=b"", idle_before_connect=0):
-  """Run a worker with stdin held open while output and status are drained."""
+       expected_errors=b"", context=b"", idle_before_connect=0, stdin_data=None,
+       hold_stdin=False):
+  """Run one worker call, draining output and status like a client.
+
+  After connecting, the client reads the worker's stdin ACK, then writes
+  stdin_data (if any) and closes stdin. hold_stdin keeps stdin open instead,
+  so output and status must complete while stdin is still open.
+  """
   env = os.environ.copy()
   env["PRELOAD_PID"] = str(os.getpid())
   pipe_dir = env["PRELOAD_WIN_DIR"] = rf"\\.\pipe\preload-test-{uuid.uuid4().hex}"
@@ -135,6 +141,27 @@ def run_case(git, name, arguments, expected_status, expected_output,
       if malformed or missing_end:
         assert K.FlushFileBuffers(handles["params-cwd"])
         K.CloseHandle(handles.pop("params-cwd"))
+    connected = "exit-code" in handles and not duplicate_control
+    if connected:
+      ack = W.DWORD()
+      byte = C.create_string_buffer(1)
+      received = K.ReadFile(handles["stdin"], byte, 1, C.byref(ack), None) and ack.value == 1
+      # A worker that rejects its request may end before the ACK can be read.
+      assert received or expected_status != 0, (name, "no stdin ACK")
+      assert not received or byte.raw == b"\x06", (name, byte.raw)
+    if connected and not hold_stdin:
+      import threading
+      stdin_handle = handles.pop("stdin")
+
+      def feed():
+        """Write any input concurrently with output draining, then close stdin."""
+        try:
+          if stdin_data:
+            write(stdin_handle, stdin_data)
+        finally:
+          K.CloseHandle(stdin_handle)
+
+      threading.Thread(target=feed, daemon=True).start()
     if "stdout" not in handles:
       # Connection failed before the output and status channels existed.
       assert worker.wait(timeout=5) == expected_status
@@ -200,7 +227,7 @@ if __name__ == "__main__":
            os.environ["GIT_PRELOAD_WORKER_GIT"]).resolve())
   test_missing_pipe_dir(git)
   version = subprocess.check_output([git, "--version"])
-  run_case(git, "stdin-held-open", ["--version"], 0, version)
+  run_case(git, "stdin-held-open", ["--version"], 0, version, hold_stdin=True)
   run_case(git, "output-flush-precedes-status", ["--version"], 0, version,
        status_after_output=True, delayed_status=True)
   failure = subprocess.run([git, "--git-preload-invalid-option"], capture_output=True)
@@ -247,3 +274,16 @@ if __name__ == "__main__":
          duplicate_control=True)
   run_case(git, "idle-worker-serves-late-client", ["--version"], 0, version,
        idle_before_connect=3)
+  # Requested stdin: the command reads the caller's bytes instead of NUL.
+  for name, data in (("stdin-text", b"hello\n"), ("stdin-empty", b""),
+             ("stdin-binary-nul", bytes(range(256)) * 4),
+             ("stdin-exceeds-pipe-buffer", b"x" * (1024 * 1024 + 7))):
+    expected = subprocess.run([git, "hash-object", "--stdin"], input=data,
+                  capture_output=True, check=True).stdout
+    run_case(git, name, ["hash-object", "--stdin"], 0, expected, stdin_data=data)
+  # Input and output both exceed the 64 KiB pipe buffers: no deadlock.
+  data = b"preload stdin line\n" * 60000
+  expected = subprocess.run([git, "stripspace"], input=data, capture_output=True,
+                check=True).stdout
+  run_case(git, "stdin-and-stdout-exceed-pipe-buffers", ["stripspace"], 0, expected,
+       stdin_data=data)
