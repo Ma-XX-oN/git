@@ -56,8 +56,9 @@ includes operation counts and inclusive medians/P95/max, per-file
 cumulative duration, failed operations, the union of timed intervals,
 and unmeasured process time. Neither summed durations nor time spent
 outside the instrumented calls is synonymous with CPU usage or disk
-activity. The start event occurs only after Git parses \`--log-id\` or
-\`--log-fn\`; earlier initialization is excluded.
+activity. The start event is emitted at the earliest main() argument scan, before
+init_git(), when the trace option is among the leading global arguments.
+CRT and loader initialization preceding main() is excluded.
 
 Expected validation: Windows first (native Git-for-Windows SDK), then
 Linux and macOS with the identical tracer version, workload and decoder.
