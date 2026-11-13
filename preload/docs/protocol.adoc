@@ -101,6 +101,35 @@ discarding the existing session. After stopping, the client can be sourced again
 and a new session started. Failed executable registration shuts down its manager.
 The manager also watches its owning PowerShell process for termination.
 
+=== Python frontend
+
+`preload/client/preload_subprocess.py` replaces the standard `subprocess`
+module for Python code run inside a Bash session that has preloaded `git`.
+Importing it requires the exported session (`PRELOAD_PID` plus `PRELOAD_DIR`,
+or `PRELOAD_WIN_DIR` on Windows) and raises `PreloadError` without one:
+
+[source,python]
+----
+import preload_subprocess as subprocess
+
+subprocess.run(["git", "status"], capture_output=True, text=True)
+subprocess.check_output(["git", "rev-parse", "HEAD"], env_add={"GIT_DIR": path})
+----
+
+`run()`, `check_output()` and `check_call()` send commands whose first
+argument is exactly `"git"` to a worker and keep the standard results,
+exceptions, text and newline handling, `input`, `stdin`, `stdout`, `stderr`,
+`cwd`, `timeout` and `check` behavior. Every other command and every other
+attribute is the standard module's, looked up on each access. `env_add` and
+`env_del` change the environment of one call through the `env-add` and
+`env-del` fields; for other commands they build a full `env`. `env=`, a file
+or descriptor as `stdin` and the remaining `Popen` options are rejected for
+git; its input is `input=` or end-of-file. Inherited output is copied to
+descriptors 1 and 2, so git sees pipes. On a timeout the worker is killed and
+`TimeoutExpired` is raised, as for a child process. Undecodable text output
+raises `UnicodeDecodeError` on POSIX and leaves that stream `None` on
+Windows, as the standard module does.
+
 === Shared manager and transport
 
 One manager serves every preloaded command. A pool starts with three workers,

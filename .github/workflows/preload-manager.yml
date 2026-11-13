@@ -70,6 +70,7 @@ jobs:
           export PATH="$PWD:$PATH"
           "$py" -m unittest discover -s preload/tests -p test_native_manager.py -v
           "$py" preload/tests/test_manager.py --git "$gitbin" --output native-results/protocol
+          "$py" preload/tests/test_preload_subprocess.py --git "$gitbin"
           "$py" preload/tests/test_owner_death.py --git "$gitbin"
           "$py" preload/tests/test_worker_crash.py --git "$gitbin"
           "$py" preload/tests/test_many_arguments.py --git "$gitbin"
