@@ -1,0 +1,95 @@
+name: Analyze prior Git ETW file trace
+on:
+  push:
+    branches: [investigation/git-execution-bottlenecks-20261113]
+    paths:
+      - '.github/workflows/git-etw-analyze.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  correlate:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 43506464466
+          name: git-file-io-etw-c49517f990ab9c5dc732bb320b2d0322d8fc4784
+          github-token: ${{ github.token }}
+          path: etw-input
+      - name: Decode ETW and correlate exact Git PIDs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p etw-analysis
+          tracerpt.exe etw-input/file-io-trace.etl -o etw-analysis/events.csv -of CSV -y
+          python - <<'PY'
+          import collections
+          import csv
+          import json
+          from pathlib import Path
+
+          root = Path("etw-input")
+          manifest = json.loads((root / "trace-manifest.json").read_text(encoding="utf-8"))
+          assert manifest["complete"] and len(manifest["operations"]) == 24
+          pids = {entry["pid"] for entry in manifest["operations"]}
+          counts = collections.Counter()
+          direct = collections.Counter()
+          examples = []
+          total = 0
+          with Path("etw-analysis/events.csv").open(encoding="utf-8-sig", errors="replace", newline="") as f:
+            reader = csv.reader(f)
+            header = [x.strip() for x in next(reader)]
+            needed = ["Event Name", "Type", "PID", "TID", "Clock-Time"]
+            assert all(key in header for key in needed), header
+            idx = {key: header.index(key) for key in needed}
+            for row in reader:
+              total += 1
+              if len(row) <= idx["Clock-Time"]:
+                continue
+              category = row[idx["Event Name"]].strip()
+              typ = row[idx["Type"]].strip()
+              if category not in ("FileIo", "DiskIo", "Image", "Process", "Thread"):
+                continue
+              key = category + "/" + typ
+              counts[key] += 1
+              p = row[idx["PID"]].strip()
+              try:
+                pid = int(p, 16) if p.lower().startswith("0x") else int(p)
+              except ValueError:
+                pid = None
+              if pid in pids:
+                direct[key] += 1
+                if len(examples) < 15 and category in ("FileIo", "DiskIo"):
+                  examples.append({"key": key, "pid": pid, "fields": row[:30]})
+          report = {
+            "source_git_sha256": manifest["git_sha256"],
+            "source_revision": manifest["revision"],
+            "etl_sha256": manifest["trace_file"]["sha256"],
+            "total_events": total,
+            "all_event_counts": dict(counts.most_common()),
+            "direct_git_pid_events": dict(direct.most_common()),
+            "direct_git_event_examples": examples,
+            "warning": "PID-only counts exclude kernel-context events. ETW file object/IRP and TID correlation is required for per-operation durations."
+          }
+          Path("etw-analysis/summary.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+          print("ETW_TOTAL", total)
+          print("ETW_EXACT_GIT_PID", sum(direct.values()))
+          print("ETW_GIT_IO", json.dumps({key: value for key, value in direct.items() if key.startswith(("FileIo/", "DiskIo/"))}))
+          print("ETW_EXAMPLES", json.dumps(examples[:6])[:6000])
+          PY
+          rm etw-analysis/events.csv
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: git-etw-analysed-${{ github.sha }}
+          path: etw-analysis/summary.json
+          if-no-files-found: warn
