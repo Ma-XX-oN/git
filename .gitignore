@@ -264,3 +264,6 @@ Release/
 /contrib/libgit-sys/target
 /benchmark-results/
 *.patch
+/preload-manager
+/preload/perf/ready-worker
+/preload/perf/manager-protocol

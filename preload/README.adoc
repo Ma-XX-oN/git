@@ -28,11 +28,12 @@ tracked in https://github.com/Ma-XX-oN/git/issues/13[issue #13].
 
 == Git integration and validation
 
-The Git Makefile and Meson build select the worker sources and platform backend
-and build the separate `preload-manager` executable. Only the manager requires
-a C++17 compiler; the worker and shared transport compile as C. Use
-`NO_PRELOAD_MANAGER=YesPlease` with Make or `-Dpreload_manager=disabled` with
-Meson to omit the manager. An independent worker build remains follow-up work.
+The Git Makefile and Meson build select the worker sources and platform backend.
+The separate `preload-manager` executable is opt-in, so Git itself still builds
+with only a C compiler: use `USE_PRELOAD_MANAGER=YesPlease` with Make,
+`--enable-preload-manager` with `configure` (which then checks for a C++17
+compiler), or `-Dpreload_manager=enabled` with Meson. Only the manager requires
+a C++17 compiler; the worker and shared transport compile as C. An independent worker build remains follow-up work.
 `common-main.c`, `common-exit.c`, and the Git test adapters remain in the host
 repository. The C implementation still uses Git utilities and its application
 entry/exit integration; this layout prepares extraction without changing that

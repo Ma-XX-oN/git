@@ -12,6 +12,7 @@
 static int context_fixture(const char *path)
 {
 	struct strbuf frame = STRBUF_INIT;
+	char *cwd;
 	int result;
 
 	if (strbuf_read_file(&frame, path, 0) < 0)
@@ -20,7 +21,9 @@ static int context_fixture(const char *path)
 	strbuf_release(&frame);
 	if (result)
 		return 1;
-	printf("cwd=%s\n", xgetcwd());
+	cwd = xgetcwd();
+	printf("cwd=%s\n", cwd);
+	free(cwd);
 	printf("value=%s\n", getenv("PRELOAD_TEST_VALUE") ?
 				     getenv("PRELOAD_TEST_VALUE") :
 				     "<unset>");

@@ -139,4 +139,4 @@ option('fuzzers', type: 'boolean', value: false,
   description: 'Enable building fuzzers.')
 option('fuzzers_link_args', type: 'array', value: [],
   description: 'Linker arguments used to link fuzzers. Use -fsanitize=fuzzer for fuzzing.')
-option('preload_manager', type: 'feature', value: 'auto', description: 'Build the standalone C++17 preload manager')
+option('preload_manager', type: 'feature', value: 'disabled', description: 'Build the standalone C++17 preload manager (opt-in; requires a C++17 compiler)')

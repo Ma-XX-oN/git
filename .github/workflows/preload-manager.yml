@@ -43,7 +43,7 @@ jobs:
             . /etc/profile || exit 1
             cd "$GITHUB_WORKSPACE"
           fi
-          make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease all
+          make -j4 USE_PRELOAD_MANAGER=YesPlease NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease all
           make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease preload/perf/ready-worker$([[ $RUNNER_OS == Windows ]] && printf .exe) preload/perf/manager-protocol$([[ $RUNNER_OS == Windows ]] && printf .exe)
       - name: Validate native manager and worker
         shell: bash

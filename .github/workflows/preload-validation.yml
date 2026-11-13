@@ -79,7 +79,7 @@ jobs:
             . /etc/profile || exit 1
             cd "$GITHUB_WORKSPACE"
           fi
-          make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease all
+          make -j4 USE_PRELOAD_MANAGER=YesPlease NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease all
       - name: Native preload and 6000-command stress
         shell: bash
         run: |
@@ -140,7 +140,7 @@ jobs:
           else
             py="$pythonLocation/bin/python3"
           fi
-          "$py" -m mesonbuild.mesonmain setup build-preload -Drust=disabled -Dcurl=disabled -Dgettext=disabled -Dgit_gui=disabled -Dgitk=disabled -Dzlib_backend=zlib "${meson_options[@]}"
+          "$py" -m mesonbuild.mesonmain setup build-preload -Dpreload_manager=enabled -Drust=disabled -Dcurl=disabled -Dgettext=disabled -Dgit_gui=disabled -Dgitk=disabled -Dzlib_backend=zlib "${meson_options[@]}"
           "$py" -m mesonbuild.mesonmain compile -C build-preload -j4
           if [[ $RUNNER_OS == Windows ]]; then
             export PATH="/usr/bin:$PATH"
@@ -332,7 +332,7 @@ jobs:
           brew list bash >/dev/null 2>&1 || brew install bash
           echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
       - name: Build Makefile targets
-        run: make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease all
+        run: make -j4 USE_PRELOAD_MANAGER=YesPlease NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease all
       - name: Validate fixed frames and worker fast path
         run: |
           python -m unittest discover -s preload/tests -p test_native_manager.py -v
@@ -349,7 +349,7 @@ jobs:
       - name: Build Meson and validate worker regressions
         run: |
           python -m pip install meson ninja
-          python -m mesonbuild.mesonmain setup build-pid -Drust=disabled -Dcurl=disabled -Dgettext=disabled -Dgit_gui=disabled -Dgitk=disabled -Dzlib_backend=zlib
+          python -m mesonbuild.mesonmain setup build-pid -Dpreload_manager=enabled -Drust=disabled -Dcurl=disabled -Dgettext=disabled -Dgit_gui=disabled -Dgitk=disabled -Dzlib_backend=zlib
           python -m mesonbuild.mesonmain compile -C build-pid -j4
           python preload/tests/test_posix_worker.py "$PWD/build-pid/git"
           python preload/tests/test_existing_regressions.py --git "$PWD/build-pid/git" --output pid-results/meson-commands
@@ -391,7 +391,7 @@ jobs:
         run: |
           . /etc/profile || exit 1
           cd "$GITHUB_WORKSPACE"
-          make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease all
+          make -j4 USE_PRELOAD_MANAGER=YesPlease NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease all
       - name: Validate relay with both connect modes
         shell: bash
         run: |
@@ -495,7 +495,7 @@ jobs:
             . /etc/profile || exit 1
             cd "$GITHUB_WORKSPACE"
           fi
-          make -j4 NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease all
+          make -j4 USE_PRELOAD_MANAGER=YesPlease NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease all
       - name: Git regression suite
         shell: bash
         run: |
@@ -523,7 +523,7 @@ jobs:
           else
             py="$pythonLocation/bin/python3"
           fi
-          "$py" -m mesonbuild.mesonmain setup build-preload -Drust=disabled -Dcurl=disabled -Dgettext=disabled -Dgit_gui=disabled -Dgitk=disabled -Dzlib_backend=zlib "${meson_options[@]}"
+          "$py" -m mesonbuild.mesonmain setup build-preload -Dpreload_manager=enabled -Drust=disabled -Dcurl=disabled -Dgettext=disabled -Dgit_gui=disabled -Dgitk=disabled -Dzlib_backend=zlib "${meson_options[@]}"
           "$py" -m mesonbuild.mesonmain compile -C build-preload -j4
           if [[ $RUNNER_OS == Windows ]]; then
             export PATH="/usr/bin:$PATH"

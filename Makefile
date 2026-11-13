@@ -149,6 +149,10 @@ include shared.mak
 #
 # Define NO_PTHREADS if you do not have or do not want to use Pthreads.
 #
+# Define USE_PRELOAD_MANAGER to build the separate C++17 preload-manager
+# program with $(CXX). It is off by default, so Git itself needs only a C
+# compiler; the configure script sets it for --enable-preload-manager.
+#
 # Define NO_PREAD if you have a problem with pread() system call (e.g.
 # cygwin1.dll before v1.5.22).
 #
@@ -1275,7 +1279,7 @@ PRELOAD_MANAGER_OBJS = $(patsubst %.cpp,%.o,$(wildcard preload/src/manager/*.cpp
 PRELOAD_MANAGER_OBJS += preload/src/shared/connection-native.o
 PRELOAD_CXXFLAGS ?= -O2 -g -Wall -Wextra
 PRELOAD_CFLAGS ?= -O2 -g -Wall -Wextra
-ifndef NO_PRELOAD_MANAGER
+ifdef USE_PRELOAD_MANAGER
 ifndef NO_PTHREADS
 all:: preload-manager$X
 all:: preload/perf/ready-worker$X

@@ -463,6 +463,31 @@ else
    fi
 fi
 GIT_CONF_SUBST([CC_LD_DYNPATH])
+
+# The separate preload-manager program is C++17 and opt-in; only look for a
+# C++ toolchain when it is requested.
+AC_ARG_ENABLE([preload-manager],
+[AS_HELP_STRING([--enable-preload-manager],
+  [Build the separate C++17 preload-manager program; requires a C++17 compiler.])],
+[], [enable_preload_manager=no])
+if test "x$enable_preload_manager" != xno; then
+   AC_PROG_CXX
+   AC_LANG_PUSH([C++])
+   AC_CACHE_CHECK([whether $CXX supports C++17], git_cv_cxx17, [
+      SAVE_CXXFLAGS="${CXXFLAGS}"
+      CXXFLAGS="${SAVE_CXXFLAGS} -std=c++17"
+      AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#include <optional>]],
+         [[std::optional<int> value(0); return *value;]])],
+         [git_cv_cxx17=yes], [git_cv_cxx17=no])
+      CXXFLAGS="${SAVE_CXXFLAGS}"
+   ])
+   AC_LANG_POP([C++])
+   if test "$git_cv_cxx17" != "yes"; then
+      AC_MSG_ERROR([--enable-preload-manager requires a C++17 compiler])
+   fi
+   GIT_CONF_SUBST([CXX])
+   GIT_CONF_SUBST([USE_PRELOAD_MANAGER], [YesPlease])
+fi
 #AC_PROG_INSTALL		# needs install-sh or install.sh in sources
 AC_CHECK_TOOLS(AR, [gar ar], :)
 AC_CHECK_PROGS(TAR, [gtar tar])
