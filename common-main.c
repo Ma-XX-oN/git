@@ -7,7 +7,7 @@ int main(int argc, const char **argv)
 	int result;
 
 	if (argc > 1 && !strcmp(argv[1], "--preload-worker")) {
-		result = preload_worker_main(argc, argv);
+		result = preload_worker_main(argc, argv, cmd_main);
 		return result;
 	}
 

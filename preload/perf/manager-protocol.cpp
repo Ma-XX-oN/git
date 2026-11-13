@@ -11,8 +11,8 @@
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
-#include <fstream>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <stdexcept>
 #include <algorithm>
@@ -127,19 +127,29 @@ int main(int argc, char **argv)
 		auto begin = Clock::now();
 		for (unsigned slot = 0; slot < threads; ++slot) clients.emplace_back([&, slot] {
 			try {
-				std::ifstream events(directory + "/manager.log");
+				std::unique_ptr<FILE, int (*)(FILE *)> events(
+					std::fopen((directory + "/manager.log").c_str(), "r"), std::fclose);
+				if (!events) throw std::runtime_error("cannot open manager.log");
 				long available = 0;
+				std::string pending; /* Incomplete last line, kept until its newline arrives. */
 				/* READY-only samples wait outside timing for three published workers.
 				 * Incremental event reads avoid imposing quadratic log-scanning cost.
 				 */
 				auto await_ready = [&] {
 					auto deadline = Clock::now() + std::chrono::seconds(15);
 					for (;;) {
-						events.clear();
-						std::string line;
-						while (std::getline(events, line)) {
-							if (line.rfind("WORKER_READY " + name + " ", 0) == 0) ++available;
-							if (line.rfind("ALLOCATED " + name + " ", 0) == 0) --available;
+						/* The manager appends while we read. C stdio's end-of-file
+						 * indicator is sticky on BSD/macOS: without clearerr(), reads
+						 * after the first end-of-file return nothing, never seeing new lines.
+						 */
+						std::clearerr(events.get());
+						char buffer[256];
+						while (std::fgets(buffer, sizeof(buffer), events.get())) {
+							pending += buffer;
+							if (pending.back() != '\n') continue;
+							if (pending.rfind("WORKER_READY " + name + " ", 0) == 0) ++available;
+							if (pending.rfind("ALLOCATED " + name + " ", 0) == 0) --available;
+							pending.clear();
 						}
 						if (available >= 3) return;
 						if (Clock::now() >= deadline) throw std::runtime_error("READY queue did not refill");

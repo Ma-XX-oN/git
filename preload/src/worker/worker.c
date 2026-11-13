@@ -28,7 +28,7 @@ struct preload_worker {
 
 static struct preload_worker *active_worker;
 static void finish_worker_on_exit(int status);
-static int run_worker(const char *directory);
+static int run_worker(const char *directory, preload_command_fn command);
 
 /**
  * Decode the protocol's unsigned little-endian integer without alignment assumptions.
@@ -386,9 +386,10 @@ static int prepare_worker(struct preload_worker *worker, int *argc)
  * @brief Execute one command with shared framing, stdio and completion handling.
  *
  * @param directory Borrowed private worker directory, valid through process exit.
+ * @param command Entry point that runs the requested command; never NULL.
  * @return Startup failure status; successful commands leave through normal exit.
  */
-static int run_worker(const char *directory)
+static int run_worker(const char *directory, preload_command_fn command)
 {
 	struct preload_worker worker = { 0 };
 	int status, count;
@@ -406,7 +407,7 @@ static int run_worker(const char *directory)
 	active_worker = &worker;
 	init_git(worker.args);
 	/* Git and CRT exit handlers may still reference argv and its request storage. */
-	exit(cmd_main(count, worker.args));
+	exit(command(count, worker.args));
 }
 
 /**
@@ -414,9 +415,10 @@ static int run_worker(const char *directory)
  *
  * @param argc Number of argv entries, including git and --preload-worker.
  * @param argv Borrowed startup arguments; exactly one session directory is required.
+ * @param command Entry point that runs the requested command; never NULL.
  * @return Startup failure status; commands complete through normal process exit.
  */
-int preload_worker_main(int argc, const char **argv)
+int preload_worker_main(int argc, const char **argv, preload_command_fn command)
 {
 	char *directory;
 	int result;
@@ -431,7 +433,7 @@ int preload_worker_main(int argc, const char **argv)
 	if (mkdir(directory, 0700)) {
 		result = error_errno("--preload-worker cannot create %s", directory);
 	} else {
-		result = run_worker(directory);
+		result = run_worker(directory, command);
 		rmdir(directory);
 	}
 	free(directory);

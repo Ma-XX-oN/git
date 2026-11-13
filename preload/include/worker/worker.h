@@ -11,13 +11,27 @@ struct trace_key;
 extern struct trace_key preload_worker_trace;
 
 /**
+ * @brief Command entry point a worker runs for its request, e.g. Git's cmd_main().
+ *
+ * @param argc Number of argv entries, including the program name.
+ * @param argv Borrowed request arguments, valid through process exit.
+ * @return Command exit status.
+ */
+typedef int (*preload_command_fn)(int argc, const char **argv);
+
+/**
  * @brief Validate worker startup arguments and run the platform worker.
+ *
+ * The caller supplies the command entry point so the worker library does not
+ * reference cmd_main() itself: programs with their own main() link libgit,
+ * whose exit path pulls in this worker.
  *
  * @param argc Number of argv entries, including git and --preload-worker.
  * @param argv Borrowed startup arguments, including an existing session directory.
+ * @param command Entry point that runs the requested command; never NULL.
  * @return Startup error status; command execution exits the process normally.
  */
-int preload_worker_main(int argc, const char **argv);
+int preload_worker_main(int argc, const char **argv, preload_command_fn command);
 /**
  * @brief Complete output and status for this process's active command.
  *
