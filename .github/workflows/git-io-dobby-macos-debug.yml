@@ -1,0 +1,138 @@
+name: macOS Dobby SIGBUS diagnostic
+on:
+  push:
+    branches: [investigation/io-dobby-macos-debug-20261113]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: git-io-dobby-macos-debug-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact Git candidate
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Checkout pinned Dobby source
+        uses: actions/checkout@v4
+        with:
+          repository: BepInEx/Dobby
+          ref: 9d271803881f467aabfc24593c7dcaeb710fe861
+          path: dobby-source
+          persist-credentials: false
+      - name: Verify decoder format and negative cases
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile contrib/io-trace/decode.py contrib/io-trace/test_decode.py
+          python3 contrib/io-trace/test_decode.py
+      - name: Build pinned Dobby natively
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            system=Linux
+          elif [[ "$RUNNER_OS" == macOS ]]; then
+            system=Darwin
+          else
+            echo "Unsupported OS: $RUNNER_OS" >&2
+            exit 1
+          fi
+          cmake -S dobby-source -B dobby-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_PROCESSOR=amd64 \
+            -DCMAKE_SYSTEM_NAME="$system" \
+            '-DPlugin.SymbolResolver=OFF' \
+            '-DPlugin.GlobalOffsetTableHook=OFF' \
+            -DDynamicBinaryInstrument=OFF
+          cmake --build dobby-build --target dobby --parallel 4
+      - name: Build instrumented native Git
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -j4 GIT_IO_TRACE=1 NO_RUST=YesPlease \
+            NO_CURL=YesPlease NO_GETTEXT=YesPlease git
+      - name: Install real hooks and decode two process logs
+        shell: bash
+        run: |
+          set -euo pipefail
+          gitbin="$PWD/git"
+          dobby="$(find "$PWD/dobby-build" -type f \( -name 'libdobby.so' -o -name 'libdobby.dylib' \) -print -quit)"
+          test -n "$dobby" && test -f "$dobby"
+          export GIT_IO_TRACE_DOBBY="$dobby"
+          mkdir -p io-trace-results
+          "$gitbin" --version
+          "$gitbin" init -q io-trace-results/repo
+          cd io-trace-results/repo
+          for i in $(seq -w 1 100); do
+            printf 'file %s\n' "$i" > "file-$i.txt"
+          done
+          "$gitbin" add .
+          "$gitbin" -c user.name=Probe \
+            -c user.email=probe@example.invalid commit -qm seed
+          echo "Diagnostic: traced version invocation"
+          if "$gitbin" --log-id 0000000000000010 --version > version.txt; then
+            echo "TRACE_VERSION_PASS"
+          else
+            echo "TRACE_VERSION_FAILED"
+          fi
+          echo "Diagnostic: traced status invocation"
+          if "$gitbin" --log-id 0000000000000001 status --porcelain > status.txt; then
+            echo "TRACE_STATUS_PASS"
+          else
+            status=$?
+            echo "TRACE_STATUS_FAILED exit=$status"
+            echo "Reproducing crash with lldb and distinct log ID"
+            /usr/bin/lldb --no-lldbinit --batch -o run \
+              -o 'thread backtrace all' -- \
+              "$gitbin" --log-id 0000000000000011 status --porcelain \
+              > ../macos-lldb.txt 2>&1 || true
+            cat ../macos-lldb.txt
+            exit "$status"
+          fi
+          "$gitbin" --log-fn "$PWD/other.bin" rev-parse HEAD > head.txt
+          cp git-0000000000000001.log before-repeat.bin
+          if "$gitbin" --log-id 0000000000000001 status; then
+            echo "ERROR: duplicate log ID accepted" >&2
+            exit 1
+          fi
+          cmp before-repeat.bin git-0000000000000001.log
+          if "$gitbin" --log-id WRONG status; then
+            echo "ERROR: invalid log ID accepted" >&2
+            exit 1
+          fi
+          python3 "$GITHUB_WORKSPACE/contrib/io-trace/decode.py" \
+            --events git-0000000000000001.log other.bin \
+            > "$GITHUB_WORKSPACE/io-trace-results/summary.json"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          reports = json.loads(Path("../summary.json").read_text(encoding="utf-8"))
+          assert len(reports) == 2, reports
+          for report in reports:
+            assert report["process_ms"] > 0, report
+            assert report["io_union_ms"] <= report["process_ms"], report
+            events = report["events"]
+            assert len(events) > 5, report
+            kinds = {event["operation"] for event in events}
+            assert kinds & {"STAT", "LSTAT", "FSTAT", "OPENDIR", "READDIR"}, kinds
+            assert kinds & {"OPEN", "READ", "FOPEN", "FREAD"}, kinds
+            assert all(event["end_ticks"] >= event["start_ticks"] for event in events)
+            print("NATIVE_DOBBY_VALIDATED", report["pid"], len(events), sorted(kinds))
+          PY
+      - name: Preserve native logs and decoded report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git-io-dobby-${{ matrix.os }}-${{ github.sha }}
+          path: io-trace-results/
+          if-no-files-found: warn
