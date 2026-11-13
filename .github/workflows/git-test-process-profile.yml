@@ -2,6 +2,9 @@ name: RepoWorkflow Git process-profile investigation
 on:
   push:
     branches: [investigation/git-execution-bottlenecks-20261113]
+    paths:
+      - '.github/workflows/git-test-process-profile.yml'
+      - 'preload/perf/process_trace/**'
   workflow_dispatch:
 permissions:
   contents: read
