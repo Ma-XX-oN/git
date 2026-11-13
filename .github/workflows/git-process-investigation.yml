@@ -1,0 +1,78 @@
+name: Git process startup investigation
+on:
+  push:
+    branches: [investigation/git-execution-bottlenecks-20261113]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-gate:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+        with:
+          flavor: full
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Build Git and native launch control
+        shell: bash
+        run: |
+          . /etc/profile || exit 1
+          cd "$GITHUB_WORKSPACE"
+          make -j4 USE_PRELOAD_MANAGER=YesPlease NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git.exe
+          cc -O2 -o preload/perf/launch_control.exe preload/perf/launch_control.c
+      - name: Measure native Windows process and Git phases
+        shell: bash
+        run: |
+          . /etc/profile || exit 1
+          cd "$GITHUB_WORKSPACE"
+          py="$(cygpath -u "$pythonLocation")/python.exe"
+          "$py" preload/perf/process_breakdown.py \
+            --git "$(cygpath -w "$PWD/git.exe")" \
+            --control "$(cygpath -w "$PWD/preload/perf/launch_control.exe")" \
+            --count 120 --output probe-results
+          cp GIT-CFLAGS probe-results/git-build-flags.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: git-process-windows-${{ github.sha }}
+          path: probe-results/
+  other-native-platforms:
+    needs: [windows-gate]
+    if: ${{ needs.windows-gate.result == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Build Git and native launch control
+        shell: bash
+        run: |
+          make -j4 USE_PRELOAD_MANAGER=YesPlease NO_RUST=YesPlease NO_CURL=YesPlease NO_GETTEXT=YesPlease git
+          cc -O2 -o preload/perf/launch_control preload/perf/launch_control.c
+      - name: Measure native process and Git phases
+        shell: bash
+        run: |
+          py="$pythonLocation/bin/python3"
+          "$py" preload/perf/process_breakdown.py \
+            --git "$PWD/git" --control "$PWD/preload/perf/launch_control" \
+            --count 120 --output probe-results
+          cp GIT-CFLAGS probe-results/git-build-flags.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: git-process-${{ runner.os }}-${{ github.sha }}
+          path: probe-results/
