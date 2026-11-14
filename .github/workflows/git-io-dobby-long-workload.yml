@@ -1,0 +1,126 @@
+name: Long Windows and Linux Dobby Git I/O workload
+on:
+  push:
+    branches: [investigation/io-dobby-long-workload-20261113]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: long-io-dobby-\${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  workload:
+    name: \${{ matrix.os }}
+    runs-on: \${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-24.04]
+    steps:
+      - name: Checkout pinned Git candidate
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Checkout pinned Dobby library
+        uses: actions/checkout@v4
+        with:
+          repository: BepInEx/Dobby
+          ref: 9d271803881f467aabfc24593c7dcaeb710fe861
+          path: dobby-source
+          persist-credentials: false
+      - name: Install native Git-for-Windows SDK
+        if: runner.os == 'Windows'
+        uses: git-for-windows/setup-git-for-windows-sdk@v2
+        with:
+          flavor: full
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: microsoft/setup-msbuild@v2
+        if: runner.os == 'Windows'
+      - name: Verify binary decoder regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            . /etc/profile
+            py="$(cygpath -u "$pythonLocation")/python.exe"
+          else
+            py="python3"
+          fi
+          "$py" -m py_compile contrib/io-trace/decode.py \
+            contrib/io-trace/test_decode.py \
+            contrib/io-trace/benchmark_workload.py
+          "$py" contrib/io-trace/test_decode.py
+      - name: Build Dobby with native MSVC
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cmake -S dobby-source -B dobby-build -A x64 `
+            -DCMAKE_SYSTEM_PROCESSOR=amd64 `
+            -DCMAKE_SYSTEM_NAME=Windows `
+            -DCMAKE_BUILD_TYPE=Release `
+            '-DPlugin.SymbolResolver=OFF' `
+            '-DPlugin.GlobalOffsetTableHook=OFF' `
+            -DDynamicBinaryInstrument=OFF
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build dobby-build --config Release --target dobby --parallel 4
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build Dobby with native GCC
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S dobby-source -B dobby-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_PROCESSOR=amd64 \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            '-DPlugin.SymbolResolver=OFF' \
+            '-DPlugin.GlobalOffsetTableHook=OFF' \
+            -DDynamicBinaryInstrument=OFF
+          cmake --build dobby-build --target dobby --parallel 4
+      - name: Build instrumented Git for current native OS
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            . /etc/profile
+            cd "$GITHUB_WORKSPACE"
+            make -j4 GIT_IO_TRACE=1 NO_RUST=YesPlease \
+              NO_CURL=YesPlease NO_GETTEXT=YesPlease git.exe
+          else
+            make -j4 GIT_IO_TRACE=1 NO_RUST=YesPlease \
+              NO_CURL=YesPlease NO_GETTEXT=YesPlease git
+          fi
+      - name: Execute identical long untraced workload and representative traces
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            . /etc/profile
+            cd "$GITHUB_WORKSPACE"
+            py="$(cygpath -u "$pythonLocation")/python.exe"
+            gitbin="$(cygpath -w "$PWD/git.exe")"
+            dll="$(find dobby-build -type f -iname '*dobby*.dll' -print -quit)"
+            test -n "$dll" && test -f "$dll"
+            export GIT_IO_TRACE_DOBBY="$(cygpath -aw "$dll")"
+          else
+            py="python3"
+            gitbin="$PWD/git"
+            dll="$(find "$PWD/dobby-build" -type f -name 'libdobby.so' -print -quit)"
+            test -n "$dll" && test -f "$dll"
+            export GIT_IO_TRACE_DOBBY="$dll"
+          fi
+          "$py" "$GITHUB_WORKSPACE/contrib/io-trace/benchmark_workload.py" \
+            --git "$gitbin" \
+            --out "$GITHUB_WORKSPACE/io-workload-out" \
+            --files 8000 \
+            --cycles 100
+      - name: Preserve binary traces and per-command timing
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dobby-long-io-\${{ matrix.os }}-\${{ github.sha }}
+          path: io-workload-out/
+          if-no-files-found: warn
