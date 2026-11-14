@@ -1,0 +1,85 @@
+name: RWF 809 same-run Git vs native Win32 filesystem APIs
+on:
+  push:
+    branches: [investigation/809-same-run-win32-20261113]
+    paths:
+      - 'compat/mingw.c'
+      - 'contrib/io-trace/same_run_probe.py'
+      - 'preload/perf/rwf809_same_run.c'
+      - '.github/workflows/rwf809-same-run-win32.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: rwf809-same-run-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  compare:
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact experiment source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install Git-for-Windows SDK
+        uses: git-for-windows/setup-git-for-windows-sdk@v2
+        with:
+          flavor: full
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Build instrumented Git and check Python
+        shell: bash
+        run: |
+          set -eo pipefail
+          . /etc/profile
+          cd "$GITHUB_WORKSPACE"
+          py="$(cygpath -u "$pythonLocation")/python.exe"
+          "$py" -m py_compile contrib/io-trace/same_run_probe.py \
+            contrib/io-trace/benchmark_workload.py \
+            preload/perf/trace_fileio.py
+          make -j4 GIT_MINGW_PHASE_PROFILE=1 NO_RUST=YesPlease \
+            NO_CURL=YesPlease NO_GETTEXT=YesPlease git.exe
+      - name: Build direct Win32 comparator (MSVC, O2)
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          if (!(Test-Path $vswhere)) { throw 'Missing vswhere' }
+          $vs = & $vswhere -latest -products '*' -property installationPath
+          if (!$vs) { throw 'Missing MSVC installation' }
+          $dev = Join-Path $vs 'Common7\Tools\VsDevCmd.bat'
+          if (!(Test-Path $dev)) { throw 'Missing developer environment' }
+          $cmd = 'call "' + $dev + '" -no_logo -arch=amd64 && cl /nologo /O2 /W4 /Fe:rwf809_same_run.exe preload\perf\rwf809_same_run.c'
+          & cmd.exe /d /c $cmd
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Measure same-run Git and direct Win32 on a shared fixture
+        shell: bash
+        run: |
+          set -eo pipefail
+          . /etc/profile
+          cd "$GITHUB_WORKSPACE"
+          py="$(cygpath -u "$pythonLocation")/python.exe"
+          "$py" contrib/io-trace/same_run_probe.py \
+            "$(cygpath -w "$PWD/git.exe")" \
+            "$(cygpath -w "$PWD/rwf809_same_run.exe")" \
+            "$(cygpath -w "$PWD/same-run-results")"
+      - name: Convert native ETW trace and collect event summary
+        shell: pwsh
+        run: |
+          $etl = Join-Path $env:GITHUB_WORKSPACE 'same-run-results/file-io-trace.etl'
+          if (!(Test-Path $etl)) { throw 'Required ETW trace missing' }
+          $csv = Join-Path $env:GITHUB_WORKSPACE 'same-run-results/events.csv'
+          $summary = Join-Path $env:GITHUB_WORKSPACE 'same-run-results/events-summary.txt'
+          & tracerpt.exe $etl -o $csv -of CSV -summary $summary -y
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (!(Test-Path $csv) -or (Get-Item $csv).Length -eq 0) { throw 'Empty ETW CSV' }
+          if (Test-Path $summary) { Get-Content $summary | Select-Object -First 40 }
+      - name: Preserve source identities, raw samples, ETW trace and conversion
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rwf809-same-run-${{ github.sha }}
+          path: same-run-results/
+          if-no-files-found: warn
+          compression-level: 6
