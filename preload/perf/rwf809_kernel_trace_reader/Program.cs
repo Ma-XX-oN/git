@@ -50,7 +50,7 @@ internal static class KernelReader
   private static string SymbolOf(StackFrame frame)
   {
     string image = ImageOf(frame);
-    string symbol = frame.Symbol?.ToString() ?? "NO_SYMBOL";
+    string symbol = frame.Symbol?.FunctionName ?? "NO_SYMBOL";
     return image + "!" + symbol;
   }
   private static int Main(string[] args)
