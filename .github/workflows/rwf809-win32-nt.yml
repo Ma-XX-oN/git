@@ -20,6 +20,31 @@ jobs:
         uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Checkout pinned Dobby source
+        uses: actions/checkout@v4
+        with:
+          repository: BepInEx/Dobby
+          ref: 9d271803881f467aabfc24593c7dcaeb710fe861
+          path: dobby-source
+          persist-credentials: false
+      - name: Build pinned Dobby library with native MSVC
+        shell: pwsh
+        run: |
+          cmake -S dobby-source -B dobby-build -A x64 `
+            -DCMAKE_SYSTEM_PROCESSOR=amd64 `
+            -DCMAKE_SYSTEM_NAME=Windows `
+            -DCMAKE_BUILD_TYPE=Release `
+            '-DPlugin.SymbolResolver=OFF' `
+            '-DPlugin.GlobalOffsetTableHook=OFF' `
+            -DDynamicBinaryInstrument=OFF
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build dobby-build --config Release --target dobby --parallel 4
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $dlls = @(Get-ChildItem dobby-build -Recurse -Filter '*dobby*.dll' | Where-Object { $_.Length -gt 0 })
+          if ($dlls.Count -ne 1) { throw "Expected one native Dobby DLL, found $($dlls.Count)" }
+          New-Item -ItemType Directory -Force nt-results | Out-Null
+          'dobby_sha=9d271803881f467aabfc24593c7dcaeb710fe861' | Set-Content nt-results/dobby-build.txt
+          'dobby_sha256=' + (Get-FileHash $dlls[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant() | Add-Content nt-results/dobby-build.txt
       - name: Build independent native C benchmark
         shell: pwsh
         run: |
@@ -47,6 +72,23 @@ jobs:
           if ($passes.Count -ne 1) { throw 'Expected exactly one terminal PASS' }
           $rows = @(Select-String -Path nt-results/measurements.txt -Pattern '^RWF809_NT_CSV ')
           if ($rows.Count -ne 385) { throw "Expected 385 CSV rows, found $($rows.Count)" }
+      - name: Test mutually exclusive Dobby hook installation and complete restoration
+        shell: pwsh
+        run: |
+          $dlls = @(Get-ChildItem dobby-build -Recurse -Filter '*dobby*.dll' | Where-Object { $_.Length -gt 0 })
+          if ($dlls.Count -ne 1) { throw 'Required Dobby DLL missing or ambiguous' }
+          $env:RWF809_DOBBY_DLL = $dlls[0].FullName
+          & .\rwf809_win32_nt.exe 2>&1 | Tee-Object -FilePath nt-results/dobby-measurements.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $passes = @(Select-String -Path nt-results/dobby-measurements.txt -Pattern '^RWF809_DOBBY_PASS ')
+          if ($passes.Count -ne 1) { throw 'No confirmed hook installation/destruction PASS' }
+          $hooks = @(Select-String -Path nt-results/dobby-measurements.txt -Pattern '^RWF809_DOBBY_HOOK ')
+          if ($hooks.Count -ne 8) { throw "Expected 8 hook summaries, got $($hooks.Count)" }
+          $life = @(Select-String -Path nt-results/dobby-measurements.txt -Pattern '^RWF809_DOBBY_LIFECYCLE ')
+          if ($life.Count -ne 4) { throw "Expected 4 hook lifecycle events, got $($life.Count)" }
+          $rows = @(Select-String -Path nt-results/dobby-measurements.txt -Pattern '^RWF809_DOBBY_CSV ')
+          if ($rows.Count -ne 1540) { throw "Expected 1540 sequenced rows, found $($rows.Count)" }
+          Remove-Item Env:RWF809_DOBBY_DLL
       - name: Preserve raw timings and exact build identity
         if: always()
         uses: actions/upload-artifact@v4
