@@ -1134,6 +1134,9 @@ ifdef GIT_IO_TRACE
 BASIC_CFLAGS += -DGIT_IO_TRACE
 LIB_OBJS += io-trace.o
 endif
+ifdef GIT_MINGW_PHASE_PROFILE
+BASIC_CFLAGS += -DGIT_MINGW_PHASE_PROFILE
+endif
 LIB_OBJS += common-init.o
 LIB_OBJS += compat/nonblock.o
 LIB_OBJS += compat/obstack.o

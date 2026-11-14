@@ -30,6 +30,163 @@
 
 #define HCAST(type, handle) ((type)(intptr_t)handle)
 
+/*
+ * RWF 809: isolated native Windows compatibility-phase measurement.
+ *
+ * This opt-in diagnostic aggregates durations without writing anything
+ * between the timed operation's ENTER and EXIT. It does not intercept
+ * libc names or change Git's I/O behavior.
+ */
+#ifdef GIT_MINGW_PHASE_PROFILE
+enum mingw_phase {
+	PH_OPEN_VALIDATE,
+	PH_OPEN_UTF,
+	PH_OPEN_DISPATCH,
+	PH_OPEN_CREATEFILE,
+	PH_OPEN_OSFHANDLE,
+	PH_LSTAT_UTF,
+	PH_LSTAT_ATTRS,
+	PH_STAT_UTF,
+	PH_STAT_CREATEFILE,
+	PH_STAT_FILEINFO,
+	PH_STAT_CLOSEHANDLE,
+	PH_WRITE_CRT,
+	PH_COUNT
+};
+static const char *const mingw_phase_names[] = {
+	"open_validate", "open_utf8_to_utf16", "open_dispatch",
+	"open_CreateFileW", "open_open_osfhandle",
+	"lstat_utf8_to_utf16", "lstat_GetFileAttributesExW",
+	"stat_utf8_to_utf16", "stat_CreateFileW",
+	"stat_GetFileInformationByHandle", "stat_CloseHandle",
+	"write_crt"
+};
+static struct {
+	volatile LONGLONG ticks;
+	volatile LONGLONG count;
+} mingw_phases[PH_COUNT];
+static volatile LONG mingw_phase_initialized;
+
+static void mingw_phase_report(void)
+{
+	LARGE_INTEGER freq;
+	size_t i;
+	if (!QueryPerformanceFrequency(&freq) || !freq.QuadPart)
+		return;
+	for (i = 0; i < ARRAY_SIZE(mingw_phases); i++) {
+		LONGLONG count = mingw_phases[i].count;
+		LONGLONG ticks = mingw_phases[i].ticks;
+		if (!count)
+			continue;
+		fprintf(stderr, "RWF809_PHASE %s %lld %.6f\n",
+			mingw_phase_names[i], (long long)count,
+			(double)ticks * 1000.0 / (double)freq.QuadPart);
+	}
+}
+static LONGLONG mingw_phase_now(void)
+{
+	LARGE_INTEGER t;
+	int saved_errno = errno;
+	DWORD saved_error = GetLastError();
+
+	if (!InterlockedCompareExchange(&mingw_phase_initialized, 1, 0))
+		atexit(mingw_phase_report);
+	QueryPerformanceCounter(&t);
+	errno = saved_errno;
+	SetLastError(saved_error);
+	return t.QuadPart;
+}
+static void mingw_phase_end(enum mingw_phase which, LONGLONG begin)
+{
+	LARGE_INTEGER t;
+	int saved_errno = errno;
+	DWORD saved_error = GetLastError();
+	QueryPerformanceCounter(&t);
+	InterlockedExchangeAdd64(&mingw_phases[which].ticks,
+				 t.QuadPart - begin);
+	InterlockedIncrement64(&mingw_phases[which].count);
+	errno = saved_errno;
+	SetLastError(saved_error);
+}
+static int phase_validate_path(const char *path, int literal_nul)
+{
+	LONGLONG t = mingw_phase_now();
+	int result = is_valid_win32_path(path, literal_nul);
+	mingw_phase_end(PH_OPEN_VALIDATE, t);
+	return result;
+}
+static int phase_utf_open(wchar_t *dst, const char *src)
+{
+	LONGLONG t = mingw_phase_now();
+	int result = xutftowcs_path(dst, src);
+	mingw_phase_end(PH_OPEN_UTF, t);
+	return result;
+}
+static int phase_utf_lstat(wchar_t *dst, const char *src)
+{
+	LONGLONG t = mingw_phase_now();
+	int result = xutftowcs_path(dst, src);
+	mingw_phase_end(PH_LSTAT_UTF, t);
+	return result;
+}
+static int phase_utf_stat(wchar_t *dst, const char *src)
+{
+	LONGLONG t = mingw_phase_now();
+	int result = xutftowcs_path(dst, src);
+	mingw_phase_end(PH_STAT_UTF, t);
+	return result;
+}
+static BOOL phase_attrs_lstat(const wchar_t *p, GET_FILEEX_INFO_LEVELS level,
+			      LPVOID data)
+{
+	LONGLONG t = mingw_phase_now();
+	BOOL result = GetFileAttributesExW(p, level, data);
+	mingw_phase_end(PH_LSTAT_ATTRS, t);
+	return result;
+}
+static HANDLE phase_createfile(enum mingw_phase which, LPCWSTR filename,
+			       DWORD access, DWORD share,
+			       LPSECURITY_ATTRIBUTES attrs,
+			       DWORD disposition, DWORD flags,
+			       HANDLE template_handle)
+{
+	LONGLONG t = mingw_phase_now();
+	HANDLE h = CreateFileW(filename, access, share, attrs,
+			       disposition, flags, template_handle);
+	mingw_phase_end(which, t);
+	return h;
+}
+static int phase_wrap_fd(HANDLE handle, int flags)
+{
+	LONGLONG t = mingw_phase_now();
+	int result = _open_osfhandle((intptr_t)handle, flags);
+	mingw_phase_end(PH_OPEN_OSFHANDLE, t);
+	return result;
+}
+static int phase_open_dispatch(int (*fn)(const wchar_t *, int, ...),
+			       const wchar_t *path, int flags, unsigned mode)
+{
+	LONGLONG t = mingw_phase_now();
+	int result = fn(path, flags, mode);
+	mingw_phase_end(PH_OPEN_DISPATCH, t);
+	return result;
+}
+static BOOL phase_stat_fileinfo(HANDLE h, LPBY_HANDLE_FILE_INFORMATION info)
+{
+	LONGLONG t = mingw_phase_now();
+	BOOL result = GetFileInformationByHandle(h, info);
+	mingw_phase_end(PH_STAT_FILEINFO, t);
+	return result;
+}
+static BOOL phase_stat_closehandle(HANDLE h)
+{
+	LONGLONG t = mingw_phase_now();
+	BOOL result = CloseHandle(h);
+	mingw_phase_end(PH_STAT_CLOSEHANDLE, t);
+	return result;
+}
+#endif /* GIT_MINGW_PHASE_PROFILE */
+
 void open_in_gdb(void)
 {
 	static struct child_process cp = CHILD_PROCESS_INIT;
@@ -695,6 +852,19 @@ int mingw_mkdir(const char *path, int mode UNUSED)
  * just use the regular _wopen() for them.  (And since client handle gets
  * bound to a unique server handle, it isn't really an issue.)
  */
+
+#ifndef GIT_MINGW_PHASE_PROFILE
+#define phase_validate_path is_valid_win32_path
+#define phase_utf_open xutftowcs_path
+#define phase_utf_lstat xutftowcs_path
+#define phase_utf_stat xutftowcs_path
+#define phase_attrs_lstat GetFileAttributesExW
+#define phase_createfile(which, ...) CreateFileW(__VA_ARGS__)
+#define phase_open_dispatch(fn, p, f, m) (fn)((p), (f), (m))
+#define phase_stat_fileinfo GetFileInformationByHandle
+#define phase_stat_closehandle CloseHandle
+#endif
+
 static int mingw_open_append(wchar_t const *wfilename, int oflags, ...)
 {
 	HANDLE handle;
@@ -711,7 +881,7 @@ static int mingw_open_append(wchar_t const *wfilename, int oflags, ...)
 	 * FILE_SHARE_WRITE is required to permit child processes
 	 * to append to the file.
 	 */
-	handle = CreateFileW(wfilename, FILE_APPEND_DATA,
+	handle = phase_createfile(PH_OPEN_CREATEFILE, wfilename, FILE_APPEND_DATA,
 			FILE_SHARE_WRITE | FILE_SHARE_READ | FILE_SHARE_DELETE,
 			NULL, create, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (handle == INVALID_HANDLE_VALUE) {
@@ -736,7 +906,11 @@ static int mingw_open_append(wchar_t const *wfilename, int oflags, ...)
 	 * necessary (and may lead to races) for a file created with
 	 * FILE_APPEND_DATA.
 	 */
+	#ifdef GIT_MINGW_PHASE_PROFILE
+	fd = phase_wrap_fd(handle, O_BINARY);
+#else
 	fd = _open_osfhandle((intptr_t)handle, O_BINARY);
+#endif
 	if (fd < 0)
 		CloseHandle(handle);
 	return fd;
@@ -786,7 +960,7 @@ static int mingw_open_existing(const wchar_t *filename, int oflags, ...)
 		break;
 	}
 
-	handle = CreateFileW(filename, access,
+	handle = phase_createfile(PH_OPEN_CREATEFILE, filename, access,
 			     FILE_SHARE_WRITE | FILE_SHARE_READ | FILE_SHARE_DELETE,
 			     &security_attributes, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (handle == INVALID_HANDLE_VALUE) {
@@ -794,7 +968,7 @@ static int mingw_open_existing(const wchar_t *filename, int oflags, ...)
 		if (err == ERROR_ACCESS_DENIED) {
 			DWORD attrs = GetFileAttributesW(filename);
 			if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY))
-				handle = CreateFileW(filename, access,
+				handle = phase_createfile(PH_OPEN_CREATEFILE, filename, access,
 							FILE_SHARE_WRITE | FILE_SHARE_READ | FILE_SHARE_DELETE,
 							&security_attributes, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL| FILE_FLAG_BACKUP_SEMANTICS, NULL);
 		}
@@ -811,7 +985,11 @@ static int mingw_open_existing(const wchar_t *filename, int oflags, ...)
 		}
 	}
 
+	#ifdef GIT_MINGW_PHASE_PROFILE
+	fd = phase_wrap_fd(handle, oflags | O_BINARY);
+#else
 	fd = _open_osfhandle((intptr_t)handle, oflags | O_BINARY);
+#endif
 	if (fd < 0)
 		CloseHandle(handle);
 	return fd;
@@ -848,7 +1026,7 @@ int mingw_open (const char *filename, int oflags, ...)
 	mode = va_arg(args, int);
 	va_end(args);
 
-	if (!is_valid_win32_path(filename, !create)) {
+	if (!phase_validate_path(filename, !create)) {
 		errno = create ? EINVAL : ENOENT;
 		return -1;
 	}
@@ -862,7 +1040,7 @@ int mingw_open (const char *filename, int oflags, ...)
 
 	if (filename && !strcmp(filename, "/dev/null"))
 		wcscpy(wfilename, L"nul");
-	else if (xutftowcs_path(wfilename, filename) < 0)
+	else if (phase_utf_open(wfilename, filename) < 0)
 		return -1;
 
 	/*
@@ -878,7 +1056,7 @@ int mingw_open (const char *filename, int oflags, ...)
 		return -1;
 	}
 
-	fd = open_fn(wfilename, oflags, mode);
+	fd = phase_open_dispatch(open_fn, wfilename, oflags, mode);
 
 	/*
 	 * Internally, `_wopen()` uses the `CreateFile()` API with CREATE_NEW,
@@ -1025,7 +1203,13 @@ int mingw_fflush(FILE *stream)
 #undef write
 ssize_t mingw_write(int fd, const void *buf, size_t len)
 {
+	#ifdef GIT_MINGW_PHASE_PROFILE
+	LONGLONG phase_start = mingw_phase_now();
+#endif
 	ssize_t result = write(fd, buf, len);
+#ifdef GIT_MINGW_PHASE_PROFILE
+	mingw_phase_end(PH_WRITE_CRT, phase_start);
+#endif
 
 	if (result < 0 && (errno == EINVAL || errno == ENOSPC) && buf) {
 		int orig = errno;
@@ -1243,7 +1427,7 @@ int mingw_lstat(const char *file_name, struct stat *buf)
 	DWORD reparse_tag = 0;
 	int link_len = 0;
 	wchar_t wfilename[MAX_PATH];
-	int wlen = xutftowcs_path(wfilename, file_name);
+	int wlen = phase_utf_lstat(wfilename, file_name);
 	if (wlen < 0)
 		return -1;
 
@@ -1255,7 +1439,7 @@ int mingw_lstat(const char *file_name, struct stat *buf)
 		return -1;
 	}
 
-	if (GetFileAttributesExW(wfilename, GetFileExInfoStandard, &fdata)) {
+	if (phase_attrs_lstat(wfilename, GetFileExInfoStandard, &fdata)) {
 		/* for reparse points, get the link tag and length */
 		if (fdata.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
 			char tmpbuf[MAX_PATH];
@@ -1309,7 +1493,7 @@ static int get_file_info_by_handle(HANDLE hnd, struct stat *buf)
 {
 	BY_HANDLE_FILE_INFORMATION fdata;
 
-	if (!GetFileInformationByHandle(hnd, &fdata)) {
+	if (!phase_stat_fileinfo(hnd, &fdata)) {
 		errno = err_win_to_posix(GetLastError());
 		return -1;
 	}
@@ -1335,9 +1519,9 @@ int mingw_stat(const char *file_name, struct stat *buf)
 	int result;
 
 	/* open the file and let Windows resolve the links */
-	if (xutftowcs_path(wfile_name, file_name) < 0)
+	if (phase_utf_stat(wfile_name, file_name) < 0)
 		return -1;
-	hnd = CreateFileW(wfile_name, 0,
+	hnd = phase_createfile(PH_STAT_CREATEFILE, wfile_name, 0,
 			FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
 			OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
 	if (hnd == INVALID_HANDLE_VALUE) {
@@ -1357,7 +1541,7 @@ int mingw_stat(const char *file_name, struct stat *buf)
 		return -1;
 	}
 	result = get_file_info_by_handle(hnd, buf);
-	CloseHandle(hnd);
+	phase_stat_closehandle(hnd);
 	return result;
 }
 
