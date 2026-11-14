@@ -45,6 +45,7 @@ struct nt_fns {
   nt_meta_t meta;
 };
 static struct nt_fns nt;
+#include "rwf809_win32_nt_dobby.h"
 struct file_path {
   wchar_t dos[PATH_CAP];
   wchar_t native[PATH_CAP + 4];
@@ -348,7 +349,10 @@ static void run(enum kind kind, unsigned shape, unsigned round,
   check(combined.calls[ST_READ] ==
         ((kind != WIN32_META && kind != NT_META && length) ? count : 0),
         "read stage count");
-  printf("RWF809_NT_CSV %s,%u,%u,%u,%u,%.6f,%.6f,%.6f,%.6f,%.6f,%lu,%llu\n",
+  printf("%s ", benchmark_phase ? "RWF809_DOBBY_CSV" : "RWF809_NT_CSV");
+  if (benchmark_phase)
+    printf("%s,", benchmark_phase);
+  printf("%s,%u,%u,%u,%u,%.6f,%.6f,%.6f,%.6f,%.6f,%lu,%llu\n",
          names[kind], shape, length, round, threads, ms(elapsed),
          ms(combined.ticks[ST_OPEN]), ms(combined.ticks[ST_READ]),
          ms(combined.ticks[ST_CLOSE]), ms(combined.ticks[ST_META]),
@@ -356,15 +360,10 @@ static void run(enum kind kind, unsigned shape, unsigned round,
   fflush(stdout);
   free(data);
 }
-int main(void)
+static void run_benchmark_all(void)
 {
   unsigned shape, threads, round, k;
-  check(QueryPerformanceFrequency(&frequency) &&
-        frequency.QuadPart > 0, "counter frequency");
-  resolve_functions();
-  puts("RWF809_NT_HEADER mode,shape,size,round,threads,wall_ms,open_ms,read_ms,close_ms,meta_ms,files,bytes");
   for (shape = 0; shape < SHAPE_COUNT; shape++) {
-    fixture(shape);
     for (k = 0; k < KIND_COUNT; k++)
       run((enum kind)k, shape, 999, 1);
     for (threads = 1; threads <= 4; threads += 3)
@@ -372,6 +371,37 @@ int main(void)
         for (k = 0; k < KIND_COUNT; k++)
           run((enum kind)((k + round) % KIND_COUNT),
               shape, round, threads);
+  }
+}
+int main(void)
+{
+  unsigned shape;
+  const char *dll = getenv("RWF809_DOBBY_DLL");
+  check(QueryPerformanceFrequency(&frequency) &&
+        frequency.QuadPart > 0, "counter frequency");
+  resolve_functions();
+  puts("RWF809_NT_HEADER mode,shape,size,round,threads,wall_ms,open_ms,read_ms,close_ms,meta_ms,files,bytes");
+  for (shape = 0; shape < SHAPE_COUNT; shape++)
+    fixture(shape);
+  if (dll && dll[0]) {
+    load_dobby();
+    benchmark_phase = "unhooked";
+    run_benchmark_all();
+    install_hook_set(0);
+    benchmark_phase = "win32_hooks";
+    run_benchmark_all();
+    uninstall_hook_set();
+    install_hook_set(1);
+    benchmark_phase = "nt_hooks";
+    run_benchmark_all();
+    uninstall_hook_set();
+    benchmark_phase = "restored";
+    run_benchmark_all();
+    check(current_hook_count == 0 && active_hook_layer == NULL,
+          "no Dobby hooks remain after final pass");
+    puts("RWF809_DOBBY_PASS exclusive hook installation, interception, full restoration");
+  } else {
+    run_benchmark_all();
   }
   puts("RWF809_NT_PASS native Windows Win32-vs-NT all shape/mode/thread validation");
   return 0;
