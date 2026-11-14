@@ -1,0 +1,52 @@
+name: RWF809 inspect historical Windows ETW event schema
+on:
+  push:
+    branches: [investigation/etw-native-io-correlation-20261113]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: rwf809-etw-schema-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  inspect:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 43506464466
+          name: git-file-io-etw-c49517f990ab9c5dc732bb320b2d0322d8fc4784
+          github-token: ${{ github.token }}
+          path: etw-input
+      - name: Verify archived input identity and script compilation
+        shell: pwsh
+        run: |
+          python -m py_compile preload/perf/etw_inspect_schema.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $m = Get-Content etw-input/trace-manifest.json -Raw | ConvertFrom-Json
+          if ($m.revision -ne "c49517f990ab9c5dc732bb320b2d0322d8fc4784") { throw "Incorrect ETW capture revision" }
+          $sha = (Get-FileHash etw-input/file-io-trace.etl -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($sha -ne "7b114cad58421651e8b0b5b95d3ea65f467aaf4f3e9ece83bb1be8ab1ed25c92") { throw "ETW SHA mismatch: $sha" }
+      - name: Decode ETW and inspect real event fields
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force etw-analysis | Out-Null
+          & tracerpt.exe etw-input/file-io-trace.etl -o etw-analysis/events.csv -of CSV -y
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python preload/perf/etw_inspect_schema.py --csv etw-analysis/events.csv --manifest etw-input/trace-manifest.json --output etw-analysis/schema.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item etw-analysis/events.csv
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rwf809-etw-schema-${{ github.sha }}
+          path: etw-analysis/schema.json
+          if-no-files-found: warn
