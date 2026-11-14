@@ -1,0 +1,54 @@
+name: RWF809 ETW prior-capture schema verification
+on:
+  push:
+    branches: [investigation/etw-schema-809-20261113]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: etw-schema-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  schema:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 43506464466
+          name: git-file-io-etw-c49517f990ab9c5dc732bb320b2d0322d8fc4784
+          github-token: ${{ github.token }}
+          path: etw-input
+      - name: Check script and original ETL SHA
+        shell: pwsh
+        run: |
+          python -m py_compile preload/perf/etw_schema_diagnose.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $manifest = Get-Content etw-input/trace-manifest.json -Raw | ConvertFrom-Json
+          $sha = (Get-FileHash etw-input/file-io-trace.etl -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($sha -ne $manifest.trace_file.sha256) {
+            throw "Original ETL SHA mismatch: $sha versus $($manifest.trace_file.sha256)"
+          }
+          Write-Host "ETW_ORIGINAL_SHA256 $sha"
+      - name: Discover tracerpt event data schema
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force etw-analysis | Out-Null
+          & tracerpt.exe etw-input/file-io-trace.etl -o etw-analysis/events.csv -of CSV -y
+          if ($LASTEXITCODE -ne 0) { throw "tracerpt returned $LASTEXITCODE" }
+          python preload/perf/etw_schema_diagnose.py etw-analysis/events.csv etw-input/trace-manifest.json etw-analysis/schema.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item etw-analysis/events.csv
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: etw-schema-${{ github.sha }}
+          path: etw-analysis/schema.json
+          if-no-files-found: warn
