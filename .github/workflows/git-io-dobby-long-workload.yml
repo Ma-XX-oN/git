@@ -42,7 +42,7 @@ jobs:
       - name: Verify binary decoder regression tests
         shell: bash
         run: |
-          set -euo pipefail
+          set -eo pipefail
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             . /etc/profile
             py="$(cygpath -u "$pythonLocation")/python.exe"
@@ -71,7 +71,7 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          set -euo pipefail
+          set -eo pipefail
           cmake -S dobby-source -B dobby-build \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_SYSTEM_PROCESSOR=amd64 \
@@ -83,7 +83,7 @@ jobs:
       - name: Build instrumented Git for current native OS
         shell: bash
         run: |
-          set -euo pipefail
+          set -eo pipefail
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             . /etc/profile
             cd "$GITHUB_WORKSPACE"
@@ -96,7 +96,7 @@ jobs:
       - name: Execute identical long untraced workload and representative traces
         shell: bash
         run: |
-          set -euo pipefail
+          set -eo pipefail
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             . /etc/profile
             cd "$GITHUB_WORKSPACE"
