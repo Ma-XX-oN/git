@@ -62,6 +62,23 @@ jobs:
             --out "$PWD/io-workload-out" \
             --files 8000 \
             --cycles 100
+      - name: Capture native macOS SIGBUS backtrace with LLDB
+        if: failure()
+        shell: bash
+        run: |
+          set -eo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/io-workload-out"
+          dobby="$(find "$GITHUB_WORKSPACE/dobby-build" -type f -name 'libdobby.dylib' -print -quit)"
+          test -n "$dobby"
+          export GIT_IO_TRACE_DOBBY="$dobby"
+          cd "$GITHUB_WORKSPACE/io-workload-out-fixture"
+          /usr/bin/lldb --no-lldbinit --batch \
+            -o run -o 'thread backtrace all' -- \
+            "$GITHUB_WORKSPACE/git" \
+            --log-fn "$GITHUB_WORKSPACE/io-workload-out/macos-lldb-trace.bin" \
+            status --porcelain=v1 -uno \
+            > "$GITHUB_WORKSPACE/io-workload-out/macos-lldb.txt" 2>&1 || true
+          cat "$GITHUB_WORKSPACE/io-workload-out/macos-lldb.txt"
       - name: Preserve baseline and any trace evidence even on SIGBUS
         if: always()
         uses: actions/upload-artifact@v4
