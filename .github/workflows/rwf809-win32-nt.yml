@@ -1,0 +1,56 @@
+name: RWF809 native NT versus Win32 filesystem APIs
+on:
+  push:
+    branches: [investigation/809-direct-nt-apis-20261114]
+    paths:
+      - 'preload/perf/rwf809_win32_nt.c'
+      - '.github/workflows/rwf809-win32-nt.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: rwf809-native-nt-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  native-comparison:
+    runs-on: windows-2025
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build independent native C benchmark
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          if (!(Test-Path $vswhere)) { throw 'MSVC locator missing' }
+          $vs = & $vswhere -latest -products '*' -property installationPath
+          if (!$vs) { throw 'MSVC installation missing' }
+          $dev = Join-Path $vs 'Common7\Tools\VsDevCmd.bat'
+          if (!(Test-Path $dev)) { throw 'MSVC developer environment missing' }
+          $command = 'call "' + $dev + '" -no_logo -arch=amd64 && cl /nologo /O2 /W4 /WX /Fe:rwf809_win32_nt.exe preload\perf\rwf809_win32_nt.c'
+          & cmd.exe /d /c $command
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Execute true Win32 versus NT same-fixture comparison
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force nt-results | Out-Null
+          'source_sha=' + $env:GITHUB_SHA | Set-Content nt-results/build.txt
+          'binary_sha256=' + (Get-FileHash rwf809_win32_nt.exe -Algorithm SHA256).Hash.ToLowerInvariant() | Add-Content nt-results/build.txt
+          'runner_os=' + $env:RUNNER_OS | Add-Content nt-results/build.txt
+          'runner_image=' + $env:ImageOS | Add-Content nt-results/build.txt
+          'runner_version=' + $env:ImageVersion | Add-Content nt-results/build.txt
+          & .\rwf809_win32_nt.exe 2>&1 | Tee-Object -FilePath nt-results/measurements.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $passes = @(Select-String -Path nt-results/measurements.txt -Pattern '^RWF809_NT_PASS ')
+          if ($passes.Count -ne 1) { throw 'Expected exactly one terminal PASS' }
+          $rows = @(Select-String -Path nt-results/measurements.txt -Pattern '^RWF809_NT_CSV ')
+          if ($rows.Count -ne 385) { throw "Expected 385 CSV rows, found $($rows.Count)" }
+      - name: Preserve raw timings and exact build identity
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rwf809-win32-nt-${{ github.sha }}
+          path: nt-results/
+          if-no-files-found: warn
