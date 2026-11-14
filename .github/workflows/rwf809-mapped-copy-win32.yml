@@ -1,0 +1,49 @@
+name: RWF809 native Win32 mapped-copy adapter comparison
+on:
+  push:
+    branches: [investigation/809-mapped-copy-adapter-20261113]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: rwf809-mapped-copy-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  native-comparison:
+    runs-on: windows-2025
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build native standalone C adapter and baseline
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          if (!(Test-Path $vswhere)) { throw 'Visual Studio locator missing' }
+          $vs = & $vswhere -latest -products '*' -property installationPath
+          if (!$vs) { throw 'Visual Studio missing' }
+          $dev = Join-Path $vs 'Common7\Tools\VsDevCmd.bat'
+          if (!(Test-Path $dev)) { throw 'VsDevCmd missing' }
+          $command = 'call "' + $dev + '" -no_logo -arch=amd64 && cl /nologo /O2 /W4 /WX /Fe:rwf809_mapped_copy.exe preload\perf\rwf809_mapped_copy.c'
+          & cmd.exe /d /c $command
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Measure exact-byte read, CRT and mapped-copy with one/four threads
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force mmap-results | Out-Null
+          'source_sha=' + $env:GITHUB_SHA | Set-Content mmap-results/build.txt
+          'binary_sha256=' + (Get-FileHash rwf809_mapped_copy.exe -Algorithm SHA256).Hash.ToLowerInvariant() | Add-Content mmap-results/build.txt
+          & .\rwf809_mapped_copy.exe 2>&1 | Tee-Object -FilePath mmap-results/measurements.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $passes = @(Select-String -Path mmap-results/measurements.txt -Pattern '^RWF809_MMAP_PASS ')
+          if ($passes.Count -ne 1) { throw 'terminal PASS not observed exactly once' }
+          $rows = @(Select-String -Path mmap-results/measurements.txt -Pattern '^RWF809_MMAP_CSV ')
+          if ($rows.Count -ne 165) { throw "expected 165 checked measurement rows, found $($rows.Count)" }
+      - name: Preserve complete measurements and build identity
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rwf809-mapped-copy-${{ github.sha }}
+          path: mmap-results/
+          if-no-files-found: warn
