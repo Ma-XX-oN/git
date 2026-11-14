@@ -1,9 +1,7 @@
-name: Analyze prior Git ETW file trace
+name: RWF809 corrected historical ETW IRP pairing
 on:
   push:
-    branches: [investigation/git-execution-bottlenecks-20261113]
-    paths:
-      - '.github/workflows/git-etw-analyze.yml'
+    branches: [investigation/etw-native-io-correlation-20261113]
   workflow_dispatch:
 permissions:
   contents: read
@@ -73,7 +71,7 @@ jobs:
                 pid = None
               if pid in pids:
                 direct[key] += 1
-                if category == "FileIo" and len(row) > 22:
+                if category == "FileIo" and len(row) >= 22:
                   ticks = int(row[idx["Clock-Time"]].strip())
                   irp = row[19].strip()
                   if typ == "OperationEnd":
@@ -87,7 +85,7 @@ jobs:
                         if operation == "Create":
                           leaf = filename.replace(chr(92), "/").rsplit("/", 1)[-1].lower()
                           file_costs[leaf].append(elapsed_ms)
-                          status = row[22].strip()
+                          status = row[21].strip()
                           if status != "0":
                             failure_status[(leaf, status)] += 1
                   elif typ in ("Create", "Read", "Write", "QueryInfo", "Close", "Cleanup", "DirEnum", "FSControl"):
@@ -104,6 +102,7 @@ jobs:
               "p95_ms": round(ordered[(95 * (len(ordered) - 1)) // 100], 5),
               "max_ms": round(ordered[-1], 5),
             }
+          print("ETW_CORRELATION_PAIR_COUNT", sum(len(v) for v in durations.values()))
           assert sum(len(v) for v in durations.values()) > 1000, "Too few matched start/end file operations"
           report = {
             "source_git_sha256": manifest["git_sha256"],
