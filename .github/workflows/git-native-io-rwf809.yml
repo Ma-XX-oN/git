@@ -1,0 +1,78 @@
+name: RWF809 standalone Win32 versus CRT I/O benchmark
+on:
+  push:
+    branches: [investigation/native-io-809-20261113]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: native-io-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  native:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: git-for-windows/setup-git-for-windows-sdk@v2
+        with:
+          flavor: full
+      - name: Compile standalone Windows C benchmark, no Git build
+        shell: bash
+        run: |
+          . /etc/profile || exit 1
+          cd "$GITHUB_WORKSPACE"
+          gcc --version | head -n 1
+          gcc -std=c11 -O2 -Wall -Wextra -Werror \
+            -o native-win32-io.exe preload/perf/native_win32_io.c
+          test -s native-win32-io.exe
+          sha256sum preload/perf/native_win32_io.c native-win32-io.exe
+      - name: Prepare a deterministic 8000-file fixture
+        shell: bash
+        run: |
+          . /etc/profile || exit 1
+          cd "$GITHUB_WORKSPACE"
+          py="$(cygpath -u "$pythonLocation")/python.exe"
+          "$py" - <<'PY'
+          from pathlib import Path
+          root = Path("native-io-fixture")
+          root.mkdir(exist_ok=False)
+          payload = b"Native API versus CRT, identical file contents.\n" * 16
+          for i in range(8000):
+            folder = root / f"folder-{i // 1000:02d}"
+            folder.mkdir(exist_ok=True)
+            p = folder / f"tracked-{i:06d}.txt"
+            p.write_bytes(payload)
+          assert sum(1 for p in root.rglob("*.txt")) == 8000
+          print("NATIVE_FIXTURE_OK", 8000, len(payload))
+          PY
+      - name: Measure same-file direct Win32 and CRT-equivalent sequences
+        shell: bash
+        run: |
+          . /etc/profile || exit 1
+          cd "$GITHUB_WORKSPACE/native-io-fixture"
+          "$GITHUB_WORKSPACE/native-win32-io.exe" 20 > "$GITHUB_WORKSPACE/native-io-result.json"
+          py="$(cygpath -u "$pythonLocation")/python.exe"
+          "$py" - <<'PY'
+          import json
+          from pathlib import Path
+          d = json.loads(Path("../native-io-result.json").read_text())
+          assert d["path_count"] == 8000
+          assert d["cycles"] == 20
+          assert d["operations_per_variant"] == 160000
+          assert len(d["variants"]) == 5
+          for v in d["variants"]:
+            assert v["calls"] == 160000 and v["median_us"] > 0, v
+            assert v["p95_us"] >= v["median_us"], v
+            print("NATIVE_BENCH_RESULT", v["name"], "mean_us", v["mean_us"],
+                  "median_us", v["median_us"], "p95_us", v["p95_us"])
+          print("NATIVE_BENCH_PASS", d["path_count"], d["cycles"])
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-io-${{ github.sha }}
+          path: native-io-result.json
+          if-no-files-found: warn
