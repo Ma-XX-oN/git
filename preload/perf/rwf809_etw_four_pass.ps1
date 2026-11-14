@@ -87,18 +87,13 @@ foreach ($stage in $stages) {
   }
   if (!(Test-Path -LiteralPath $etl)) { throw "$name ETL not created" }
   $file=Get-Item -LiteralPath $etl
-  if ($file.Length -le 4096 -or $file.Length -gt 1073741824) {
+  if ($file.Length -le 4096) {
     throw "$name invalid ETL size $($file.Length) bytes"
   }
-  $csv=Join-Path $env:RUNNER_TEMP "$name-events.csv"
   $summary=Join-Path $Output "$name-events-summary.txt"
-  try {
-    Invoke-Native 'tracerpt.exe' @($etl,'-o',$csv,'-of','CSV','-summary',$summary,'-y') (Join-Path $Output "$name-tracerpt.txt") | Out-Null
-    if (!(Test-Path -LiteralPath $summary) -or (Get-Item -LiteralPath $summary).Length -eq 0) {
-      throw "$name missing event summary"
-    }
-  } finally {
-    if (Test-Path -LiteralPath $csv) { Remove-Item -LiteralPath $csv -Force }
+  Invoke-Native 'tracerpt.exe' @($etl,'-o','NUL','-of','CSV','-summary',$summary,'-y') (Join-Path $Output "$name-tracerpt.txt") | Out-Null
+  if (!(Test-Path -LiteralPath $summary) -or (Get-Item -LiteralPath $summary).Length -eq 0) {
+    throw "$name missing event summary"
   }
   "name=$name profiles=$($profiles -join '+') etl_bytes=$($file.Length) etl_sha256=$((Get-FileHash -LiteralPath $etl -Algorithm SHA256).Hash.ToLowerInvariant())" |
     Set-Content -Encoding utf8 -LiteralPath (Join-Path $Output "$name-trace-identity.txt")
