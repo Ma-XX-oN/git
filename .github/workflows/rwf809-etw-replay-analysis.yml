@@ -1,0 +1,83 @@
+name: RWF809 validate archived fourth ETW trace without rerunning workload
+on:
+  push:
+    branches: [investigation/809-etw-kernel-four-config-20261114]
+    paths:
+      - 'preload/perf/rwf809_etw_analyze.py'
+      - '.github/workflows/rwf809-etw-replay-analysis.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: rwf809-etw-archived-trace-analysis
+  cancel-in-progress: true
+jobs:
+  validate-original-capture:
+    runs-on: windows-2025
+    timeout-minutes: 35
+    steps:
+      - name: Checkout analysis code only
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Download unmodified archived Windows ETW results from original run
+        uses: actions/download-artifact@v4
+        with:
+          name: rwf809-etw-four-stage
+          repository: Ma-XX-oN/git
+          run-id: 43611008082
+          github-token: ${{ github.token }}
+          digest-mismatch: error
+          path: restored-raw
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Complete fourth tracerpt summary from exact original ETL and validate all stages
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force analysis | Out-Null
+          $root = Join-Path $env:GITHUB_WORKSPACE 'restored-raw'
+          $trace = Join-Path $root '04-fileio-cpu-disk-minifilters.etl'
+          if (!(Test-Path -LiteralPath $trace)) { throw 'Original fourth ETW trace missing' }
+          $actual = (Get-Item -LiteralPath $trace).Length
+          if ($actual -ne 1978662912) { throw "Unexpected fourth ETW trace length $actual" }
+          $csv = Join-Path $env:RUNNER_TEMP 'fourth-events.csv'
+          $summary = Join-Path $root '04-fileio-cpu-disk-minifilters-events-summary.txt'
+          try {
+            & tracerpt.exe $trace -o $csv -of CSV -summary $summary -y | Out-File -FilePath analysis/tracerpt-04-log.txt
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            if (Test-Path -LiteralPath $csv) { Remove-Item -LiteralPath $csv -Force }
+          }
+          if (!(Test-Path -LiteralPath $summary) -or (Get-Item -LiteralPath $summary).Length -eq 0) { throw 'Fourth ETW provider summary missing' }
+          python -m py_compile preload/perf/rwf809_etw_analyze.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python preload/perf/rwf809_etw_analyze.py restored-raw analysis/four-stage-verified.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $phases = @('01-uninstrumented','02-fileio','03-fileio-cpu-stacks-scheduling','04-fileio-cpu-disk-minifilters')
+          foreach ($phase in $phases) {
+            Copy-Item -LiteralPath (Join-Path $root "$phase-measurements.txt") -Destination "analysis/$phase-measurements.txt"
+            if ($phase -ne $phases[0]) {
+              Copy-Item -LiteralPath (Join-Path $root "$phase-events-summary.txt") -Destination "analysis/$phase-events-summary.txt"
+              Copy-Item -LiteralPath (Join-Path $root "$phase-status.txt") -Destination "analysis/$phase-status.txt"
+              $etl = Join-Path $root "$phase.etl"
+              $digest = (Get-FileHash -LiteralPath $etl -Algorithm SHA256).Hash.ToLowerInvariant()
+              "$phase $((Get-Item -LiteralPath $etl).Length) $digest" | Add-Content analysis/etl-identities.txt
+            }
+          }
+          Copy-Item -LiteralPath (Join-Path $root 'identity.json') -Destination analysis/identity.json
+          Copy-Item -LiteralPath (Join-Path $root 'four-config-manifest.json') -Destination analysis/four-config-manifest.json
+          Copy-Item -LiteralPath (Join-Path $root 'minifilter-inventory.txt') -Destination analysis/minifilter-inventory.txt
+          Copy-Item -LiteralPath (Join-Path $root 'minifilter-instances.txt') -Destination analysis/minifilter-instances.txt
+          'RWF809_ETW_ARCHIVED_FOUR_STAGE_PASS original same-run source, 192 validated observations, three ETL files and provider summaries'
+      - name: Preserve small derived four-stage analysis; raw ETLs remain in original artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rwf809-etw-four-stage-verified-summary
+          path: analysis/
+          if-no-files-found: warn
+          retention-days: 3
+          compression-level: 6
