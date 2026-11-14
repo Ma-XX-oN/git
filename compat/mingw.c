@@ -51,6 +51,10 @@ enum mingw_phase {
 	PH_STAT_FILEINFO,
 	PH_STAT_CLOSEHANDLE,
 	PH_WRITE_CRT,
+	PH_TRACKED_OPEN,
+	PH_TRACKED_OPEN_EXACT,
+	PH_TRACKED_OPEN_OTHER,
+	PH_TRACKED_ATTRS,
 	PH_COUNT
 };
 static const char *const mingw_phase_names[] = {
@@ -59,7 +63,11 @@ static const char *const mingw_phase_names[] = {
 	"lstat_utf8_to_utf16", "lstat_GetFileAttributesExW",
 	"stat_utf8_to_utf16", "stat_CreateFileW",
 	"stat_GetFileInformationByHandle", "stat_CloseHandle",
-	"write_crt"
+	"write_crt",
+	"tracked_open_CreateFileW",
+	"tracked_open_CreateFileW_exact_flags",
+	"tracked_open_CreateFileW_other_flags",
+	"tracked_lstat_GetFileAttributesExW"
 };
 static struct {
 	volatile LONGLONG ticks;
@@ -96,7 +104,7 @@ static LONGLONG mingw_phase_now(void)
 	SetLastError(saved_error);
 	return t.QuadPart;
 }
-static void mingw_phase_end(enum mingw_phase which, LONGLONG begin)
+static LONGLONG mingw_phase_end(enum mingw_phase which, LONGLONG begin)
 {
 	LARGE_INTEGER t;
 	int saved_errno = errno;
@@ -107,6 +115,12 @@ static void mingw_phase_end(enum mingw_phase which, LONGLONG begin)
 	InterlockedIncrement64(&mingw_phases[which].count);
 	errno = saved_errno;
 	SetLastError(saved_error);
+	return t.QuadPart - begin;
+}
+static void mingw_phase_note(enum mingw_phase which, LONGLONG ticks)
+{
+	InterlockedExchangeAdd64(&mingw_phases[which].ticks, ticks);
+	InterlockedIncrement64(&mingw_phases[which].count);
 }
 static int phase_validate_path(const char *path, int literal_nul)
 {
@@ -141,7 +155,9 @@ static BOOL phase_attrs_lstat(const wchar_t *p, GET_FILEEX_INFO_LEVELS level,
 {
 	LONGLONG t = mingw_phase_now();
 	BOOL result = GetFileAttributesExW(p, level, data);
-	mingw_phase_end(PH_LSTAT_ATTRS, t);
+	LONGLONG ticks = mingw_phase_end(PH_LSTAT_ATTRS, t);
+	if (wcsstr(p, L"folder-") && wcsstr(p, L"tracked-"))
+		mingw_phase_note(PH_TRACKED_ATTRS, ticks);
 	return result;
 }
 static HANDLE phase_createfile(enum mingw_phase which, LPCWSTR filename,
@@ -153,7 +169,20 @@ static HANDLE phase_createfile(enum mingw_phase which, LPCWSTR filename,
 	LONGLONG t = mingw_phase_now();
 	HANDLE h = CreateFileW(filename, access, share, attrs,
 			       disposition, flags, template_handle);
-	mingw_phase_end(which, t);
+	LONGLONG ticks = mingw_phase_end(which, t);
+	if (which == PH_OPEN_CREATEFILE &&
+	    wcsstr(filename, L"folder-") && wcsstr(filename, L"tracked-")) {
+		mingw_phase_note(PH_TRACKED_OPEN, ticks);
+		if (access == GENERIC_READ &&
+		    share == (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE) &&
+		    attrs && attrs->nLength == sizeof(*attrs) &&
+		    !attrs->lpSecurityDescriptor && attrs->bInheritHandle &&
+		    disposition == OPEN_EXISTING &&
+		    flags == FILE_ATTRIBUTE_NORMAL && !template_handle)
+			mingw_phase_note(PH_TRACKED_OPEN_EXACT, ticks);
+		else
+			mingw_phase_note(PH_TRACKED_OPEN_OTHER, ticks);
+	}
 	return h;
 }
 static int phase_wrap_fd(HANDLE handle, int flags)
