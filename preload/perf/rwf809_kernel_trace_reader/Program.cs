@@ -146,16 +146,16 @@ internal static class KernelReader
         threadTimes[tid] = accum = new ThreadTime { Tid = tid };
       accum.Slices++;
       double running = (double)slice.Duration.TotalMilliseconds;
-      double ready = (double)slice.ReadyDuration.TotalMilliseconds;
-      double waiting = (double)slice.WaitingDuration.TotalMilliseconds;
+      double ready = (double)(slice.ReadyDuration?.TotalMilliseconds ?? 0m);
+      double waiting = (double)(slice.WaitingDuration?.TotalMilliseconds ?? 0m);
       Require(double.IsFinite(running) && running >= 0, "invalid running duration");
       Require(double.IsFinite(ready) && ready >= 0, "invalid ready duration");
       Require(double.IsFinite(waiting) && waiting >= 0, "invalid waiting duration");
       accum.RunningMs += running;
       accum.ReadyMs += ready;
       accum.WaitingMs += waiting;
-      if (ready == 0) accum.MissingReady++;
-      if (waiting == 0) accum.MissingWait++;
+      if (!slice.ReadyDuration.HasValue) accum.MissingReady++;
+      if (!slice.WaitingDuration.HasValue) accum.MissingWait++;
     }
     var result = new
     {
