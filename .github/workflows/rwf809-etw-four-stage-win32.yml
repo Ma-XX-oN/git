@@ -55,6 +55,16 @@ jobs:
             if (!(Test-Path (Join-Path 'etw-results' "$mode-events-summary.txt"))) { throw "Missing ETW provider summary" }
           }
           'RWF809_ETW_FOUR_STAGE_ACCEPTANCE_PASS'
+      - name: Preserve compact inspectable timings and ETW metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rwf809-etw-compact
+          path: |
+            etw-results/*.txt
+            etw-results/*.json
+          if-no-files-found: error
+          retention-days: 3
       - name: Preserve exact source, trace profiles, ETL recordings, events and latency samples
         if: always()
         uses: actions/upload-artifact@v4
