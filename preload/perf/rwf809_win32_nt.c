@@ -213,7 +213,7 @@ static void process_one(struct worker_job *w, unsigned index)
   } else {
     if (kind == NT_OPEN || kind == NT_ALL) {
       start = clock_tick();
-      status = nt.create(&f, GENERIC_READ, &path->object,
+      status = nt.create(&f, FILE_GENERIC_READ, &path->object,
                &iosb, NULL, FILE_ATTRIBUTE_NORMAL,
                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                1 /* FILE_OPEN */, 0x20 | 0x40
