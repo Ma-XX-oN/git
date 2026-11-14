@@ -43,14 +43,9 @@ jobs:
           if (!(Test-Path -LiteralPath $trace)) { throw 'Original fourth ETW trace missing' }
           $actual = (Get-Item -LiteralPath $trace).Length
           if ($actual -ne 1978662912) { throw "Unexpected fourth ETW trace length $actual" }
-          $csv = Join-Path $env:RUNNER_TEMP 'fourth-events.csv'
           $summary = Join-Path $root '04-fileio-cpu-disk-minifilters-events-summary.txt'
-          try {
-            & tracerpt.exe $trace -o $csv -of CSV -summary $summary -y | Out-File -FilePath analysis/tracerpt-04-log.txt
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          } finally {
-            if (Test-Path -LiteralPath $csv) { Remove-Item -LiteralPath $csv -Force }
-          }
+          & tracerpt.exe $trace -o NUL -of CSV -summary $summary -y | Out-File -FilePath analysis/tracerpt-04-log.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if (!(Test-Path -LiteralPath $summary) -or (Get-Item -LiteralPath $summary).Length -eq 0) { throw 'Fourth ETW provider summary missing' }
           python -m py_compile preload/perf/rwf809_etw_analyze.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
