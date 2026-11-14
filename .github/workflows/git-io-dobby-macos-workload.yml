@@ -73,7 +73,12 @@ jobs:
           export GIT_IO_TRACE_DOBBY="$dobby"
           cd "$GITHUB_WORKSPACE/io-workload-out-fixture"
           /usr/bin/lldb --no-lldbinit --batch \
-            -o run -o 'thread backtrace all' -- \
+            -o run \
+            -k 'thread backtrace all' \
+            -k 'register read r15 rbx rip' \
+            -k 'memory region $r15' \
+            -k 'image lookup -a $pc' \
+            -k 'image list -o -f' -- \
             "$GITHUB_WORKSPACE/git" \
             --log-fn "$GITHUB_WORKSPACE/io-workload-out/macos-lldb-trace.bin" \
             status --porcelain=v1 -uno \
