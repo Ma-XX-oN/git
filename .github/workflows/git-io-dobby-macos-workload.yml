@@ -1,0 +1,71 @@
+name: Long macOS Dobby Git I/O workload
+on:
+  push:
+    branches: [investigation/io-dobby-macos-workload-20261113]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: long-io-dobby-macos-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  workload:
+    runs-on: macos-15-intel
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact Git source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Checkout pinned Dobby
+        uses: actions/checkout@v4
+        with:
+          repository: BepInEx/Dobby
+          ref: 9d271803881f467aabfc24593c7dcaeb710fe861
+          path: dobby-source
+          persist-credentials: false
+      - name: Verify decoder and workload syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile contrib/io-trace/decode.py \
+            contrib/io-trace/test_decode.py \
+            contrib/io-trace/benchmark_workload.py
+          python3 contrib/io-trace/test_decode.py
+      - name: Build pinned Dobby on macOS x86-64
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S dobby-source -B dobby-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_PROCESSOR=amd64 \
+            -DCMAKE_SYSTEM_NAME=Darwin \
+            '-DPlugin.SymbolResolver=OFF' \
+            '-DPlugin.GlobalOffsetTableHook=OFF' \
+            -DDynamicBinaryInstrument=OFF
+          cmake --build dobby-build --target dobby --parallel 4
+      - name: Build instrumented Git
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -j4 GIT_IO_TRACE=1 NO_RUST=YesPlease \
+            NO_CURL=YesPlease NO_GETTEXT=YesPlease git
+      - name: Run identical long workload (untraced then instrumented)
+        shell: bash
+        run: |
+          set -euo pipefail
+          dobby="$(find "$PWD/dobby-build" -type f -name 'libdobby.dylib' -print -quit)"
+          test -n "$dobby" && test -f "$dobby"
+          export GIT_IO_TRACE_DOBBY="$dobby"
+          python3 contrib/io-trace/benchmark_workload.py \
+            --git "$PWD/git" \
+            --out "$PWD/io-workload-out" \
+            --files 8000 \
+            --cycles 100
+      - name: Preserve baseline and any trace evidence even on SIGBUS
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dobby-long-io-macos-${{ github.sha }}
+          path: io-workload-out/
+          if-no-files-found: warn
