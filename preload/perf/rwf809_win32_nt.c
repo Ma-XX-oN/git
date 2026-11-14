@@ -373,7 +373,29 @@ static void run_benchmark_all(void)
               shape, round, threads);
   }
 }
-int main(void)
+/* ETW workload uses the exact same API paths and fixture as the baseline.
+ * Prepare the files before starting ETW; never time fixture creation.
+ */
+static void run_etw_workload(void)
+{
+  static const enum kind probes[] = {
+    WIN32_ALL, NT_ALL, WIN32_META, NT_META
+  };
+  unsigned round, threads, k, i;
+  for (i = 0; i < sizes[0].count; i++)
+    prepare_name(0, i);
+  puts("RWF809_ETW_HEADER mode,shape,size,round,threads,wall_ms,open_ms,read_ms,close_ms,meta_ms,files,bytes");
+  for (threads = 1; threads <= 4; threads += 3) {
+    for (k = 0; k < sizeof(probes) / sizeof(probes[0]); k++)
+      run(probes[k], 0, 999, threads);
+    for (round = 0; round < ROUNDS; round++)
+      for (k = 0; k < sizeof(probes) / sizeof(probes[0]); k++)
+        run(probes[(k + round) % (sizeof(probes) / sizeof(probes[0]))],
+            0, round, threads);
+  }
+  puts("RWF809_ETW_PASS unhooked same-source fixture and timing validation");
+}
+int main(int argc, char **argv)
 {
   unsigned shape;
   const char *dll = getenv("RWF809_DOBBY_DLL");
@@ -381,6 +403,18 @@ int main(void)
         frequency.QuadPart > 0, "counter frequency");
   resolve_functions();
   puts("RWF809_NT_HEADER mode,shape,size,round,threads,wall_ms,open_ms,read_ms,close_ms,meta_ms,files,bytes");
+  if (argc == 2 && strcmp(argv[1], "--etw-prepare") == 0) {
+    check(dll == NULL || !dll[0], "ETW preparation excludes Dobby");
+    fixture(0);
+    puts("RWF809_ETW_PREPARE_PASS 8000 deterministic 871-byte files");
+    return 0;
+  }
+  if (argc == 2 && strcmp(argv[1], "--etw-workload") == 0) {
+    check(dll == NULL || !dll[0], "ETW measurement excludes Dobby");
+    run_etw_workload();
+    return 0;
+  }
+  check(argc == 1, "unrecognized standalone test arguments");
   for (shape = 0; shape < SHAPE_COUNT; shape++)
     fixture(shape);
   if (dll && dll[0]) {
