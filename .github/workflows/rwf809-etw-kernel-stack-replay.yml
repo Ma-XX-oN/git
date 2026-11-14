@@ -1,0 +1,67 @@
+name: RWF809 original loss-free ETW kernel CPU/scheduling attribution
+on:
+  push:
+    branches:
+      - investigation/809-etw-symbolized-kernel-20261114
+    paths:
+      - '.github/workflows/rwf809-etw-kernel-stack-replay.yml'
+      - 'preload/perf/rwf809_kernel_trace_reader/**'
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: rwf809-original-etw-kernel-readonly
+  cancel-in-progress: false
+jobs:
+  original-kernel-etw:
+    runs-on: windows-2025
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Compile pinned Microsoft .NET ETW trace reader before large artifact download
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          dotnet --info | Out-File dotnet-version.txt
+          dotnet build preload/perf/rwf809_kernel_trace_reader/KernelReader.csproj -c Release --nologo
+          if ($LASTEXITCODE -ne 0) {throw 'ETW reader compile failed; no raw trace was downloaded'}
+      - name: Restore unmodified 2.8GB original ETW capture without rerunning workload
+        uses: actions/download-artifact@v4
+        with:
+          name: rwf809-etw-four-stage
+          repository: Ma-XX-oN/git
+          run-id: 43611008082
+          github-token: ${{ github.token }}
+          digest-mismatch: error
+          path: original-etw
+      - name: Verify original ETL digest and correlate CPU stacks with scheduling
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $root=Join-Path $env:GITHUB_WORKSPACE 'original-etw'
+          $etl=Join-Path $root '03-fileio-cpu-stacks-scheduling.etl'
+          $out=Join-Path $env:GITHUB_WORKSPACE 'kernel-analysis'
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
+          if (-not (Test-Path -LiteralPath $etl)) {throw 'Original 03 CPU/scheduling ETL not found'}
+          $n=(Get-Item $etl).Length
+          $sha=(Get-FileHash -LiteralPath $etl -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($n -ne 576716800 -or $sha -ne '4603ef3bf4d5eb1a2d1f31ceddc96f9d48fa7e8800f6ff5eba86fabbdb06914c') {throw 'Original ETL identity mismatch'}
+          $status=Get-Content -LiteralPath (Join-Path $root '03-fileio-cpu-stacks-scheduling-status.txt') -Raw
+          $lost=[regex]::Matches($status,'(?im)Events Lost\s*:\s*(\d+)')
+          if ($lost.Count -eq 0 -or @($lost | Where-Object {[int64]$_.Groups[1].Value -ne 0}).Count) {throw 'Original ETW stage has lost events'}
+          [pscustomobject]@{original_run_id=43611008082;etl_size=$n;etl_sha256=$sha;events_lost=0;source_sha='d18a959ecc7ec551ae0b83d68b7155965edee4f4';image=$env:ImageVersion;reader_sha=$env:GITHUB_SHA} | ConvertTo-Json | Set-Content (Join-Path $out 'identity.json') -Encoding utf8
+          $dll=Join-Path $env:GITHUB_WORKSPACE 'preload/perf/rwf809_kernel_trace_reader/bin/Release/net8.0/KernelReader.dll'
+          & dotnet $dll $etl $out
+          if ($LASTEXITCODE -ne 0) {throw 'Kernel CPU and scheduling attribution failed'}
+      - name: Preserve compact kernel-function and thread scheduling evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rwf809-original-etw-kernel-symbols-scheduling
+          path: |
+            kernel-analysis/
+            dotnet-version.txt
+          if-no-files-found: warn
+          retention-days: 7
