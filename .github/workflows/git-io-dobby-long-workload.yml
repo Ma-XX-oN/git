@@ -44,7 +44,7 @@ jobs:
         run: |
           set -eo pipefail
           if [[ "$RUNNER_OS" == "Windows" ]]; then
-            . /etc/profile
+            . /etc/profile || exit 1
             py="$(cygpath -u "$pythonLocation")/python.exe"
           else
             py="python3"
@@ -85,7 +85,7 @@ jobs:
         run: |
           set -eo pipefail
           if [[ "$RUNNER_OS" == "Windows" ]]; then
-            . /etc/profile
+            . /etc/profile || exit 1
             cd "$GITHUB_WORKSPACE"
             make -j4 GIT_IO_TRACE=1 NO_RUST=YesPlease \
               NO_CURL=YesPlease NO_GETTEXT=YesPlease git.exe
@@ -98,7 +98,7 @@ jobs:
         run: |
           set -eo pipefail
           if [[ "$RUNNER_OS" == "Windows" ]]; then
-            . /etc/profile
+            . /etc/profile || exit 1
             cd "$GITHUB_WORKSPACE"
             py="$(cygpath -u "$pythonLocation")/python.exe"
             gitbin="$(cygpath -w "$PWD/git.exe")"
