@@ -1,0 +1,66 @@
+name: RWF809 same-binary four-stage Windows kernel ETW study
+on:
+  push:
+    branches: [investigation/809-etw-kernel-four-config-20261114]
+    paths:
+      - 'preload/perf/rwf809_win32_nt.c'
+      - 'preload/perf/rwf809_etw_four_pass.ps1'
+      - '.github/workflows/rwf809-etw-four-stage-win32.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: rwf809-etw-four-test-branch
+  cancel-in-progress: true
+jobs:
+  kernel-trace:
+    runs-on: windows-2025
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact Git experiment
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build native Win32 and NT API benchmark
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pf86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+          if (!$pf86) { throw 'ProgramFiles(x86) unavailable' }
+          $vswhere = Join-Path $pf86 'Microsoft Visual Studio\Installer\vswhere.exe'
+          if (!(Test-Path $vswhere)) { throw 'Missing native MSVC installation locator' }
+          $vs = & $vswhere -latest -products '*' -property installationPath
+          if (!$vs) { throw 'No native MSVC installation' }
+          $dev = Join-Path $vs 'Common7\Tools\VsDevCmd.bat'
+          if (!(Test-Path $dev)) { throw 'No native MSVC developer environment' }
+          $cmd = 'call "' + $dev + '" -no_logo -arch=amd64 && cl /nologo /O2 /W4 /WX /Fe:rwf809_win32_nt.exe preload\perf\rwf809_win32_nt.c'
+          & cmd.exe /d /c $cmd
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Run four matched measurements with WPR ETW and report event loss
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & .\preload\perf\rwf809_etw_four_pass.ps1 -Exe .\rwf809_win32_nt.exe -Output .\etw-results
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $expected = @('01-uninstrumented', '02-fileio', '03-fileio-cpu-stacks-scheduling', '04-fileio-cpu-disk-minifilters')
+          foreach ($mode in $expected) {
+            $file = Join-Path 'etw-results' "$mode-measurements.txt"
+            if (!(Test-Path $file)) { throw "Missing complete recording: $mode" }
+            $samples = @(Select-String -Path $file -Pattern '^RWF809_NT_CSV ')
+            $passes = @(Select-String -Path $file -Pattern '^RWF809_ETW_PASS ')
+            if ($samples.Count -ne 48 -or $passes.Count -ne 1) { throw "Incomplete raw sample set: $mode" }
+          }
+          foreach ($mode in $expected[1..3]) {
+            if (!(Test-Path (Join-Path 'etw-results' "$mode.etl"))) { throw "Missing ETL for $mode" }
+            if (!(Test-Path (Join-Path 'etw-results' "$mode-events-summary.txt"))) { throw "Missing ETW provider summary" }
+          }
+          'RWF809_ETW_FOUR_STAGE_ACCEPTANCE_PASS'
+      - name: Preserve exact source, trace profiles, ETL recordings, events and latency samples
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rwf809-etw-four-stage
+          path: etw-results/
+          if-no-files-found: warn
+          retention-days: 3
+          compression-level: 0
