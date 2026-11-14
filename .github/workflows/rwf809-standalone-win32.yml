@@ -1,0 +1,50 @@
+name: RWF809 standalone Win32 versus Git-style filesystem path
+on:
+  push:
+    branches: [investigation/win32-standalone-fs-20261113]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: rwf809-win32-standalone-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  measure:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Locate native MSVC compiler and build isolated C test
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          if (!(Test-Path $vswhere)) { throw "vswhere not installed" }
+          $vs = & $vswhere -latest -products '*' -property installationPath
+          if (!$vs) { throw "Visual Studio not found" }
+          $dev = Join-Path $vs "Common7\Tools\VsDevCmd.bat"
+          if (!(Test-Path $dev)) { throw "VsDevCmd not found" }
+          $command = 'call "' + $dev + '" -no_logo -arch=amd64 && cl /nologo /O2 /W4 /Fe:rwf809_standalone.exe preload\perf\rwf809_standalone.c'
+          & cmd.exe /d /c $command
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Execute identical native Win32 operations without Git
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force standalone-results | Out-Null
+          $sha = (Get-FileHash rwf809_standalone.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "source_sha=$env:GITHUB_SHA" | Set-Content standalone-results/build.txt
+          "binary_sha256=$sha" | Add-Content standalone-results/build.txt
+          & .\rwf809_standalone.exe 2>&1 | Tee-Object -FilePath standalone-results/measurements.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $passes = Select-String -Path standalone-results/measurements.txt -Pattern '^RWF809_STANDALONE_PASS'
+          if (@($passes).Count -ne 1) { throw "native measurement missing terminal PASS" }
+          $lines = @(Select-String -Path standalone-results/measurements.txt -Pattern '^RWF809_STANDALONE_CSV (attrs_wide|attrs_utf8|open_wide|open_utf8_crt),')
+          if ($lines.Count -ne 20) { throw "expected 20 native results, found $($lines.Count)" }
+      - name: Preserve native timing results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rwf809-standalone-${{ github.sha }}
+          path: standalone-results/
+          if-no-files-found: warn
